@@ -3,6 +3,7 @@ import re
 import requests
 import json
 import xml.etree.ElementTree as ET
+import urllib3 # [추가] SSL 경고 제어용
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 
@@ -13,6 +14,9 @@ try:
 except ImportError:
     HAS_GEMINI = False
     print("Google Gemini 라이브러리가 없습니다. 'pip install google-generativeai'를 실행하세요.")
+
+# [설정] HTTPS 요청 시 SSL 인증서 경고 무시 (한전 API 등 공공데이터 사용 시 필요)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 CORS(app) 
@@ -33,6 +37,7 @@ if HAS_GEMINI:
 
 @app.route('/')
 def home():
+    # templates 폴더 안에 index.html 파일이 있어야 합니다.
     return render_template('index.html')
 
 # --------------------------------------------------------------------------
@@ -112,6 +117,7 @@ def proxy_kepco():
     }
 
     try:
+        # verify=False로 인한 경고는 상단의 urllib3 설정을 통해 무시됨
         resp = requests.get(url, params=params, verify=False, timeout=10)
         try:
             data = resp.json()
@@ -269,10 +275,22 @@ def analyze_law_with_ai():
         return jsonify({"result": "FAIL", "msg": f"Gemini 분석 오류: {str(e)}"})
 
 if __name__ == '__main__':
+    # [배포 팁] 실제 배포 시에는 debug=False로 변경하는 것이 좋습니다.
     app.run(host='0.0.0.0', port=5000, debug=True)
 ```
 
-### 필수 확인 사항
-1.  **라이브러리 설치:** 서버 터미널에서 아래 명령어를 꼭 실행해주세요.
-    ```bash
-    pip install google-generativeai
+### 📋 서버 배포 전 필수 체크리스트 (Requirements)
+
+서버(Render, AWS, 내 컴퓨터 등)에서 이 코드를 돌리려면 **반드시 필요한 라이브러리** 목록입니다. `requirements.txt` 파일을 만들어서 아래 내용을 붙여넣으세요.
+
+```text
+flask
+flask-cors
+requests
+google-generativeai
+urllib3
+```
+
+**설치 명령어:**
+```bash
+pip install -r requirements.txt
