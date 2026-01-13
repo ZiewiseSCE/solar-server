@@ -17,7 +17,7 @@ KEPCO_KEY = os.environ.get("KEPCO_KEY", "19BZ8JWfae590LQCR6f2tEIyyD94wBBYEzY3UpY
 
 # [국가법령정보센터] Open API ID (회원가입 후 발급받은 아이디)
 # 실제 서비스 시 https://open.law.go.kr/ 에서 신청 필요
-LAW_API_ID = os.environ.get("LAW_API_ID", "test") # 기본값은 테스트용
+LAW_API_ID = os.environ.get("LAW_API_ID", "kennyyang") # 사용자 키 적용
 
 @app.route('/')
 def home():
