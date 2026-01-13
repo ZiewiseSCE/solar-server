@@ -42,12 +42,19 @@
         #sidebar-toggle-btn.collapsed i { transform: rotate(180deg); }
         
         /* UI 스타일 */
+        .tab-btn { transition: all 0.2s; border-bottom: 2px solid transparent; }
         .tab-btn.active { border-bottom-color: #06b6d4; color: #06b6d4; font-weight: bold; background-color: #f8fafc; }
         .result-card { background: rgba(15, 23, 42, 0.95); border-left: 4px solid #06b6d4; backdrop-filter: blur(4px); }
         .spinner { border: 3px solid rgba(255,255,255,0.1); border-radius: 50%; border-top: 3px solid #06b6d4; width: 24px; height: 24px; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 3px; }
+        
+        .d-pad-btn {
+            width: 24px; height: 24px; background: #e2e8f0; border-radius: 4px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.1s; color: #334155; font-size: 10px;
+        }
         .d-pad-btn:hover { background: #cbd5e1; color: #0f172a; }
         .d-pad-btn:active { background: #94a3b8; transform: scale(0.95); }
         
@@ -58,6 +65,16 @@
         /* Input */
         .login-input { background: rgba(30, 41, 59, 0.5); border: 1px solid #475569; color: white; transition: all 0.3s; }
         .login-input:focus { border-color: #06b6d4; outline: none; background: rgba(30, 41, 59, 0.8); }
+
+        /* 슬라이더 스타일 */
+        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; height: 12px; width: 12px; border-radius: 50%;
+            background: #06b6d4; cursor: pointer; margin-top: -4px;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%; height: 4px; cursor: pointer; background: #cbd5e1; border-radius: 2px;
+        }
     </style>
 </head>
 <body class="bg-gray-100">
@@ -122,7 +139,10 @@
                     <button onclick="addUser()" class="w-full bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-bold">유저 추가</button>
                 </div>
                 <div class="text-left">
-                    <label class="text-[10px] font-bold text-slate-400 block mb-1">등록된 유저 목록</label>
+                    <label class="text-[10px] font-bold text-slate-400 block mb-1 flex justify-between">
+                        <span>등록된 유저 목록</span>
+                        <span id="user-count" class="text-cyan-500">0명</span>
+                    </label>
                     <div class="bg-slate-800 rounded border border-slate-700 h-32 overflow-y-auto p-2 space-y-1" id="user-list-container"></div>
                 </div>
                 <div class="flex gap-2 pt-2">
@@ -185,7 +205,6 @@
                         <i class="ph ph-caret-down group-open:rotate-180 transition"></i>
                     </summary>
                     <div class="p-3 space-y-3 border-t border-gray-200">
-                        <!-- 파라미터 입력 필드들 (생략 없이 유지) -->
                         <div class="bg-indigo-50 p-2 rounded border border-indigo-100 text-xs">
                             <div class="font-bold text-indigo-700 mb-1 flex items-center gap-1"><i class="ph ph-ruler"></i> 모듈 및 설치 규격</div>
                             <div class="grid grid-cols-2 gap-2 mb-2">
@@ -395,12 +414,7 @@
         // ==========================================
         //  설정 및 글로벌 변수
         // ==========================================
-        // [중요] 타일맵은 브라우저에서 직접 로드하므로 키 유지
         const VWORLD_TILE_KEY = "8D526307-78EE-3281-8AB3-0D36115D17C3"; 
-        
-        // [중요] 백엔드 서버 URL 설정 (Render 주소 입력)
-        // 만약 이 HTML이 Flask에서 렌더링된다면 상대 경로('')로 둬도 됩니다.
-        // 하지만 별도 호스팅이라면 https://solar-server-jszy.onrender.com 입력 필요
         const BACKEND_URL = "https://solar-server-jszy.onrender.com"; 
 
         const firebaseConfig = {
@@ -437,6 +451,15 @@
         let currentUser = null;
         const ENCODED_ADMIN_PW = "Wmlld2lzZTEyMyE="; 
 
+        // [추가] API 트래킹 함수 정의
+        function trackApi(type) {
+            if(apiCounts[type] !== undefined) {
+                apiCounts[type]++;
+                const el = document.getElementById(`cnt-${type}`);
+                if(el) el.innerText = apiCounts[type];
+            }
+        }
+
         // ==========================================
         //  핵심 비즈니스 로직 (백엔드 연동)
         // ==========================================
@@ -453,7 +476,6 @@
             content.classList.add('hidden');
 
             try {
-                // [백엔드 연동] 조례 API 호출
                 const url = `${BACKEND_URL}/api/ordinance?address=${encodeURIComponent(address)}`;
                 const res = await fetch(url);
                 const data = await res.json();
@@ -488,7 +510,6 @@
             const query = document.getElementById('addrInput').value;
             if(!query) return showToast("주소를 입력하세요.");
             
-            // [백엔드 연동] 주소 검색 프록시 호출
             const url = `${BACKEND_URL}/api/vworld/address?address=${encodeURIComponent(query)}`;
             
             try {
@@ -496,11 +517,10 @@
                 const data = await res.json();
                 
                 if(data.response.status === 'OK') {
-                    // V-World Address API의 응답 구조는 result.point.x / y 입니다.
                     const { x, y } = data.response.result.point;
-                    map.setView([y, x], 18);
+                    map.setView([parseFloat(y), parseFloat(x)], 18);
                     showToast("이동 완료.");
-                    setTimeout(() => scanBuildings(y, x), 800);
+                    setTimeout(() => scanBuildings(parseFloat(y), parseFloat(x)), 800);
                 } else {
                     showToast("주소를 찾을 수 없습니다.");
                 }
@@ -508,16 +528,6 @@
                 console.error("Backend API Error:", e);
                 showToast("검색 서버 연결 실패"); 
             }
-        }
-
-        function onMapClick(e) {
-            scanBuildings(e.latlng.lat, e.latlng.lng);
-        }
-
-        function onMapMoveEnd() {
-            if(!autoScanMode || !isLoggedIn) return;
-            const c = map.getCenter();
-            scanBuildings(c.lat, c.lng);
         }
 
         async function scanBuildings(lat, lng) {
@@ -534,7 +544,6 @@
             const box = `${lng - delta},${lat - delta},${lng + delta},${lat + delta}`;
             const layerName = scanTarget === 'building' ? 'LT_C_SPBD' : 'LP_PA_CBND_BUBUN';
             
-            // [백엔드 연동] 데이터 프록시 호출
             const url = `${BACKEND_URL}/api/vworld/data?data=${layerName}&geomFilter=BOX(${box})`;
 
             try {
@@ -557,7 +566,7 @@
         }
 
         // ==========================================
-        //  로그인/관리자/지도 로직 (기존 유지)
+        //  로그인/관리자/지도 로직
         // ==========================================
         function attemptLogin() {
             const id = document.getElementById('userId').value.trim();
@@ -604,7 +613,7 @@
                         logout('Duplicate Remote');
                     }
                 }
-            });
+            }, (error) => console.error("Session monitor error:", error));
         }
 
         function logout(reason) {
@@ -658,6 +667,7 @@
         function renderUserList() {
             const container = document.getElementById('user-list-container');
             const users = JSON.parse(localStorage.getItem('scenergy_users') || "[]");
+            document.getElementById('user-count').innerText = `${users.length}명`;
             container.innerHTML = "";
             users.forEach((u, idx) => {
                 const item = document.createElement('div');
@@ -718,6 +728,10 @@
             logSystem("Map Initialized. Backend Connected.");
         }
 
+        function onMapClick(e) {
+            scanBuildings(e.latlng.lat, e.latlng.lng);
+        }
+
         function renderFeatures(features) {
             L.geoJSON(features, {
                 style: { color: "#38bdf8", weight: 2, fillOpacity: 0.2, dashArray: '5, 5' },
@@ -728,25 +742,175 @@
             }).addTo(selectableGroup);
         }
 
-        // ... 나머지 유틸리티 함수들 (toggleSidebar, switchTab, setMap 등)은 동일하므로 생략 없이 사용 ...
-        // (지면 관계상 핵심 로직 외 UI 함수들은 기존 코드와 동일하게 유지됩니다)
-        
+        async function analyzeFeature(feature) {
+            currentAnalysisFeature = JSON.parse(JSON.stringify(feature));
+            if(!autoScanMode && !isMultiSelectMode) {
+                switchTab('analysis'); 
+                resetCalibration(false); 
+                accumulatedPanelsCount = 0; 
+            }
+            document.getElementById('resultCard').classList.remove('hidden');
+            const props = feature.properties || {};
+            const addr = props.road_nm_ad || props.jibun || props.addr || "주소 미상";
+            if (isMultiSelectMode && accumulatedPanelsCount > 0) document.getElementById('analysisAddress').innerText = `${addr} 외 다수`;
+            else document.getElementById('analysisAddress').innerText = addr;
+            drawPanels(feature.geometry);
+            if(!autoScanMode) fetchGeminiLegalAnalysis(addr);
+        }
+
+        function drawPanels(geometry) {
+            if (!isMultiSelectMode) { panelGroup.clearLayers(); accumulatedPanelsCount = 0; }
+            try {
+                let poly = turf.feature(geometry);
+                if (currentGeoState.x !== 0 || currentGeoState.y !== 0 || currentGeoState.rot !== 0) {
+                      poly = turf.transformRotate(poly, currentGeoState.rot);
+                      poly = turf.transformTranslate(poly, currentGeoState.x / 100000, 90); 
+                      poly = turf.transformTranslate(poly, currentGeoState.y / 100000, 0); 
+                }
+                const modW = (parseFloat(document.getElementById('modWidth').value) || 1.13) / 1000;
+                const modH = (parseFloat(document.getElementById('modHeight').value) || 2.4) / 1000;
+                const spacingVal = (parseFloat(document.getElementById('rowSpacing').value) || 1.2) / 1000;
+                const angle = parseFloat(document.getElementById('installAngle').value) || 20;
+                const projectedH = modH * Math.cos(angle * Math.PI / 180);
+                const dLat = (projectedH + spacingVal) / 111; 
+                const dLng = (modW + 0.00001) / 88; 
+                const bbox = turf.bbox(poly);
+                let currentBatchPanels = [];
+                const stepX = dLng; 
+                const stepY = dLat; 
+                let loopCount = 0;
+                for(let x = bbox[0]; x < bbox[2]; x += stepX) {
+                    for(let y = bbox[1]; y < bbox[3]; y += stepY) {
+                        loopCount++;
+                        if(loopCount > 5000) break; 
+                        const centerPt = turf.point([x + dLng/2, y + dLat/2]);
+                        if(turf.booleanPointInPolygon(centerPt, poly)) {
+                            const cell = turf.bboxPolygon([x, y, x + dLng*0.9, y + (projectedH/111)]);
+                            currentBatchPanels.push(cell);
+                        }
+                    }
+                    if(loopCount > 5000) break;
+                }
+                if(currentBatchPanels.length > 0) {
+                    L.geoJSON({type:"FeatureCollection", features: currentBatchPanels}, {
+                        style: { color: '#3b82f6', weight: 1, fillColor: '#1d4ed8', fillOpacity: 0.9 }
+                    }).addTo(panelGroup);
+                }
+                accumulatedPanelsCount += currentBatchPanels.length;
+                calculateFinance(accumulatedPanelsCount);
+            } catch(e) { console.error("Error", e); }
+        }
+
+        function reCalculate() {
+            if (isMultiSelectMode) showToast("주의: 누적 모드에서는 설정 변경이 즉시 반영되지 않을 수 있습니다.");
+            if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry);
+        }
+
+        function calculateFinance(count) {
+            const modPower = parseFloat(document.getElementById('modPower').value);
+            const capKw = (count * modPower) / 1000;
+            const smp = parseFloat(document.getElementById('smp').value);
+            const rec = parseFloat(document.getElementById('rec').value);
+            const costPerKw = parseFloat(document.getElementById('costPerKw').value) * 10000;
+            const modPrice = parseFloat(document.getElementById('modPrice').value);
+            const pfRatio = parseFloat(document.getElementById('pfLoanRatio').value);
+            const pfRate = parseFloat(document.getElementById('pfInterestRate').value);
+            const height = parseFloat(document.getElementById('installHeight').value) || 0;
+            const heightCostBonus = height > 1.0 ? (height - 1.0) * 10000 * capKw : 0; 
+            const annualRev = capKw * 3.6 * 365 * (smp + rec);
+            const constructionCost = (capKw * costPerKw) + heightCostBonus;
+            const moduleCost = (count * modPower) * modPrice;
+            const totalCost = constructionCost + moduleCost;
+            const loanAmount = totalCost * (pfRatio / 100);
+            const equityAmount = totalCost - loanAmount;
+            const annualInterest = loanAmount * (pfRate / 100);
+            const netIncome = annualRev - annualInterest;
+            const pfPayback = netIncome > 0 ? (equityAmount / netIncome).toFixed(1) : 99;
+            document.getElementById('analysisCount').innerText = `${count.toLocaleString()} 장`;
+            document.getElementById('analysisCapacity').innerText = `${capKw.toFixed(1)} kW`;
+            document.getElementById('resAnnualRev').innerText = `${Math.round(annualRev).toLocaleString()} 원`;
+            document.getElementById('resTotalCost').innerText = `${Math.round(totalCost).toLocaleString()} 원`;
+            document.getElementById('pfRatioDisplay').innerText = pfRatio;
+            document.getElementById('resLoanAmount').innerText = `${Math.round(loanAmount).toLocaleString()} 원`;
+            document.getElementById('resEquityAmount').innerText = `${Math.round(equityAmount).toLocaleString()} 원`;
+            document.getElementById('resInterest').innerText = `${Math.round(annualInterest).toLocaleString()} 원`;
+            document.getElementById('resPfPayback').innerText = `${pfPayback} 년`;
+        }
+
         function toggleSidebar() {
             document.getElementById('sidebar').classList.toggle('collapsed');
             document.getElementById('sidebar-toggle-btn').classList.toggle('collapsed');
         }
+        function switchTab(mode) {
+            ['scan', 'analysis', 'legal'].forEach(t => { document.getElementById(`tab-${t}`).classList.remove('active'); document.getElementById(`panel-${t}`).classList.add('hidden'); });
+            document.getElementById(`tab-${mode}`).classList.add('active');
+            document.getElementById(`panel-${mode}`).classList.remove('hidden');
+        }
+        function toggleTarget() {
+            const els = document.getElementsByName('scanTarget');
+            els.forEach(e => { if(e.checked) scanTarget = e.value; });
+            showToast(`모드 변경: ${scanTarget === 'building' ? '건물' : '토지'}`);
+        }
+        function toggleMultiSelect() {
+            isMultiSelectMode = document.getElementById('multiSelectToggle').checked;
+            if(!isMultiSelectMode) { accumulatedPanelsCount = 0; panelGroup.clearLayers(); }
+            showToast(`결과 누적 모드 ${isMultiSelectMode ? 'ON' : 'OFF'}`);
+        }
+        function toggleAutoScan() {
+            autoScanMode = document.getElementById('autoScanToggle').checked;
+            showToast(`자동 스캔 ${autoScanMode ? '활성화' : '비활성화'}`);
+            if(autoScanMode) onMapMoveEnd();
+        }
+        function toggleLayer(type) {
+            if(type === 'existing') {
+                if(document.getElementById('existingPlantToggle').checked) { createMockMarkers(map.getCenter(), 'plant'); map.addLayer(existingGroup); }
+                else { existingGroup.clearLayers(); map.removeLayer(existingGroup); }
+            } else if(type === 'substation') {
+                 if(document.getElementById('substationToggle').checked) { createMockMarkers(map.getCenter(), 'substation'); map.addLayer(substationGroup); }
+                 else { substationGroup.clearLayers(); map.removeLayer(substationGroup); }
+            } else if(type === 'cadastral') {
+                 if(document.getElementById('cadastralToggle').checked) { if(!cadastralLayer._map) map.addLayer(cadastralLayer); }
+                 else { if(cadastralLayer._map) map.removeLayer(cadastralLayer); }
+            }
+        }
+        function setMap(type) {
+            if(type === 'base') { map.addLayer(layers.base); map.removeLayer(layers.sat); }
+            else { map.addLayer(layers.sat); map.removeLayer(layers.base); }
+            layers.hybrid.bringToFront();
+        }
         function setRegion() {
             const val = document.getElementById('regionSelect').value;
-            // ... (기존 로직 유지) ...
+            const REGIONS = { 'ansan_ind': [[37.28, 126.70], [37.34, 126.85]], 'incheon_ind': [[37.39, 126.68], [37.42, 126.73]], 'seoul': [[37.5665, 126.9780], [37.5665, 126.9780]] };
+            const bounds = REGIONS[val];
+            if(bounds) {
+                if(bounds[0][0] === bounds[1][0]) { map.setView(bounds[0], 13); scanBuildings(bounds[0][0], bounds[0][1]); } 
+                else map.fitBounds(bounds);
+                showToast("지역 이동");
+            }
         }
-        // ... (나머지 UI 함수들) ...
+        function applySliderCalibration(val, type) {
+            const v = parseFloat(val);
+            if(type === 'x') currentGeoState.x = v * 10; 
+            if(type === 'y') currentGeoState.y = v * 10;
+            if(type === 'rot') currentGeoState.rot = v;
+            if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry);
+        }
+        function applyCalibration(dx, dy, drot=0) {
+            currentGeoState.x += dx * 10; currentGeoState.y += dy * 10; currentGeoState.rot += drot;
+            if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry);
+        }
+        function resetCalibration(redraw=true) {
+            currentGeoState = { x:0, y:0, rot:0 };
+            document.querySelectorAll('input[type=range]').forEach(el => el.value = 0);
+            if(redraw && currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry);
+        }
         function startMission() {
             let seconds = 0;
             const timerEl = document.getElementById('timerRemaining');
             const interval = setInterval(() => {
                 seconds++;
                 timerEl.innerText = `진행 중... ${seconds}s`;
-                if(seconds > 10) clearInterval(interval);
+                if(seconds > 10) { clearInterval(interval); timerEl.innerText = "스캔 완료"; }
             }, 1000);
             showToast("스캔 시작");
         }
@@ -765,24 +929,9 @@
                 document.getElementById('resultCard').classList.add('hidden');
             }
         }
-        function setMap(type) {
-            if(type === 'base') { map.addLayer(layers.base); map.removeLayer(layers.sat); }
-            else { map.addLayer(layers.sat); map.removeLayer(layers.base); }
-            layers.hybrid.bringToFront();
-        }
-        function toggleLayer(type) {
-            const center = map ? map.getCenter() : {lat:36.5, lng:127.5};
-            if(type === 'existing') {
-                if(document.getElementById('existingPlantToggle').checked) { createMockMarkers(center, 'plant'); map.addLayer(existingGroup); } else { existingGroup.clearLayers(); map.removeLayer(existingGroup); }
-            } else if(type === 'substation') {
-                 if(document.getElementById('substationToggle').checked) { createMockMarkers(center, 'substation'); map.addLayer(substationGroup); } else { substationGroup.clearLayers(); map.removeLayer(substationGroup); }
-            } else if(type === 'cadastral') {
-                 if(document.getElementById('cadastralToggle').checked) { if(!cadastralLayer._map) map.addLayer(cadastralLayer); } else { if(cadastralLayer._map) map.removeLayer(cadastralLayer); }
-            }
-        }
-        function toggleAutoScan() {
-            autoScanMode = document.getElementById('autoScanToggle').checked;
-            if(autoScanMode) { showToast("자동 스캔 활성화"); onMapMoveEnd(); } else { showToast("자동 스캔 비활성화"); }
+        function updateEstimatedTime() {
+            const delay = parseInt(document.getElementById('scanDelay').value) || 1000;
+            document.getElementById('timerRemaining').innerText = `약 ${Math.floor((delay * 20) / 1000 / 60).toString().padStart(2, '0')}:${Math.floor((delay * 20) / 1000 % 60).toString().padStart(2, '0')} 소요`;
         }
         function createMockMarkers(center, type) {
             const group = type === 'plant' ? existingGroup : substationGroup;
@@ -794,26 +943,6 @@
                 const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [24, 24] });
                 L.marker([lat, lng], { icon: icon }).bindPopup(type === 'plant' ? "기설치 태양광 (99kW)" : "변전소 (여유용량: 10MW)").addTo(group);
             }
-        }
-        // ... setRegion 등 생략된 함수들은 기존과 동일하게 작동 ...
-        function setRegion() {
-            const val = document.getElementById('regionSelect').value;
-            const REGIONS = { 'ansan_ind': [[37.28, 126.70], [37.34, 126.85]], 'incheon_ind': [[37.39, 126.68], [37.42, 126.73]], 'seoul': [[37.5665, 126.9780], [37.5665, 126.9780]] }; // (간소화됨)
-            const bounds = REGIONS[val];
-            if(bounds) {
-                if(bounds[0][0] === bounds[1][0]) { map.setView(bounds[0], 13); scanBuildings(bounds[0][0], bounds[0][1]); } 
-                else { map.fitBounds(bounds); }
-                showToast("지역 이동");
-            }
-        }
-        function switchTab(mode) {
-            ['scan', 'analysis', 'legal'].forEach(t => { document.getElementById(`tab-${t}`).classList.remove('active'); document.getElementById(`panel-${t}`).classList.add('hidden'); });
-            document.getElementById(`tab-${mode}`).classList.add('active'); document.getElementById(`panel-${mode}`).classList.remove('hidden');
-        }
-        function toggleTarget() {
-            const els = document.getElementsByName('scanTarget');
-            els.forEach(e => { if(e.checked) scanTarget = e.value; });
-            showToast(`모드 변경: ${scanTarget === 'building' ? '건물' : '토지'}`);
         }
     </script>
 </body>
