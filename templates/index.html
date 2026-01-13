@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solar Pathfinder Cloud</title>
+    <!-- 지도 및 화면 꾸미기 도구 불러오기 -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
+    
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: sans-serif; }
+        #map { width: 100%; height: 100%; z-index: 1; background: #1a1a1a; }
+        .sidebar { z-index: 2000; transition: transform 0.3s; }
+        .result-card { background: rgba(15, 23, 42, 0.95); border: 1px solid rgba(6, 182, 212, 0.3); }
+        .selectable-building { cursor: pointer; stroke: #fff; stroke-width: 2; stroke-dasharray: 4; fill: #38bdf8; fill-opacity: 0.3; }
+        .selectable-building:hover { fill-opacity: 0.6; stroke: #06b6d4; stroke-width: 3; }
+    </style>
+</head>
+<body class="bg-gray-100">
+
+    <!-- 왼쪽 사이드바 -->
+    <div id="sidebar" class="sidebar absolute top-0 left-0 h-full w-[400px] bg-white shadow-2xl flex flex-col border-r border-gray-200">
+        <div class="p-4 bg-slate-900 text-white shadow-md">
+            <h1 class="text-lg font-bold flex items-center gap-2">
+                <i class="ph ph-cloud-check text-green-400"></i> Solar Pathfinder Cloud
+            </h1>
+            <p class="text-[10px] text-slate-400">Server Powered</p>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-4 space-y-4">
+            <!-- 결과창 (평소엔 숨김) -->
+            <div id="resultCard" class="hidden result-card text-white p-4 rounded-lg shadow-lg space-y-3">
+                <h3 class="text-sm font-bold border-b border-slate-700 pb-2">분석 리포트</h3>
+                <div class="space-y-2 text-xs">
+                    <div class="flex justify-between"><span class="text-slate-400">주소:</span><span id="resAddr" class="font-bold">-</span></div>
+                    <div class="flex justify-between"><span class="text-slate-400">한전용량:</span><span id="resKepco" class="font-bold text-yellow-400">-</span></div>
+                    <div class="flex justify-between"><span class="text-slate-400">설치용량:</span><span id="resCap" class="font-bold text-cyan-400">-</span></div>
+                    <div class="flex justify-between"><span class="text-slate-400">예상수익:</span><span id="resRev" class="font-bold text-green-400">-</span></div>
+                </div>
+            </div>
+            <div id="msg" class="text-center text-xs text-gray-500 mt-10">지도를 클릭하여 분석하세요.</div>
+        </div>
+    </div>
+
+    <!-- 검색창 -->
+    <div class="absolute top-4 right-4 z-[1000] flex gap-2">
+        <input type="text" id="addrInput" class="px-4 py-2 rounded shadow border-2 border-cyan-500 outline-none w-64" placeholder="주소 입력" onkeypress="if(event.key==='Enter') searchAddress()">
+        <button onclick="searchAddress()" class="bg-cyan-600 text-white px-4 py-2 rounded shadow font-bold">검색</button>
+    </div>
+
+    <div id="map"></div>
+
+    <script>
+        let map, selectableGroup;
+
+        // [중요] 서버 주소 자동 설정 함수
+        // 미리보기(Blob)나 파일(file://)로 열었을 때는 'http://localhost:5000'을 기본으로 사용합니다.
+        // Render 등에 배포된 후에는 자동으로 같은 도메인을 사용합니다.
+        const getApiBase = () => {
+            const proto = window.location.protocol;
+            if (proto === 'file:' || proto === 'blob:' || window.location.hostname.includes('googleusercontent')) {
+                return 'http://localhost:5000'; 
+            }
+            return ''; 
+        };
+        const API_BASE = getApiBase();
+
+        window.onload = function() {
+            // 지도 초기화 (V-World 지도 사용 - 공개 키)
+            const vKey = "8D526307-78EE-3281-8AB3-0D36115D17C3";
+            map = L.map('map', { zoomControl: false }).setView([36.5, 127.5], 7);
+            
+            L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${vKey}/Hybrid/{z}/{y}/{x}.png`, { maxZoom: 19 }).addTo(map);
+            L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${vKey}/Satellite/{z}/{y}/{x}.jpeg`, { maxZoom: 19 }).addTo(map);
+            
+            selectableGroup = L.layerGroup().addTo(map);
+            map.on('click', onMapClick);
+        };
+
+        // 1. 주소 검색
+        async function searchAddress() {
+            const q = document.getElementById('addrInput').value;
+            if(!q) return;
+
+            try {
+                // API_BASE를 앞에 붙여서 에러 방지
+                const res = await fetch(`${API_BASE}/api/vworld/address?address=${encodeURIComponent(q)}`);
+                const data = await res.json();
+                
+                if(data.response && data.response.status === 'OK') {
+                    const { x, y } = data.response.result.point;
+                    map.setView([y, x], 19);
+                    scanBuildings(y, x);
+                } else {
+                    alert("주소를 찾을 수 없습니다.");
+                }
+            } catch(e) {
+                console.error(e);
+                alert("서버 연결 실패. 파이썬 서버(app.py)가 켜져 있는지 확인하세요.");
+            }
+        }
+
+        // 2. 지도 클릭 시
+        function onMapClick(e) {
+            scanBuildings(e.latlng.lat, e.latlng.lng);
+        }
+
+        async function scanBuildings(lat, lng) {
+            selectableGroup.clearLayers();
+            const delta = 0.001; 
+            const box = `${lng - delta},${lat - delta},${lng + delta},${lat + delta}`;
+            
+            try {
+                // API_BASE 붙여서 요청
+                const res = await fetch(`${API_BASE}/api/vworld/data?geomFilter=BOX(${box})`);
+                const data = await res.json();
+
+                if(data.response && data.response.status === 'OK') {
+                    const features = data.response.result.featureCollection.features;
+                    L.geoJSON(features, {
+                        style: { color: "#fff", weight: 2, fillOpacity: 0.1, dashArray: '4' },
+                        onEachFeature: function(feature, layer) {
+                            layer.on('click', (e) => {
+                                L.DomEvent.stopPropagation(e);
+                                analyze(feature);
+                            });
+                        }
+                    }).addTo(selectableGroup);
+                    document.getElementById('msg').innerText = "건물을 클릭하세요.";
+                } else {
+                    document.getElementById('msg').innerText = "주변에 건물이 없습니다.";
+                }
+            } catch(e) {
+                console.error(e);
+                // 조용히 실패 (지도 클릭 시 매번 알림 뜨면 불편하므로)
+            }
+        }
+
+        // 3. 분석 및 한전 조회
+        async function analyze(feature) {
+            document.getElementById('resultCard').classList.remove('hidden');
+            document.getElementById('msg').classList.add('hidden');
+            
+            const props = feature.properties;
+            document.getElementById('resAddr').innerText = props.addr || props.road_nm_ad || "주소 미상";
+
+            // 면적 및 설치용량 계산
+            const area = turf.area(feature);
+            const capacity = (area / 6).toFixed(1);
+            document.getElementById('resCap').innerText = `${capacity} kW`;
+            
+            // 수익 계산
+            const rev = Math.round(capacity * 3.6 * 365 * 180);
+            document.getElementById('resRev').innerText = `${(rev/10000).toFixed(0)} 만원/년`;
+
+            // 한전 용량 조회
+            document.getElementById('resKepco').innerText = "조회 중...";
+            if(props.pnu) {
+                try {
+                    // API_BASE 붙여서 요청
+                    const res = await fetch(`${API_BASE}/api/kepco?pnu=${props.pnu}`);
+                    const data = await res.json();
+                    
+                    if(data.response && data.response.body && data.response.body.items) {
+                        const item = Array.isArray(data.response.body.items.item) 
+                            ? data.response.body.items.item[0] 
+                            : data.response.body.items.item;
+                        document.getElementById('resKepco').innerText = `${parseInt(item.ableCapacity).toLocaleString()} kW`;
+                    } else {
+                        document.getElementById('resKepco').innerText = "0 kW (여유없음)";
+                    }
+                } catch(e) {
+                    console.error(e);
+                    document.getElementById('resKepco').innerText = "조회 실패";
+                }
+            } else {
+                document.getElementById('resKepco').innerText = "PNU 없음";
+            }
+        }
+    </script>
+</body>
+</html>
