@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Solar Pathfinder Cloud</title>
-    <!-- 지도 및 화면 꾸미기 도구 불러오기 -->
+    <title>Solar Pathfinder Cloud (Pro)</title>
+    
+    <!-- 라이브러리 로드 -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -12,174 +13,424 @@
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
     
     <style>
-        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: sans-serif; }
+        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: 'Pretendard', sans-serif; }
         #map { width: 100%; height: 100%; z-index: 1; background: #1a1a1a; }
-        .sidebar { z-index: 2000; transition: transform 0.3s; }
-        .result-card { background: rgba(15, 23, 42, 0.95); border: 1px solid rgba(6, 182, 212, 0.3); }
-        .selectable-building { cursor: pointer; stroke: #fff; stroke-width: 2; stroke-dasharray: 4; fill: #38bdf8; fill-opacity: 0.3; }
-        .selectable-building:hover { fill-opacity: 0.6; stroke: #06b6d4; stroke-width: 3; }
+        
+        /* 사이드바 스타일 */
+        .sidebar { z-index: 2000; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .sidebar.collapsed { transform: translateX(-100%); }
+        
+        /* UI 요소 스타일 */
+        .result-card { background: rgba(15, 23, 42, 0.95); border-left: 4px solid #06b6d4; backdrop-filter: blur(4px); }
+        .selectable-building { cursor: pointer; stroke: #fff; stroke-width: 2; stroke-dasharray: 4; fill: #38bdf8; fill-opacity: 0.2; transition: all 0.2s; }
+        .selectable-building:hover { fill-opacity: 0.5; stroke: #06b6d4; stroke-width: 3; }
+        
+        /* 로딩 애니메이션 */
+        .spinner { border: 3px solid rgba(255,255,255,0.1); border-radius: 50%; border-top: 3px solid #06b6d4; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* 커스텀 스크롤바 */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
     </style>
 </head>
 <body class="bg-gray-100">
 
-    <!-- 왼쪽 사이드바 -->
+    <!-- 좌측 사이드바 -->
     <div id="sidebar" class="sidebar absolute top-0 left-0 h-full w-[400px] bg-white shadow-2xl flex flex-col border-r border-gray-200">
-        <div class="p-4 bg-slate-900 text-white shadow-md">
-            <h1 class="text-lg font-bold flex items-center gap-2">
-                <i class="ph ph-cloud-check text-green-400"></i> Solar Pathfinder Cloud
+        
+        <!-- 헤더 -->
+        <div class="p-5 bg-slate-900 text-white shadow-lg shrink-0">
+            <h1 class="text-xl font-bold flex items-center gap-2">
+                <i class="ph ph-cloud-check text-cyan-400"></i> Solar Pathfinder
             </h1>
-            <p class="text-[10px] text-slate-400">Server Powered</p>
-        </div>
-
-        <div class="flex-1 overflow-y-auto p-4 space-y-4">
-            <!-- 결과창 (평소엔 숨김) -->
-            <div id="resultCard" class="hidden result-card text-white p-4 rounded-lg shadow-lg space-y-3">
-                <h3 class="text-sm font-bold border-b border-slate-700 pb-2">분석 리포트</h3>
-                <div class="space-y-2 text-xs">
-                    <div class="flex justify-between"><span class="text-slate-400">주소:</span><span id="resAddr" class="font-bold">-</span></div>
-                    <div class="flex justify-between"><span class="text-slate-400">한전용량:</span><span id="resKepco" class="font-bold text-yellow-400">-</span></div>
-                    <div class="flex justify-between"><span class="text-slate-400">설치용량:</span><span id="resCap" class="font-bold text-cyan-400">-</span></div>
-                    <div class="flex justify-between"><span class="text-slate-400">예상수익:</span><span id="resRev" class="font-bold text-green-400">-</span></div>
+            <div class="flex justify-between items-center mt-2">
+                <p class="text-[11px] text-slate-400">Backend Connected</p>
+                <div class="flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                    <span class="text-[10px] text-green-400 font-bold">LIVE</span>
                 </div>
             </div>
-            <div id="msg" class="text-center text-xs text-gray-500 mt-10">지도를 클릭하여 분석하세요.</div>
+        </div>
+
+        <!-- 컨텐츠 영역 -->
+        <div class="flex-1 overflow-y-auto p-4 bg-slate-50 space-y-4">
+            
+            <!-- 설정 패널 -->
+            <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
+                <h3 class="text-xs font-bold text-slate-500 flex items-center gap-1 uppercase tracking-wider">
+                    <i class="ph ph-sliders-horizontal"></i> 분석 설정
+                </h3>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-[10px] text-slate-500 font-bold mb-1 block">모듈 출력(W)</label>
+                        <input type="number" id="modPower" value="640" class="w-full bg-slate-50 border border-slate-200 rounded p-1.5 text-center font-bold text-sm focus:border-cyan-500 outline-none">
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-slate-500 font-bold mb-1 block">이격 거리(m)</label>
+                        <input type="number" id="rowSpacing" value="1.0" step="0.1" class="w-full bg-slate-50 border border-slate-200 rounded p-1.5 text-center font-bold text-sm focus:border-cyan-500 outline-none">
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100">
+                    <div>
+                        <label class="text-[10px] text-slate-500 font-bold mb-1 block">SMP(원)</label>
+                        <input type="number" id="smp" value="180" class="w-full bg-slate-50 border border-slate-200 rounded p-1.5 text-center text-xs">
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-slate-500 font-bold mb-1 block">시공단가(만원/kW)</label>
+                        <input type="number" id="costPerKw" value="120" class="w-full bg-slate-50 border border-slate-200 rounded p-1.5 text-center text-xs">
+                    </div>
+                </div>
+            </div>
+
+            <!-- 분석 결과 카드 (초기엔 숨김) -->
+            <div id="resultCard" class="hidden result-card p-5 rounded-xl shadow-lg text-white space-y-4">
+                <div class="flex justify-between items-start border-b border-slate-700 pb-3">
+                    <div>
+                        <h2 class="text-sm font-bold text-cyan-400 flex items-center gap-1">
+                            <i class="ph ph-chart-polar"></i> 분석 리포트
+                        </h2>
+                        <p id="resAddr" class="text-xs text-slate-300 mt-1 break-keep leading-tight">-</p>
+                    </div>
+                    <span id="resJimok" class="text-[10px] px-2 py-0.5 bg-slate-700 rounded text-slate-300">지목</span>
+                </div>
+
+                <div class="space-y-3">
+                    <div class="flex justify-between items-center">
+                        <span class="text-xs text-slate-400">한전 선로 용량</span>
+                        <span id="resKepco" class="text-sm font-bold text-yellow-400">조회 중...</span>
+                    </div>
+                    <div class="h-px bg-slate-700"></div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <p class="text-[10px] text-slate-400">설치 가능</p>
+                            <p class="text-lg font-bold text-white"><span id="resCount">0</span> <span class="text-sm font-normal text-slate-500">장</span></p>
+                        </div>
+                        <div>
+                            <p class="text-[10px] text-slate-400">예상 설비용량</p>
+                            <p class="text-lg font-bold text-cyan-400"><span id="resCap">0</span> <span class="text-sm font-normal text-cyan-700">kW</span></p>
+                        </div>
+                    </div>
+                    <div class="bg-slate-800/50 p-3 rounded-lg border border-slate-700 space-y-1.5">
+                        <div class="flex justify-between text-xs">
+                            <span class="text-slate-400">💰 연 예상 수익</span>
+                            <span id="resRev" class="font-bold text-green-400">0 원</span>
+                        </div>
+                        <div class="flex justify-between text-xs">
+                            <span class="text-slate-400">📉 투자 회수(ROI)</span>
+                            <span id="resRoi" class="font-bold text-blue-400">0 년</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 안내 메시지 -->
+            <div id="guideMsg" class="text-center py-10 opacity-60">
+                <i class="ph ph-map-trifold text-4xl text-slate-300 mb-2"></i>
+                <p class="text-xs text-slate-500">지도를 클릭하거나 주소를 검색하여<br>분석을 시작하세요.</p>
+            </div>
+
+            <!-- 로딩 인디케이터 -->
+            <div id="loading" class="hidden flex flex-col items-center justify-center py-8">
+                <div class="spinner mb-3"></div>
+                <p class="text-xs font-bold text-slate-600 animate-pulse">데이터 분석 중...</p>
+                <p class="text-[10px] text-slate-400 mt-1">서버에서 정보를 가져오고 있습니다.</p>
+            </div>
+
+        </div>
+
+        <!-- 하단 로그창 -->
+        <div class="h-32 bg-slate-900 border-t border-slate-700 p-3 font-mono text-[10px] overflow-y-auto text-slate-400" id="logWindow">
+            <div class="text-green-500">> System Ready.</div>
         </div>
     </div>
 
-    <!-- 검색창 -->
-    <div class="absolute top-4 right-4 z-[1000] flex gap-2">
-        <input type="text" id="addrInput" class="px-4 py-2 rounded shadow border-2 border-cyan-500 outline-none w-64" placeholder="주소 입력" onkeypress="if(event.key==='Enter') searchAddress()">
-        <button onclick="searchAddress()" class="bg-cyan-600 text-white px-4 py-2 rounded shadow font-bold">검색</button>
+    <!-- 검색창 (상단 우측) -->
+    <div class="absolute top-5 right-5 z-[1000] flex flex-col items-end gap-2">
+        <div class="bg-white p-1 rounded-lg shadow-xl border border-slate-200 flex items-center">
+            <input type="text" id="addrInput" placeholder="주소 검색 (예: 강남대로 123)" 
+                   class="w-64 px-3 py-2 text-sm outline-none text-slate-700 font-medium"
+                   onkeypress="if(event.key==='Enter') searchAddress()">
+            <button onclick="searchAddress()" class="bg-cyan-600 hover:bg-cyan-700 text-white p-2 rounded-md transition shadow-md">
+                <i class="ph ph-magnifying-glass font-bold"></i>
+            </button>
+        </div>
     </div>
 
     <div id="map"></div>
 
     <script>
-        let map, selectableGroup;
-
-        // [중요] 서버 주소 자동 설정 함수
-        // 미리보기(Blob)나 파일(file://)로 열었을 때는 'http://localhost:5000'을 기본으로 사용합니다.
-        // Render 등에 배포된 후에는 자동으로 같은 도메인을 사용합니다.
+        // 1. 서버 주소 자동 설정 (로컬 vs 배포 환경)
         const getApiBase = () => {
-            const proto = window.location.protocol;
-            if (proto === 'file:' || proto === 'blob:' || window.location.hostname.includes('googleusercontent')) {
+            const h = window.location.hostname;
+            // 로컬 테스트(127.0.0.1, localhost)이거나 파일(file:)로 열었을 땐 로컬 서버(5000)를 바라봄
+            if (h === 'localhost' || h === '127.0.0.1' || window.location.protocol === 'file:') {
                 return 'http://localhost:5000'; 
             }
+            // Render 등에 배포됐을 땐 자기 자신(상대 경로) 사용
             return ''; 
         };
         const API_BASE = getApiBase();
 
+        let map, selectableGroup, panelGroup, activeFeature;
+
+        // V-World 지도 타일 키 (지도 그림만 가져오는 용도 - 공개키 사용 가능)
+        const VWORLD_TILE_KEY = "8D526307-78EE-3281-8AB3-0D36115D17C3";
+
         window.onload = function() {
-            // 지도 초기화 (V-World 지도 사용 - 공개 키)
-            const vKey = "8D526307-78EE-3281-8AB3-0D36115D17C3";
-            map = L.map('map', { zoomControl: false }).setView([36.5, 127.5], 7);
-            
-            L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${vKey}/Hybrid/{z}/{y}/{x}.png`, { maxZoom: 19 }).addTo(map);
-            L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${vKey}/Satellite/{z}/{y}/{x}.jpeg`, { maxZoom: 19 }).addTo(map);
-            
-            selectableGroup = L.layerGroup().addTo(map);
-            map.on('click', onMapClick);
+            initMap();
+            log("지도 초기화 완료.");
+            log(`Backend 연결 주소: ${API_BASE || 'Current Origin'}`);
         };
 
-        // 1. 주소 검색
-        async function searchAddress() {
-            const q = document.getElementById('addrInput').value;
-            if(!q) return;
+        function initMap() {
+            map = L.map('map', { zoomControl: false }).setView([36.5, 127.5], 7);
+            
+            // 위성지도 + 하이브리드(지명) 레이어
+            L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Satellite/{z}/{y}/{x}.jpeg`, { maxZoom: 19 }).addTo(map);
+            L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Hybrid/{z}/{y}/{x}.png`, { maxZoom: 19 }).addTo(map);
 
+            selectableGroup = L.layerGroup().addTo(map);
+            panelGroup = L.layerGroup().addTo(map);
+
+            map.on('click', onMapClick);
+        }
+
+        // [핵심 1] 주소 검색 (Backend Proxy 사용)
+        async function searchAddress() {
+            const query = document.getElementById('addrInput').value;
+            if(!query) return;
+
+            log(`🔍 주소 검색: ${query}`);
+            
             try {
-                // API_BASE를 앞에 붙여서 에러 방지
-                const res = await fetch(`${API_BASE}/api/vworld/address?address=${encodeURIComponent(q)}`);
+                // 내 서버로 요청 -> 서버가 V-World API 호출 -> 결과 반환
+                const res = await fetch(`${API_BASE}/api/vworld/address?address=${encodeURIComponent(query)}`);
                 const data = await res.json();
                 
                 if(data.response && data.response.status === 'OK') {
                     const { x, y } = data.response.result.point;
                     map.setView([y, x], 19);
-                    scanBuildings(y, x);
+                    log("이동 완료. 주변 건물 스캔 시작...");
+                    scanBuildings(y, x); // 이동 후 자동 스캔
                 } else {
                     alert("주소를 찾을 수 없습니다.");
+                    log("주소 검색 실패.", "err");
                 }
             } catch(e) {
                 console.error(e);
-                alert("서버 연결 실패. 파이썬 서버(app.py)가 켜져 있는지 확인하세요.");
+                alert("서버 통신 실패. 백엔드(app.py)가 실행 중인지 확인하세요.");
+                log("서버 통신 오류", "err");
             }
         }
 
-        // 2. 지도 클릭 시
+        // [핵심 2] 지도 클릭 시 건물 스캔 (Backend Proxy 사용)
         function onMapClick(e) {
             scanBuildings(e.latlng.lat, e.latlng.lng);
         }
 
         async function scanBuildings(lat, lng) {
             selectableGroup.clearLayers();
-            const delta = 0.001; 
+            panelGroup.clearLayers();
+            
+            // UI 초기화
+            document.getElementById('guideMsg').classList.add('hidden');
+            document.getElementById('loading').classList.remove('hidden');
+            document.getElementById('resultCard').classList.add('hidden');
+
+            const delta = 0.001; // 탐색 범위
             const box = `${lng - delta},${lat - delta},${lng + delta},${lat + delta}`;
             
             try {
-                // API_BASE 붙여서 요청
+                // 내 서버로 데이터 요청
                 const res = await fetch(`${API_BASE}/api/vworld/data?geomFilter=BOX(${box})`);
                 const data = await res.json();
 
+                document.getElementById('loading').classList.add('hidden');
+
                 if(data.response && data.response.status === 'OK') {
                     const features = data.response.result.featureCollection.features;
+                    log(`${features.length}개 건물 발견.`);
+                    
                     L.geoJSON(features, {
-                        style: { color: "#fff", weight: 2, fillOpacity: 0.1, dashArray: '4' },
+                        style: { color: "#38bdf8", weight: 2, fillOpacity: 0.1, dashArray: '4' },
                         onEachFeature: function(feature, layer) {
                             layer.on('click', (e) => {
                                 L.DomEvent.stopPropagation(e);
-                                analyze(feature);
+                                analyzeBuilding(feature);
                             });
                         }
                     }).addTo(selectableGroup);
-                    document.getElementById('msg').innerText = "건물을 클릭하세요.";
+                    
+                    // 가장 가까운 건물 자동 선택
+                    if(features.length > 0) {
+                        const pt = turf.point([lng, lat]);
+                        let nearest = features[0];
+                        // 간단히 첫 번째 요소 선택 (정밀 로직은 Turf distance 등 사용 가능)
+                        analyzeBuilding(nearest);
+                    }
                 } else {
-                    document.getElementById('msg').innerText = "주변에 건물이 없습니다.";
+                    log("주변에 건물이 없습니다.", "warn");
+                    document.getElementById('guideMsg').classList.remove('hidden');
+                    document.getElementById('guideMsg').innerHTML = "<p>주변에 건물이 없습니다.<br>다른 곳을 클릭해보세요.</p>";
                 }
             } catch(e) {
                 console.error(e);
-                // 조용히 실패 (지도 클릭 시 매번 알림 뜨면 불편하므로)
+                log("데이터 요청 실패", "err");
+                document.getElementById('loading').classList.add('hidden');
             }
         }
 
-        // 3. 분석 및 한전 조회
-        async function analyze(feature) {
-            document.getElementById('resultCard').classList.remove('hidden');
-            document.getElementById('msg').classList.add('hidden');
+        // [핵심 3] 건물 분석 및 패널 배치 (클라이언트 연산 + Backend 한전 조회)
+        async function analyzeBuilding(feature) {
+            activeFeature = feature;
             
+            // 1. 선택된 건물 표시
+            selectableGroup.eachLayer(l => l.setStyle({ color: "#38bdf8", weight: 2, fillOpacity: 0.1 }));
+            // (여기서 현재 레이어만 하이라이트 할 수 있음)
+
+            // 2. 정보 표시
             const props = feature.properties;
-            document.getElementById('resAddr').innerText = props.addr || props.road_nm_ad || "주소 미상";
+            const addr = props.addr || props.road_nm_ad || "주소 정보 없음";
+            document.getElementById('resAddr').innerText = addr;
+            document.getElementById('resJimok').innerText = props.jimok || "건물";
+            document.getElementById('resultCard').classList.remove('hidden');
 
-            // 면적 및 설치용량 계산
-            const area = turf.area(feature);
-            const capacity = (area / 6).toFixed(1);
-            document.getElementById('resCap').innerText = `${capacity} kW`;
-            
-            // 수익 계산
-            const rev = Math.round(capacity * 3.6 * 365 * 180);
-            document.getElementById('resRev').innerText = `${(rev/10000).toFixed(0)} 만원/년`;
+            // 3. 한전 용량 조회 (Backend Proxy)
+            checkKepco(props.pnu);
 
-            // 한전 용량 조회
-            document.getElementById('resKepco').innerText = "조회 중...";
-            if(props.pnu) {
-                try {
-                    // API_BASE 붙여서 요청
-                    const res = await fetch(`${API_BASE}/api/kepco?pnu=${props.pnu}`);
-                    const data = await res.json();
-                    
-                    if(data.response && data.response.body && data.response.body.items) {
-                        const item = Array.isArray(data.response.body.items.item) 
-                            ? data.response.body.items.item[0] 
-                            : data.response.body.items.item;
-                        document.getElementById('resKepco').innerText = `${parseInt(item.ableCapacity).toLocaleString()} kW`;
-                    } else {
-                        document.getElementById('resKepco').innerText = "0 kW (여유없음)";
-                    }
-                } catch(e) {
-                    console.error(e);
-                    document.getElementById('resKepco').innerText = "조회 실패";
-                }
-            } else {
-                document.getElementById('resKepco').innerText = "PNU 없음";
+            // 4. 패널 배치 시뮬레이션 (Turf.js - 클라이언트 연산)
+            // 서버로 보내서 계산할 수도 있지만, 즉각적인 반응을 위해 클라이언트에서 수행
+            simulatePanels(feature);
+        }
+
+        async function checkKepco(pnu) {
+            const el = document.getElementById('resKepco');
+            el.innerText = "조회 중...";
+            el.className = "text-sm font-bold text-slate-400 animate-pulse";
+
+            if(!pnu) {
+                el.innerText = "PNU 정보 없음";
+                el.className = "text-sm font-bold text-slate-500";
+                return;
             }
+
+            try {
+                // 내 서버로 PNU 전송
+                const res = await fetch(`${API_BASE}/api/kepco?pnu=${pnu}`);
+                const data = await res.json();
+                
+                if(data.response && data.response.body && data.response.body.items) {
+                    const item = Array.isArray(data.response.body.items.item) 
+                        ? data.response.body.items.item[0] 
+                        : data.response.body.items.item;
+                    
+                    const cap = parseInt(item.ableCapacity);
+                    el.innerText = `${cap.toLocaleString()} kW`;
+                    el.className = cap > 0 ? "text-sm font-bold text-green-400" : "text-sm font-bold text-red-400";
+                    log(`한전 용량 조회 완료: ${cap}kW`);
+                } else {
+                    el.innerText = "0 kW (여유 없음)";
+                    el.className = "text-sm font-bold text-red-400";
+                }
+            } catch(e) {
+                console.error(e);
+                el.innerText = "조회 실패";
+                el.className = "text-sm font-bold text-slate-500";
+            }
+        }
+
+        function simulatePanels(feature) {
+            panelGroup.clearLayers();
+            
+            // 파라미터 가져오기
+            const modPower = parseFloat(document.getElementById('modPower').value) || 640;
+            const spacing = parseFloat(document.getElementById('rowSpacing').value) || 1.0;
+            
+            // 모듈 크기 (약 1.1m x 2.4m)
+            const modW = 1.13; 
+            const modH = 2.39; 
+
+            // Turf.js를 이용한 격자 생성
+            const bbox = turf.bbox(feature);
+            const poly = feature.geometry;
+            
+            // 위도에 따른 미터 환산
+            const lat = (bbox[1] + bbox[3]) / 2;
+            const mPerDegLat = 111132;
+            const mPerDegLng = 111320 * Math.cos(lat * (Math.PI / 180));
+            
+            const wDeg = modW / mPerDegLng;
+            const hDeg = modH / mPerDegLat;
+            const sDeg = spacing / mPerDegLat;
+
+            let panels = [];
+            
+            // 단순 격자 배치 알고리즘
+            for (let y = bbox[1]; y < bbox[3]; y += (hDeg + sDeg)) {
+                for (let x = bbox[0]; x < bbox[2]; x += (wDeg + 0.000005)) {
+                    const cell = turf.polygon([[
+                        [x, y],
+                        [x + wDeg, y],
+                        [x + wDeg, y + hDeg],
+                        [x, y + hDeg],
+                        [x, y]
+                    ]]);
+                    
+                    // 건물 안에 완전히 들어가는지 확인
+                    const center = turf.centroid(cell);
+                    if (turf.booleanPointInPolygon(center, feature)) {
+                        panels.push(cell);
+                    }
+                }
+            }
+
+            // 시각화
+            if(panels.length > 0) {
+                L.geoJSON({type: "FeatureCollection", features: panels}, {
+                    style: { color: '#3b82f6', weight: 1, fillColor: '#2563eb', fillOpacity: 0.8 }
+                }).addTo(panelGroup);
+            }
+
+            // 결과 계산
+            const count = panels.length;
+            const capKw = (count * modPower) / 1000;
+            
+            // 수익 계산 (약식)
+            const smp = parseFloat(document.getElementById('smp').value);
+            const costPerKw = parseFloat(document.getElementById('costPerKw').value) * 10000;
+            
+            const annualGen = capKw * 3.6 * 365; // 연 발전량 (3.6시간 기준)
+            const annualRev = annualGen * smp;
+            const totalCost = capKw * costPerKw;
+            const roi = annualRev > 0 ? (totalCost / annualRev).toFixed(1) : 0;
+
+            // UI 업데이트
+            animateValue('resCount', count);
+            animateValue('resCap', capKw.toFixed(1));
+            document.getElementById('resRev').innerText = Math.round(annualRev/10000).toLocaleString() + " 만원";
+            document.getElementById('resRoi').innerText = roi + " 년";
+
+            log(`배치 완료: ${count}장, ${capKw.toFixed(1)}kW`);
+        }
+
+        function animateValue(id, end) {
+            const obj = document.getElementById(id);
+            obj.innerText = end;
+            obj.classList.remove('text-white');
+            obj.classList.add('text-yellow-300');
+            setTimeout(() => {
+                obj.classList.remove('text-yellow-300');
+                obj.classList.add('text-white'); // or original color
+            }, 300);
+        }
+
+        function log(msg, type='info') {
+            const win = document.getElementById('logWindow');
+            const color = type === 'err' ? 'text-red-400' : (type === 'warn' ? 'text-yellow-400' : 'text-slate-400');
+            win.innerHTML += `<div class="${color}">> ${msg}</div>`;
+            win.scrollTop = win.scrollHeight;
         }
     </script>
 </body>
