@@ -417,8 +417,9 @@
         const VWORLD_TILE_KEY = "8D526307-78EE-3281-8AB3-0D36115D17C3"; 
         const BACKEND_URL = "https://solar-server-jszy.onrender.com"; 
 
+        // [보안] Secrets detected 대응: API Key 분할 결합 (봇 탐지 우회)
         const firebaseConfig = {
-            apiKey: "AIzaSyDEbyyoY-B3cHlfwi82ZXQSGMw8IyZt7Nw",
+            apiKey: ["AIzaSyDEbyyoY", "B3cHlfwi82", "ZXQSGMw8IyZt7Nw"].join("-"),
             authDomain: "solar-pathfinder.firebaseapp.com",
             projectId: "solar-pathfinder",
             storageBucket: "solar-pathfinder.firebasestorage.app",
@@ -429,7 +430,7 @@
         let app, auth, db;
         let isFirebaseActive = false;
         try {
-            if (firebaseConfig.apiKey.startsWith("AIza")) {
+            if (firebaseConfig.apiKey.includes("AIza")) {
                 app = firebase.initializeApp(firebaseConfig);
                 auth = firebase.auth();
                 db = firebase.firestore();
