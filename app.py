@@ -72,7 +72,15 @@ def proxy_data():
                 "details": resp.text[:500]
             }), resp.status_code
             
-        return jsonify(resp.json())
+        try:
+            return jsonify(resp.json())
+        except ValueError:
+             return jsonify({
+                "status": "ERROR", 
+                "message": "V-World Data API returned non-JSON response",
+                "details": resp.text[:500]
+            }), 500
+
     except Exception as e:
         print(f"Proxy Data Error: {str(e)}")
         return jsonify({"status": "ERROR", "message": f"Server side error: {str(e)}"}), 500
@@ -118,9 +126,12 @@ def proxy_address():
                 params["type"] = "parcel"
                 resp_p = requests.get(url, params=params, headers=COMMON_HEADERS, timeout=20, verify=False)
                 if resp_p.status_code == 200:
-                    data = resp_p.json()
+                    try:
+                        data = resp_p.json()
+                    except ValueError:
+                        pass # 재시도 실패 시 원래 데이터 반환
             return jsonify(data)
-        except Exception as parse_err:
+        except ValueError as parse_err:
             return jsonify({
                 "status": "ERROR", 
                 "message": "Failed to parse V-World JSON response",
