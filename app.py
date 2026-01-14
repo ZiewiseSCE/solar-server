@@ -8,7 +8,7 @@ from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from requests.exceptions import RetryError
+from requests.exceptions import RetryError, Timeout, RequestException
 import urllib3
 
 # SSL 경고 메시지 억제
@@ -20,12 +20,10 @@ CORS(app)
 # ---------------------------------------------------------
 # 1. 설정
 # ---------------------------------------------------------
-# [수정] 새로 발급받은 V-World API 키 적용
 VWORLD_KEY = os.environ.get("VWORLD_KEY", "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F")
 KEPCO_KEY = os.environ.get("KEPCO_KEY", "19BZ8JWfae590LQCR6f2tEIyyD94wBBYEzY3UpYp")
 LAW_API_ID = os.environ.get("LAW_API_ID", "kennyyang")
 
-# [중요] V-World API 호출 시 사용할 도메인 정보
 # Render 앱 도메인 (프로토콜 제외)
 MY_DOMAIN_HOST = "solar-server-jszy.onrender.com"
 # V-World에 등록된 실제 URL (https:// 포함)
@@ -33,10 +31,10 @@ MY_DOMAIN_URL = f"https://{MY_DOMAIN_HOST}"
 
 # 세션 설정
 session = requests.Session()
-# 재시도 전략: 502(Bad Gateway) 발생 시 조금 더 천천히 재시도
+# 재시도 전략: 502(Bad Gateway) 발생 시 재시도 (간격 증가)
 retry_strategy = Retry(
     total=3,
-    backoff_factor=1, # 1초 대기
+    backoff_factor=1, # 1초 대기 (빠른 재시도)
     status_forcelist=[500, 502, 503, 504],
     allowed_methods=["HEAD", "GET", "OPTIONS"]
 )
@@ -83,13 +81,14 @@ def diagnose_vworld():
     }
     
     try:
-        print(f"[Diagnose] Sending request with Key: {VWORLD_KEY[:5]}...", file=sys.stdout)
-        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
+        print(f"[Diagnose] Sending request...", file=sys.stdout)
+        # [수정] 표준 타임아웃 5초 적용
+        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
         
         return jsonify({
             "status": "CHECK_COMPLETED",
             "vworld_http_status": resp.status_code,
-            "response_sample": resp.text[:300],
+            "response_sample": resp.text[:300], # 내용 일부 확인
             "sent_domain_param": MY_DOMAIN_HOST,
             "sent_referer_header": COMMON_HEADERS["Referer"]
         })
@@ -121,22 +120,24 @@ def proxy_data():
             "format": "json"
         }
 
-        # 타임아웃 10초 설정
-        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
+        # [수정] 표준 타임아웃 5초 적용
+        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
         
         if resp.status_code != 200:
-            print(f"[Data API Error] Status: {resp.status_code}, Body: {resp.text[:200]}", file=sys.stderr)
+            print(f"[Data API Error] Status: {resp.status_code}", file=sys.stderr)
             return jsonify({
                 "status": "VWORLD_ERROR", 
                 "http_code": resp.status_code,
                 "message": "V-World API rejected request",
-                "details": resp.text
+                "details": resp.text[:500]
             }), resp.status_code
             
         return jsonify(resp.json())
 
     except RetryError:
-        return jsonify({"status": "ERROR", "message": "V-World Server is unstable (Max Retries Exceeded 502)"}), 502
+        return jsonify({"status": "ERROR", "message": "V-World Server Unstable (Retry Failed)"}), 502
+    except Timeout:
+        return jsonify({"status": "ERROR", "message": "V-World API Timeout (5s)"}), 504
     except Exception as e:
         print(f"[Data Exception] {str(e)}", file=sys.stderr)
         return jsonify({"status": "SERVER_ERROR", "message": str(e)}), 500
@@ -168,25 +169,26 @@ def proxy_address():
         
         print(f"[Address] Searching: {query}", file=sys.stdout)
         
-        # 요청 시도
-        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
+        # [수정] 표준 타임아웃 5초 적용
+        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
         
         if resp.status_code != 200:
-            print(f"[Address API Error] Status: {resp.status_code}, Body: {resp.text[:200]}", file=sys.stderr)
+            error_body = resp.text[:500] if resp.text else "No content"
+            print(f"[Address API Error] Status: {resp.status_code}, Body: {error_body}", file=sys.stderr)
             return jsonify({
                 "status": "VWORLD_ERROR", 
                 "http_code": resp.status_code,
-                "message": "V-World API returned error",
-                "details": resp.text
+                "message": "V-World API Error",
+                "details": error_body
             }), resp.status_code
 
         try:
             data = resp.json()
-            # 검색 결과 없음(NOT_FOUND)일 때 지번(parcel) 타입으로 재시도
+            # 검색 결과 없음 처리
             if data.get("response", {}).get("status") == "NOT_FOUND":
                  print("[Address] Retry with parcel type...", file=sys.stdout)
                  params["type"] = "parcel"
-                 resp_p = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
+                 resp_p = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
                  if resp_p.status_code == 200:
                      try:
                          data = resp_p.json()
@@ -195,18 +197,23 @@ def proxy_address():
             return jsonify(data)
 
         except ValueError:
+            raw_text = resp.text[:500] if resp.text else "Empty response"
+            print(f"[Address Parsing Error] Raw: {raw_text}", file=sys.stderr)
             return jsonify({
                 "status": "PARSING_ERROR",
-                "message": "V-World response is not JSON",
-                "raw": resp.text[:200]
+                "message": "V-World returned non-JSON response. Check API Key/Domain.",
+                "raw_response": raw_text
             }), 500
 
     except RetryError:
-        print("[Address] Max Retries Exceeded (502/504 from V-World)", file=sys.stderr)
+        print("[Address] Max Retries Exceeded", file=sys.stderr)
         return jsonify({
             "status": "EXTERNAL_ERROR", 
-            "message": "V-World API is currently unstable (502 Bad Gateway). Please try again later."
+            "message": "V-World API is currently unstable."
         }), 502
+    except Timeout:
+        print("[Address] Timeout", file=sys.stderr)
+        return jsonify({"status": "TIMEOUT", "message": "V-World API took too long (5s)."}), 504
     except Exception as e:
         print(f"[Address Exception] {str(e)}", file=sys.stderr)
         return jsonify({"status": "SERVER_ERROR", "message": str(e)}), 500
