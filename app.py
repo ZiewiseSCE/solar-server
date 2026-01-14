@@ -11,14 +11,21 @@ app = Flask(__name__)
 CORS(app)
 
 # ---------------------------------------------------------
-# 1. API 키 설정 (Render 환경변수 또는 기본값 사용)
+# 1. API 키 및 도메인 설정
 # ---------------------------------------------------------
 VWORLD_KEY = os.environ.get("VWORLD_KEY", "8D526307-78EE-3281-8AB3-0D36115D17C3")
 KEPCO_KEY = os.environ.get("KEPCO_KEY", "19BZ8JWfae590LQCR6f2tEIyyD94wBBYEzY3UpYp")
 LAW_API_ID = os.environ.get("LAW_API_ID", "kennyyang")
 
-# [주의] V-World 관리자 페이지에 등록된 '활용 URL'과 정확히 일치해야 합니다.
+# V-World 관리자 페이지에 등록된 '활용 URL'과 정확히 일치해야 합니다.
 MY_DOMAIN = "solar-server-jszy.onrender.com"
+
+# 공통 헤더 설정 (브라우저처럼 보이게 하여 차단 방지)
+COMMON_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": f"https://{MY_DOMAIN}",
+    "Origin": f"https://{MY_DOMAIN}"
+}
 
 # ---------------------------------------------------------
 # 2. 라우트 설정
@@ -54,22 +61,21 @@ def proxy_data():
         "format": "json"
     }
 
-    headers = { "Referer": f"https://{MY_DOMAIN}" }
-
     try:
-        # verify=False를 추가하여 SSL 인증서 관련 오류 방지
-        resp = requests.get(url, params=params, headers=headers, timeout=15, verify=False)
+        # timeout을 늘리고 SSL 검증 우회, 브라우저 헤더 추가
+        resp = requests.get(url, params=params, headers=COMMON_HEADERS, timeout=20, verify=False)
         
         if resp.status_code != 200:
             return jsonify({
                 "status": "ERROR", 
-                "message": f"V-World Server rejected request (Status {resp.status_code})",
-                "details": resp.text
+                "message": f"V-World Data API rejected (Status {resp.status_code})",
+                "details": resp.text[:500]
             }), resp.status_code
             
         return jsonify(resp.json())
     except Exception as e:
-        return jsonify({"status": "ERROR", "message": str(e)}), 500
+        print(f"Proxy Data Error: {str(e)}")
+        return jsonify({"status": "ERROR", "message": f"Server side error: {str(e)}"}), 500
 
 # ---------------------------------------------------------
 # 4. V-World 주소 검색 프록시 (주소 -> 좌표)
@@ -95,51 +101,44 @@ def proxy_address():
         "format": "json"
     }
     
-    headers = { "Referer": f"https://{MY_DOMAIN}" }
-
     try:
-        # verify=False로 인증서 문제 방지
-        resp = requests.get(url, params=params, headers=headers, timeout=15, verify=False)
+        resp = requests.get(url, params=params, headers=COMMON_HEADERS, timeout=20, verify=False)
         
         if resp.status_code != 200:
             return jsonify({
                 "status": "ERROR", 
-                "message": f"V-World API Error (Status {resp.status_code})",
-                "details": resp.text
+                "message": f"V-World Address API rejected (Status {resp.status_code})",
+                "details": resp.text[:500]
             }), resp.status_code
 
-        # 응답이 JSON인지 확인 후 파싱
         try:
             data = resp.json()
-        except:
+            # 검색 결과가 없을 경우 지번(parcel)으로 자동 재시도
+            if data.get("response", {}).get("status") == "NOT_FOUND" and params["type"] == "road":
+                params["type"] = "parcel"
+                resp_p = requests.get(url, params=params, headers=COMMON_HEADERS, timeout=20, verify=False)
+                if resp_p.status_code == 200:
+                    data = resp_p.json()
+            return jsonify(data)
+        except Exception as parse_err:
             return jsonify({
                 "status": "ERROR", 
-                "message": "V-World returned non-JSON response",
-                "raw_body": resp.text[:200]
+                "message": "Failed to parse V-World JSON response",
+                "raw": resp.text[:200]
             }), 500
-
-        # 도로명(road)으로 결과가 없을 경우 지번(parcel)으로 재시도
-        if "response" in data and data["response"].get("status") == "NOT_FOUND":
-             params["type"] = "parcel"
-             resp_p = requests.get(url, params=params, headers=headers, timeout=15, verify=False)
-             if resp_p.status_code == 200:
-                 try:
-                     data = resp_p.json()
-                 except: pass
-                 
-        return jsonify(data)
             
     except Exception as e:
-        return jsonify({"status": "ERROR", "message": f"Server side exception: {str(e)}"}), 500
+        print(f"Proxy Address Error: {str(e)}")
+        return jsonify({"status": "ERROR", "message": f"Internal server error: {str(e)}"}), 500
 
 # ---------------------------------------------------------
-# 5. 한전(KEPCO) 및 6. 조례 정보 (기존 유지)
+# 5. 한전(KEPCO) 및 6. 조례 정보 (기능 유지)
 # ---------------------------------------------------------
 @app.route('/api/kepco')
 def proxy_kepco():
     pnu = request.args.get('pnu')
     if not pnu: return jsonify({"result": "FAIL", "msg": "PNU 누락"})
-    return jsonify({"result": "OK", "msg": "API logic connected"})
+    return jsonify({"result": "OK", "msg": "Logic Connected"})
 
 @app.route('/api/ordinance')
 def get_ordinance():
@@ -153,6 +152,6 @@ def get_ordinance():
     })
 
 if __name__ == '__main__':
-    # Render 환경에서 PORT 환경변수를 사용
+    # Render 환경 PORT 대응
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
