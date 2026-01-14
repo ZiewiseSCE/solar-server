@@ -24,10 +24,11 @@ VWORLD_KEY = os.environ.get("VWORLD_KEY", "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F"
 KEPCO_KEY = os.environ.get("KEPCO_KEY", "19BZ8JWfae590LQCR6f2tEIyyD94wBBYEzY3UpYp")
 LAW_API_ID = os.environ.get("LAW_API_ID", "kennyyang")
 
-# Render 앱 도메인 (프로토콜 제외)
+# [중요] V-World 관리자 페이지의 '서비스 URL'과 100% 일치해야 합니다.
+# 1. API 호출 파라미터용 호스트 (http/https 제외)
 MY_DOMAIN_HOST = "solar-server-jszy.onrender.com"
-# V-World에 등록된 실제 URL (https:// 포함)
-MY_DOMAIN_URL = f"https://{MY_DOMAIN_HOST}"
+# 2. 헤더(Referer/Origin)용 전체 URL (https:// 포함, 끝에 슬래시 없음)
+MY_DOMAIN_URL = "https://solar-server-jszy.onrender.com"
 
 # 세션 설정
 session = requests.Session()
@@ -42,7 +43,7 @@ adapter = HTTPAdapter(max_retries=retry_strategy)
 session.mount("https://", adapter)
 session.mount("http://", adapter)
 
-# 헤더 설정
+# 헤더 설정: V-World는 Referer를 철저히 검사합니다.
 COMMON_HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; SCEnergyBot/1.0)",
     "Referer": MY_DOMAIN_URL,
