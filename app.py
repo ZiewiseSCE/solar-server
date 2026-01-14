@@ -61,8 +61,8 @@ def proxy_data():
             "format": "json"
         }
 
-        # 타임아웃을 5초로 줄여서 502 발생 전 처리
-        resp = session.get(url, params=params, timeout=5, verify=False)
+        # 타임아웃을 30초로 증가 (V-World 응답 지연 대응)
+        resp = session.get(url, params=params, timeout=30, verify=False)
         
         if resp.status_code != 200:
             print(f"[Data Error] Status: {resp.status_code}, Body: {resp.text[:100]}", file=sys.stderr)
@@ -76,7 +76,7 @@ def proxy_data():
 
     except requests.exceptions.Timeout:
         print("[Data Timeout] V-World took too long", file=sys.stderr)
-        return jsonify({"status": "ERROR", "message": "V-World API Timeout (5s)"}), 504
+        return jsonify({"status": "ERROR", "message": "V-World API Timeout (30s)"}), 504
     except Exception as e:
         print(f"[Data Exception] {str(e)}", file=sys.stderr)
         return jsonify({"status": "ERROR", "message": str(e)}), 500
@@ -108,8 +108,8 @@ def proxy_address():
             "format": "json"
         }
         
-        # 1차 시도 (도로명)
-        resp = session.get(url, params=params, timeout=5, verify=False)
+        # 1차 시도 (도로명) - 타임아웃 30초로 증가
+        resp = session.get(url, params=params, timeout=30, verify=False)
         
         if resp.status_code != 200:
             print(f"[Address Error] Status: {resp.status_code}, Body: {resp.text[:100]}", file=sys.stderr)
@@ -129,7 +129,7 @@ def proxy_address():
         if "response" in data and data["response"].get("status") == "NOT_FOUND":
              print("[Address Retry] Switching to parcel type", file=sys.stdout)
              params["type"] = "parcel"
-             resp_p = session.get(url, params=params, timeout=5, verify=False)
+             resp_p = session.get(url, params=params, timeout=30, verify=False)
              if resp_p.status_code == 200:
                  try:
                      data = resp_p.json()
@@ -139,7 +139,7 @@ def proxy_address():
 
     except requests.exceptions.Timeout:
         print("[Address Timeout] V-World took too long", file=sys.stderr)
-        return jsonify({"status": "ERROR", "message": "V-World API Timeout (5s)"}), 504
+        return jsonify({"status": "ERROR", "message": "V-World API Timeout (30s)"}), 504
     except Exception as e:
         print(f"[Address Exception] {str(e)}", file=sys.stderr)
         return jsonify({"status": "ERROR", "message": str(e)}), 500
