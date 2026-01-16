@@ -82,10 +82,7 @@
     <!-- 로그인 오버레이 -->
     <div id="login-overlay">
         <div class="bg-slate-900 p-8 rounded-2xl shadow-2xl border border-slate-700 w-[400px] text-center relative overflow-hidden" id="login-box">
-            <!-- 배경 데코레이션 -->
             <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500"></div>
-            <div class="absolute -top-10 -right-10 w-32 h-32 bg-cyan-500/10 rounded-full blur-3xl"></div>
-
             <div class="mb-6 relative">
                 <div class="mx-auto w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mb-4 border border-slate-700 shadow-lg">
                     <i class="ph ph-solar-panel text-3xl text-cyan-400" id="login-icon"></i>
@@ -133,10 +130,14 @@
                 <div class="bg-slate-800/50 rounded-lg p-3 text-left border border-slate-700">
                     <label class="text-[10px] font-bold text-slate-400 block mb-1">신규 유저 등록</label>
                     <div class="grid grid-cols-2 gap-2 mb-2">
-                        <label for="newUserId" class="sr-only">새 아이디</label>
-                        <input type="text" id="newUserId" placeholder="아이디" class="login-input rounded px-2 py-1.5 text-xs">
-                        <label for="newUserPw" class="sr-only">새 비밀번호</label>
-                        <input type="text" id="newUserPw" placeholder="비밀번호" class="login-input rounded px-2 py-1.5 text-xs">
+                        <div>
+                            <label for="newUserId" class="sr-only">새 아이디</label>
+                            <input type="text" id="newUserId" placeholder="아이디" class="login-input rounded px-2 py-1.5 text-xs w-full">
+                        </div>
+                        <div>
+                            <label for="newUserPw" class="sr-only">새 비밀번호</label>
+                            <input type="text" id="newUserPw" placeholder="비밀번호" class="login-input rounded px-2 py-1.5 text-xs w-full">
+                        </div>
                     </div>
                     <button onclick="addUser()" class="w-full bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-bold">유저 추가</button>
                 </div>
@@ -242,13 +243,13 @@
 
                 <div class="flex gap-2 text-xs mb-4">
                     <label class="flex-1 cursor-pointer">
-                        <input type="radio" name="scanTarget" value="land" class="peer hidden" onchange="toggleTarget()">
+                        <input type="radio" name="scanTarget" id="targetLand" value="land" class="peer hidden" onchange="toggleTarget()">
                         <div class="text-center py-2 border rounded bg-white peer-checked:bg-green-50 peer-checked:border-green-500 peer-checked:text-green-700 hover:bg-gray-50 transition shadow-sm">
                             <i class="ph ph-tree"></i> 토지 (Land)
                         </div>
                     </label>
                     <label class="flex-1 cursor-pointer">
-                        <input type="radio" name="scanTarget" value="building" class="peer hidden" onchange="toggleTarget()" checked>
+                        <input type="radio" name="scanTarget" id="targetBuilding" value="building" class="peer hidden" onchange="toggleTarget()" checked>
                         <div class="text-center py-2 border rounded bg-white peer-checked:bg-pink-50 peer-checked:border-pink-500 peer-checked:text-pink-700 hover:bg-gray-50 transition shadow-sm">
                             <i class="ph ph-factory"></i> 지붕 (Roof)
                         </div>
@@ -319,9 +320,9 @@
                             <button onclick="resetCalibration()" class="text-[9px] bg-slate-700 hover:bg-slate-600 px-1.5 py-0.5 rounded text-white transition border border-slate-600">초기화</button>
                         </div>
                         <div class="space-y-2 mb-3 px-1">
-                            <div class="flex items-center gap-2"><span class="text-[9px] text-slate-400 w-6">X축</span><input type="range" min="-50" max="50" value="0" step="1" oninput="applySliderCalibration(this.value, 'x')"></div>
-                            <div class="flex items-center gap-2"><span class="text-[9px] text-slate-400 w-6">Y축</span><input type="range" min="-50" max="50" value="0" step="1" oninput="applySliderCalibration(this.value, 'y')"></div>
-                            <div class="flex items-center gap-2"><span class="text-[9px] text-slate-400 w-6">회전</span><input type="range" min="-180" max="180" value="0" step="1" oninput="applySliderCalibration(this.value, 'rot')"></div>
+                            <div class="flex items-center gap-2"><label class="text-[9px] text-slate-400 w-6">X축<input type="range" min="-50" max="50" value="0" step="1" oninput="applySliderCalibration(this.value, 'x')"></label></div>
+                            <div class="flex items-center gap-2"><label class="text-[9px] text-slate-400 w-6">Y축<input type="range" min="-50" max="50" value="0" step="1" oninput="applySliderCalibration(this.value, 'y')"></label></div>
+                            <div class="flex items-center gap-2"><label class="text-[9px] text-slate-400 w-6">회전<input type="range" min="-180" max="180" value="0" step="1" oninput="applySliderCalibration(this.value, 'rot')"></label></div>
                         </div>
                         <div class="flex gap-4 items-center justify-center relative border-t border-slate-700 pt-2">
                             <div class="grid grid-cols-3 gap-1">
@@ -590,9 +591,22 @@
             
             try {
                 const res = await fetch(url);
+                
+                // 에러 처리 강화 (CORB/500 대응)
+                if (!res.ok) {
+                    // Try to read text error from backend, catch if CORB blocks it
+                    let errText = "검색 실패";
+                    try {
+                        const errJson = await res.json();
+                        errText = errJson.message || errJson.details || errText;
+                    } catch (e) {
+                         errText = `Server Error (${res.status}): 응답을 읽을 수 없습니다.`;
+                    }
+                    throw new Error(errText);
+                }
+                
                 const data = await res.json();
                 
-                // 에러 처리 강화
                 if(data.status === "ERROR" || data.status === "VWORLD_ERROR") {
                     throw new Error(data.message || "검색 실패");
                 }
@@ -623,6 +637,16 @@
             const box = `${lng - 0.001},${lat - 0.001},${lng + 0.001},${lat + 0.001}`;
             try {
                 const res = await fetch(`${BACKEND_URL}/api/vworld/data?data=LT_C_SPBD&geomFilter=BOX(${box})`);
+                
+                if (!res.ok) {
+                    let errText = "데이터 로드 실패";
+                    try {
+                        const errJson = await res.json();
+                        errText = errJson.message || errText;
+                    } catch (e) { errText = `Server Error (${res.status})`; }
+                    throw new Error(errText);
+                }
+
                 const data = await res.json();
                 if(data.response?.status === 'OK') {
                     L.geoJSON(data.response.result.featureCollection.features, {
@@ -632,7 +656,12 @@
                         }
                     }).addTo(selectableGroup);
                 }
-            } catch(e) { console.error(e); } finally { document.getElementById('loading').classList.add('hidden'); }
+            } catch(e) { 
+                console.error(e); 
+                if(!autoScanMode) showToast(`데이터 로드 실패: ${e.message}`);
+            } finally { 
+                document.getElementById('loading').classList.add('hidden'); 
+            }
         }
 
         function initMap() {
@@ -691,7 +720,6 @@
             document.getElementById('user-list-container').innerHTML = users.map(u => `<div class="flex justify-between bg-slate-800 p-1 rounded text-xs text-cyan-300"><span>${u.id}</span></div>`).join('');
         }
         
-        // ... (나머지 헬퍼 함수들: analyzeFeature, createMockMarkers 등은 위 코드에 포함됨) ...
         function analyzeFeature(feature) {
             switchTab('analysis');
             document.getElementById('resultCard').classList.remove('hidden');
@@ -707,15 +735,77 @@
         }
         
         function calculateFinance(count) {
-             // ... (기존 금융 계산 로직 유지) ...
-             // 지면 관계상 핵심 로직은 동일하게 유지
              const modPower = parseFloat(document.getElementById('modPower').value);
-             // ...
+             const capKw = (count * modPower) / 1000;
+             const smp = parseFloat(document.getElementById('smp').value);
+             const rec = parseFloat(document.getElementById('rec').value);
+             const costPerKw = parseFloat(document.getElementById('costPerKw').value) * 10000;
+             const modPrice = parseFloat(document.getElementById('modPrice').value);
+             const pfRatio = parseFloat(document.getElementById('pfLoanRatio').value);
+             const pfRate = parseFloat(document.getElementById('pfInterestRate').value);
+             const height = parseFloat(document.getElementById('installHeight').value) || 0;
+             const heightCostBonus = height > 1.0 ? (height - 1.0) * 10000 * capKw : 0; 
+             const annualRev = capKw * 3.6 * 365 * (smp + rec);
+             const constructionCost = (capKw * costPerKw) + heightCostBonus;
+             const moduleCost = (count * modPower) * modPrice;
+             const totalCost = constructionCost + moduleCost;
+             const loanAmount = totalCost * (pfRatio / 100);
+             const equityAmount = totalCost - loanAmount;
+             const annualInterest = loanAmount * (pfRate / 100);
+             const netIncome = annualRev - annualInterest;
+             const pfPayback = netIncome > 0 ? (equityAmount / netIncome).toFixed(1) : 99;
              document.getElementById('analysisCount').innerText = `${count.toLocaleString()} 장`;
+             document.getElementById('analysisCapacity').innerText = `${capKw.toFixed(1)} kW`;
+             document.getElementById('resAnnualRev').innerText = `${Math.round(annualRev).toLocaleString()} 원`;
+             document.getElementById('resTotalCost').innerText = `${Math.round(totalCost).toLocaleString()} 원`;
+             document.getElementById('pfRatioDisplay').innerText = pfRatio;
+             document.getElementById('resLoanAmount').innerText = `${Math.round(loanAmount).toLocaleString()} 원`;
+             document.getElementById('resEquityAmount').innerText = `${Math.round(equityAmount).toLocaleString()} 원`;
+             document.getElementById('resInterest').innerText = `${Math.round(annualInterest).toLocaleString()} 원`;
+             document.getElementById('resPfPayback').innerText = `${pfPayback} 년`;
         }
         
         function drawPanels(geometry) {
-             // ... (기존 패널 그리기 로직 유지) ...
+             if (!isMultiSelectMode) { panelGroup.clearLayers(); accumulatedPanelsCount = 0; }
+            try {
+                let poly = turf.feature(geometry);
+                if (currentGeoState.x !== 0 || currentGeoState.y !== 0 || currentGeoState.rot !== 0) {
+                      poly = turf.transformRotate(poly, currentGeoState.rot);
+                      poly = turf.transformTranslate(poly, currentGeoState.x / 100000, 90); 
+                      poly = turf.transformTranslate(poly, currentGeoState.y / 100000, 0); 
+                }
+                const modW = (parseFloat(document.getElementById('modWidth').value) || 1.13) / 1000;
+                const modH = (parseFloat(document.getElementById('modHeight').value) || 2.4) / 1000;
+                const spacingVal = (parseFloat(document.getElementById('rowSpacing').value) || 1.2) / 1000;
+                const angle = parseFloat(document.getElementById('installAngle').value) || 20;
+                const projectedH = modH * Math.cos(angle * Math.PI / 180);
+                const dLat = (projectedH + spacingVal) / 111; 
+                const dLng = (modW + 0.00001) / 88; 
+                const bbox = turf.bbox(poly);
+                let currentBatchPanels = [];
+                const stepX = dLng; 
+                const stepY = dLat; 
+                let loopCount = 0;
+                for(let x = bbox[0]; x < bbox[2]; x += stepX) {
+                    for(let y = bbox[1]; y < bbox[3]; y += stepY) {
+                        loopCount++;
+                        if(loopCount > 5000) break; 
+                        const centerPt = turf.point([x + dLng/2, y + dLat/2]);
+                        if(turf.booleanPointInPolygon(centerPt, poly)) {
+                            const cell = turf.bboxPolygon([x, y, x + dLng*0.9, y + (projectedH/111)]);
+                            currentBatchPanels.push(cell);
+                        }
+                    }
+                    if(loopCount > 5000) break;
+                }
+                if(currentBatchPanels.length > 0) {
+                    L.geoJSON({type:"FeatureCollection", features: currentBatchPanels}, {
+                        style: { color: '#3b82f6', weight: 1, fillColor: '#1d4ed8', fillOpacity: 0.9 }
+                    }).addTo(panelGroup);
+                }
+                accumulatedPanelsCount += currentBatchPanels.length;
+                calculateFinance(accumulatedPanelsCount);
+            } catch(e) { console.error("Error", e); }
         }
 
         // Helper functions from previous version
