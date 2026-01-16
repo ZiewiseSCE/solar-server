@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 import os
 import requests
+import xml.etree.ElementTree as ET
+import re
 import sys
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
@@ -16,17 +18,15 @@ app = Flask(__name__)
 CORS(app)
 
 # ---------------------------------------------------------
-# 1. 설정 (API 키 강제 적용)
+# 1. 설정 (API 키 및 도메인)
 # ---------------------------------------------------------
-# [수정] 환경변수보다 코드가 우선하도록 순서를 바꿈 (확실한 해결을 위해)
-# 만약 Render 환경변수에 옛날 키가 있어도, 이 코드는 무조건 새 키를 씁니다.
-VWORLD_KEY = "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F"
-
-# 나머지 설정
-KEPCO_KEY = os.environ.get("KEPCO_KEY", "19BZ8JWfae590LQCR6f2tEIyyD94wBBYEzY3UpYp")
+# V-World API 키
+VWORLD_KEY = os.environ.get("VWORLD_KEY", "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F")
+# 법제처 API 아이디 (공공데이터)
 LAW_API_ID = os.environ.get("LAW_API_ID", "kennyyang")
-MY_DOMAIN_HOST = "solar-server-jszy.onrender.com"
-MY_DOMAIN_URL = f"https://{MY_DOMAIN_HOST}"
+
+# [중요] V-World 관리자 페이지 '서비스 URL'에 등록된 주소
+MY_DOMAIN_URL = "https://solar-server-jszy.onrender.com"
 
 # 세션 설정
 session = requests.Session()
@@ -40,7 +40,6 @@ adapter = HTTPAdapter(max_retries=retry_strategy)
 session.mount("https://", adapter)
 session.mount("http://", adapter)
 
-# 헤더 설정
 COMMON_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Referer": MY_DOMAIN_URL,
@@ -48,7 +47,7 @@ COMMON_HEADERS = {
 }
 
 # ---------------------------------------------------------
-# 2. 라우트
+# 2. 기본 라우트
 # ---------------------------------------------------------
 @app.route('/')
 def index():
@@ -77,13 +76,10 @@ def diagnose_vworld():
         "domain": MY_DOMAIN_URL, 
         "format": "json"
     }
-    
     try:
-        print(f"[Diagnose] Key used: {VWORLD_KEY[:8]}...", file=sys.stdout)
         resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
         return jsonify({
             "status": "CHECK_COMPLETED",
-            "key_used_prefix": VWORLD_KEY[:8], # 실제 사용된 키 앞부분 확인용
             "vworld_http_status": resp.status_code,
             "response_sample": resp.text[:300]
         })
@@ -98,7 +94,6 @@ def proxy_data():
     try:
         layer = request.args.get('data', 'LT_C_SPBD')
         geom_filter = request.args.get('geomFilter')
-        
         if not geom_filter:
             return jsonify({"status": "ERROR", "message": "Missing geomFilter"}), 400
 
@@ -114,25 +109,15 @@ def proxy_data():
             "format": "json"
         }
 
-        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
+        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
         
         if resp.status_code != 200:
-            print(f"[Data API Error] Status: {resp.status_code}, Body: {resp.text[:200]}", file=sys.stderr)
-            return jsonify({
-                "status": "VWORLD_ERROR", 
-                "http_code": resp.status_code,
-                "message": "V-World API rejected request",
-                "details": resp.text[:500]
-            }), resp.status_code
+            print(f"[Data API Error] Status: {resp.status_code}", file=sys.stderr)
+            return jsonify({"status": "VWORLD_ERROR", "details": resp.text[:500]}), resp.status_code
             
         return jsonify(resp.json())
 
-    except RetryError:
-        return jsonify({"status": "ERROR", "message": "V-World Server Unstable (Retry Failed)"}), 502
-    except Timeout:
-        return jsonify({"status": "ERROR", "message": "V-World API Timeout"}), 504
     except Exception as e:
-        print(f"[Data Exception] {str(e)}", file=sys.stderr)
         return jsonify({"status": "SERVER_ERROR", "message": str(e)}), 500
 
 # ---------------------------------------------------------
@@ -144,6 +129,8 @@ def proxy_address():
         query = request.args.get('address')
         if not query:
             return jsonify({"status": "ERROR", "message": "Missing address"}), 400
+
+        print(f"[Address] Searching: {query}", file=sys.stdout)
 
         url = "https://api.vworld.kr/req/address"
         params = {
@@ -160,51 +147,120 @@ def proxy_address():
             "format": "json"
         }
         
-        print(f"[Address] Key: {VWORLD_KEY[:8]}... Query: {query}", file=sys.stdout)
-        
-        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
+        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
         
         if resp.status_code != 200:
-            error_body = resp.text[:500] if resp.text else "No content"
-            print(f"[Address API Error] {resp.status_code} {error_body}", file=sys.stderr)
-            return jsonify({
-                "status": "VWORLD_ERROR", 
-                "http_code": resp.status_code,
-                "message": "V-World API Error",
-                "details": error_body
-            }), resp.status_code
+            return jsonify({"status": "VWORLD_ERROR", "details": resp.text[:500]}), resp.status_code
 
         try:
             data = resp.json()
             if data.get("response", {}).get("status") == "NOT_FOUND":
                  params["type"] = "parcel"
-                 resp_p = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
+                 resp_p = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
                  if resp_p.status_code == 200:
                      try: data = resp_p.json()
                      except: pass
             return jsonify(data)
-
         except ValueError:
-            raw_text = resp.text[:500] if resp.text else "Empty response"
-            return jsonify({
-                "status": "PARSING_ERROR",
-                "message": "V-World returned non-JSON response.",
-                "raw_response": raw_text
-            }), 500
+            return jsonify({"status": "PARSING_ERROR", "raw_response": resp.text[:200]}), 500
 
     except Exception as e:
         return jsonify({"status": "SERVER_ERROR", "message": str(e)}), 500
 
 # ---------------------------------------------------------
-# 5. 기타 API
+# 5. 한전(KEPCO) API (간소화)
 # ---------------------------------------------------------
 @app.route('/api/kepco')
 def proxy_kepco():
-    return jsonify({"result": "OK", "msg": "Logic Connected"})
+    return jsonify({"result": "OK", "msg": "KEPCO Logic Connected"})
 
+# ---------------------------------------------------------
+# 6. [복구됨] 조례 정보 검색 API (국가법령정보센터 실시간 연동)
+# ---------------------------------------------------------
 @app.route('/api/ordinance')
 def get_ordinance():
-    return jsonify({"result": "OK", "articles": ["이격거리 규제 정보..."]})
+    address = request.args.get('address', '')
+    if not address:
+        return jsonify({"result": "FAIL", "msg": "주소 정보 없음"})
+
+    try:
+        # 1. 주소에서 지역명 추출 (예: "경기 고양시 덕양구..." -> "고양시")
+        tokens = address.split()
+        region_name = ""
+        for t in tokens:
+            if t.endswith("시") or t.endswith("군"):
+                region_name = t
+                break
+        if not region_name and tokens:
+            region_name = tokens[0] # 시/군이 없으면 첫 단어 사용
+
+        print(f"[Ordinance] Region: {region_name}", file=sys.stdout)
+
+        # 2. 법제처 검색 API 호출
+        search_keyword = f"{region_name} 도시계획 조례"
+        search_url = "http://www.law.go.kr/DRF/lawSearch.do"
+        search_params = {
+            "OC": LAW_API_ID,
+            "target": "ordin",
+            "type": "XML",
+            "query": search_keyword,
+            "display": 1
+        }
+        
+        # XML 데이터 요청
+        res = requests.get(search_url, params=search_params, timeout=5)
+        root = ET.fromstring(res.content)
+        
+        target_law_id = None
+        target_law_name = ""
+        
+        # 검색 결과에서 조례 ID 찾기
+        law_node = root.find(".//law")
+        if law_node is not None:
+            target_law_id = law_node.find("lawId").text
+            target_law_name = law_node.find("lawNm").text
+        else:
+            return jsonify({
+                "result": "NONE", 
+                "region": region_name, 
+                "msg": f"{region_name} 관련 조례를 찾을 수 없습니다."
+            })
+
+        # 3. 조례 상세 내용 가져오기
+        detail_url = "http://www.law.go.kr/DRF/lawService.do"
+        detail_params = {
+            "OC": LAW_API_ID,
+            "target": "ordin",
+            "type": "XML",
+            "ID": target_law_id
+        }
+        
+        det_res = requests.get(detail_url, params=detail_params, timeout=5)
+        det_root = ET.fromstring(det_res.content)
+        
+        relevant_articles = []
+        # '태양광', '발전', '이격' 키워드가 있는 조항만 추출
+        for article in det_root.findall(".//jo"):
+            raw_text = "".join(list(article.itertext()))
+            if "태양" in raw_text or "발전" in raw_text or "이격" in raw_text:
+                # 숫자+m 부분 강조 (HTML 태그 삽입)
+                highlighted = re.sub(r'(\d+(?:m|미터))', r'<b style="color:#f87171;">\1</b>', raw_text)
+                relevant_articles.append(highlighted.strip())
+
+        if not relevant_articles:
+            relevant_articles.append("검색된 조례 내에서 '태양광/이격거리' 관련 키워드를 찾지 못했습니다. 원문을 확인하세요.")
+
+        return jsonify({
+            "result": "OK",
+            "region": region_name,
+            "law_name": target_law_name,
+            "articles": relevant_articles[:3], # 너무 길면 상위 3개만
+            "link": f"http://www.law.go.kr/ordinSc.do?menuId=0&query={target_law_name}"
+        })
+
+    except Exception as e:
+        print(f"[Ordinance Error] {str(e)}", file=sys.stderr)
+        return jsonify({"result": "ERROR", "msg": "법령 데이터 서버 통신 오류"})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
