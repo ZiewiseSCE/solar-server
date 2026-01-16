@@ -1,41 +1,36 @@
 # -*- coding: utf-8 -*-
 import os
 import requests
-import xml.etree.ElementTree as ET
-import re
 import sys
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from requests.exceptions import RetryError, Timeout, RequestException
+from requests.exceptions import RetryError, Timeout
 import urllib3
 
-# SSL 경고 메시지 억제
+# SSL 경고 메시지 억제 (로그 정리)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 CORS(app)
 
 # ---------------------------------------------------------
-# 1. 설정
+# 1. 설정 (API 키 및 도메인)
 # ---------------------------------------------------------
+# V-World API 키 (새로 발급받은 키 적용됨)
 VWORLD_KEY = os.environ.get("VWORLD_KEY", "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F")
 KEPCO_KEY = os.environ.get("KEPCO_KEY", "19BZ8JWfae590LQCR6f2tEIyyD94wBBYEzY3UpYp")
 LAW_API_ID = os.environ.get("LAW_API_ID", "kennyyang")
 
-# [중요] V-World 관리자 페이지의 '서비스 URL'과 100% 일치해야 합니다.
-# 1. API 호출 파라미터용 호스트 (http/https 제외)
-MY_DOMAIN_HOST = "solar-server-jszy.onrender.com"
-# 2. 헤더(Referer/Origin)용 전체 URL (https:// 포함, 끝에 슬래시 없음)
+# [중요] V-World 관리자 페이지 '서비스 URL'에 등록된 주소와 정확히 일치해야 함
 MY_DOMAIN_URL = "https://solar-server-jszy.onrender.com"
 
-# 세션 설정
+# 세션 설정: 연결 재사용 및 자동 재시도
 session = requests.Session()
-# 재시도 전략: 502(Bad Gateway) 발생 시 재시도 (간격 증가)
 retry_strategy = Retry(
     total=3,
-    backoff_factor=1, # 1초 대기 (빠른 재시도)
+    backoff_factor=1, # 1초 간격으로 재시도
     status_forcelist=[500, 502, 503, 504],
     allowed_methods=["HEAD", "GET", "OPTIONS"]
 )
@@ -43,15 +38,15 @@ adapter = HTTPAdapter(max_retries=retry_strategy)
 session.mount("https://", adapter)
 session.mount("http://", adapter)
 
-# 헤더 설정: V-World는 Referer를 철저히 검사합니다.
+# 공통 헤더: 브라우저처럼 보이게 하고 Referer 인증 통과
 COMMON_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; SCEnergyBot/1.0)",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Referer": MY_DOMAIN_URL,
     "Origin": MY_DOMAIN_URL
 }
 
 # ---------------------------------------------------------
-# 2. 라우트
+# 2. 기본 라우트
 # ---------------------------------------------------------
 @app.route('/')
 def index():
@@ -62,11 +57,12 @@ def health_check():
     return "OK", 200
 
 # ---------------------------------------------------------
-# [진단용] V-World 연동 상태 확인
+# [진단용] V-World 연동 상태 확인 API
 # ---------------------------------------------------------
 @app.route('/api/diagnose')
 def diagnose_vworld():
     url = "https://api.vworld.kr/req/address"
+    # 테스트용 파라미터 (서울시청)
     params = {
         "service": "address",
         "request": "getcoord",
@@ -77,20 +73,20 @@ def diagnose_vworld():
         "simple": "false",
         "type": "road",
         "key": VWORLD_KEY,
-        "domain": MY_DOMAIN_HOST, 
+        "domain": MY_DOMAIN_URL, 
         "format": "json"
     }
     
     try:
-        print(f"[Diagnose] Sending request...", file=sys.stdout)
-        # [수정] 표준 타임아웃 5초 적용
+        print(f"[Diagnose] Sending request to V-World...", file=sys.stdout)
+        # 타임아웃 5초, SSL 검증 무시
         resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
         
         return jsonify({
             "status": "CHECK_COMPLETED",
             "vworld_http_status": resp.status_code,
-            "response_sample": resp.text[:300], # 내용 일부 확인
-            "sent_domain_param": MY_DOMAIN_HOST,
+            "response_sample": resp.text[:300], # 응답 내용 앞부분 확인
+            "sent_domain_param": MY_DOMAIN_URL,
             "sent_referer_header": COMMON_HEADERS["Referer"]
         })
         
@@ -98,7 +94,7 @@ def diagnose_vworld():
         return jsonify({"status": "DIAGNOSE_FAILED", "error": str(e)})
 
 # ---------------------------------------------------------
-# 3. V-World 데이터 프록시
+# 3. V-World 데이터 프록시 (건물/지적도)
 # ---------------------------------------------------------
 @app.route('/api/vworld/data')
 def proxy_data():
@@ -117,15 +113,16 @@ def proxy_data():
             "key": VWORLD_KEY,
             "geomFilter": geom_filter,
             "size": "1000",
-            "domain": MY_DOMAIN_HOST, 
+            "domain": MY_DOMAIN_URL, 
             "format": "json"
         }
 
-        # [수정] 표준 타임아웃 5초 적용
+        # 타임아웃 5초
         resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
         
+        # V-World가 거부한 경우 (인증 오류 등)
         if resp.status_code != 200:
-            print(f"[Data API Error] Status: {resp.status_code}", file=sys.stderr)
+            print(f"[Data API Error] Status: {resp.status_code}, Body: {resp.text[:200]}", file=sys.stderr)
             return jsonify({
                 "status": "VWORLD_ERROR", 
                 "http_code": resp.status_code,
@@ -164,13 +161,13 @@ def proxy_address():
             "simple": "false",
             "type": "road",
             "key": VWORLD_KEY,
-            "domain": MY_DOMAIN_HOST,
+            "domain": MY_DOMAIN_URL,
             "format": "json"
         }
         
         print(f"[Address] Searching: {query}", file=sys.stdout)
         
-        # [수정] 표준 타임아웃 5초 적용
+        # 1차 시도 (도로명)
         resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
         
         if resp.status_code != 200:
@@ -185,7 +182,7 @@ def proxy_address():
 
         try:
             data = resp.json()
-            # 검색 결과 없음 처리
+            # 검색 결과 없음 처리 (지번 검색 재시도)
             if data.get("response", {}).get("status") == "NOT_FOUND":
                  print("[Address] Retry with parcel type...", file=sys.stdout)
                  params["type"] = "parcel"
@@ -198,6 +195,7 @@ def proxy_address():
             return jsonify(data)
 
         except ValueError:
+            # JSON 파싱 실패 시 원본 텍스트 반환 (디버깅용)
             raw_text = resp.text[:500] if resp.text else "Empty response"
             print(f"[Address Parsing Error] Raw: {raw_text}", file=sys.stderr)
             return jsonify({
@@ -210,7 +208,7 @@ def proxy_address():
         print("[Address] Max Retries Exceeded", file=sys.stderr)
         return jsonify({
             "status": "EXTERNAL_ERROR", 
-            "message": "V-World API is currently unstable."
+            "message": "V-World API is currently unstable (502 Bad Gateway)."
         }), 502
     except Timeout:
         print("[Address] Timeout", file=sys.stderr)
