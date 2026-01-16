@@ -2,6 +2,7 @@
 import os
 import requests
 import sys
+import json
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from requests.adapters import HTTPAdapter
@@ -9,7 +10,7 @@ from urllib3.util.retry import Retry
 from requests.exceptions import RetryError, Timeout
 import urllib3
 
-# SSL 경고 메시지 억제 (로그 정리)
+# SSL 경고 메시지 억제
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
@@ -18,19 +19,18 @@ CORS(app)
 # ---------------------------------------------------------
 # 1. 설정 (API 키 및 도메인)
 # ---------------------------------------------------------
-# V-World API 키 (새로 발급받은 키 적용됨)
 VWORLD_KEY = os.environ.get("VWORLD_KEY", "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F")
 KEPCO_KEY = os.environ.get("KEPCO_KEY", "19BZ8JWfae590LQCR6f2tEIyyD94wBBYEzY3UpYp")
 LAW_API_ID = os.environ.get("LAW_API_ID", "kennyyang")
 
-# [중요] V-World 관리자 페이지 '서비스 URL'에 등록된 주소와 정확히 일치해야 함
+# [중요] V-World 관리자 페이지 '서비스 URL'에 등록된 주소와 일치
 MY_DOMAIN_URL = "https://solar-server-jszy.onrender.com"
 
-# 세션 설정: 연결 재사용 및 자동 재시도
+# 세션 설정
 session = requests.Session()
 retry_strategy = Retry(
     total=3,
-    backoff_factor=1, # 1초 간격으로 재시도
+    backoff_factor=1,
     status_forcelist=[500, 502, 503, 504],
     allowed_methods=["HEAD", "GET", "OPTIONS"]
 )
@@ -38,7 +38,6 @@ adapter = HTTPAdapter(max_retries=retry_strategy)
 session.mount("https://", adapter)
 session.mount("http://", adapter)
 
-# 공통 헤더: 브라우저처럼 보이게 하고 Referer 인증 통과
 COMMON_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Referer": MY_DOMAIN_URL,
@@ -62,7 +61,6 @@ def health_check():
 @app.route('/api/diagnose')
 def diagnose_vworld():
     url = "https://api.vworld.kr/req/address"
-    # 테스트용 파라미터 (서울시청)
     params = {
         "service": "address",
         "request": "getcoord",
@@ -78,23 +76,19 @@ def diagnose_vworld():
     }
     
     try:
-        print(f"[Diagnose] Sending request to V-World...", file=sys.stdout)
-        # 타임아웃 5초, SSL 검증 무시
+        print(f"[Diagnose] Requesting...", file=sys.stdout)
         resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
-        
         return jsonify({
             "status": "CHECK_COMPLETED",
             "vworld_http_status": resp.status_code,
-            "response_sample": resp.text[:300], # 응답 내용 앞부분 확인
-            "sent_domain_param": MY_DOMAIN_URL,
-            "sent_referer_header": COMMON_HEADERS["Referer"]
+            "response_sample": resp.text[:300],
+            "sent_referer": COMMON_HEADERS["Referer"]
         })
-        
     except Exception as e:
         return jsonify({"status": "DIAGNOSE_FAILED", "error": str(e)})
 
 # ---------------------------------------------------------
-# 3. V-World 데이터 프록시 (건물/지적도)
+# 3. V-World 데이터 프록시
 # ---------------------------------------------------------
 @app.route('/api/vworld/data')
 def proxy_data():
@@ -117,25 +111,18 @@ def proxy_data():
             "format": "json"
         }
 
-        # 타임아웃 5초
         resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
         
-        # V-World가 거부한 경우 (인증 오류 등)
         if resp.status_code != 200:
-            print(f"[Data API Error] Status: {resp.status_code}, Body: {resp.text[:200]}", file=sys.stderr)
+            print(f"[Data Error] {resp.status_code} {resp.text[:100]}", file=sys.stderr)
             return jsonify({
                 "status": "VWORLD_ERROR", 
-                "http_code": resp.status_code,
-                "message": "V-World API rejected request",
-                "details": resp.text[:500]
+                "message": f"V-World Error {resp.status_code}",
+                "details": resp.text
             }), resp.status_code
             
         return jsonify(resp.json())
 
-    except RetryError:
-        return jsonify({"status": "ERROR", "message": "V-World Server Unstable (Retry Failed)"}), 502
-    except Timeout:
-        return jsonify({"status": "ERROR", "message": "V-World API Timeout (5s)"}), 504
     except Exception as e:
         print(f"[Data Exception] {str(e)}", file=sys.stderr)
         return jsonify({"status": "SERVER_ERROR", "message": str(e)}), 500
@@ -149,6 +136,8 @@ def proxy_address():
         query = request.args.get('address')
         if not query:
             return jsonify({"status": "ERROR", "message": "Missing address"}), 400
+
+        print(f"[Address] Query: {query}", file=sys.stdout)
 
         url = "https://api.vworld.kr/req/address"
         params = {
@@ -165,26 +154,24 @@ def proxy_address():
             "format": "json"
         }
         
-        print(f"[Address] Searching: {query}", file=sys.stdout)
-        
-        # 1차 시도 (도로명)
+        # 1차 시도
         resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
         
+        # 에러 응답 처리
         if resp.status_code != 200:
-            error_body = resp.text[:500] if resp.text else "No content"
-            print(f"[Address API Error] Status: {resp.status_code}, Body: {error_body}", file=sys.stderr)
+            print(f"[Address Error] {resp.status_code} {resp.text[:100]}", file=sys.stderr)
+            # 프론트엔드가 JSON으로 파싱할 수 있도록 항상 JSON 반환
             return jsonify({
-                "status": "VWORLD_ERROR", 
-                "http_code": resp.status_code,
-                "message": "V-World API Error",
-                "details": error_body
-            }), resp.status_code
+                "status": "ERROR", 
+                "message": f"V-World API Error ({resp.status_code})",
+                "details": resp.text[:200]
+            }), 200 # 200으로 보내서 프론트에서 err check 하도록 유도
 
         try:
             data = resp.json()
-            # 검색 결과 없음 처리 (지번 검색 재시도)
+            # 검색 결과 없음 -> 지번 검색 재시도
             if data.get("response", {}).get("status") == "NOT_FOUND":
-                 print("[Address] Retry with parcel type...", file=sys.stdout)
+                 print("[Address] Retry parcel...", file=sys.stdout)
                  params["type"] = "parcel"
                  resp_p = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
                  if resp_p.status_code == 200:
@@ -195,35 +182,24 @@ def proxy_address():
             return jsonify(data)
 
         except ValueError:
-            # JSON 파싱 실패 시 원본 텍스트 반환 (디버깅용)
-            raw_text = resp.text[:500] if resp.text else "Empty response"
-            print(f"[Address Parsing Error] Raw: {raw_text}", file=sys.stderr)
+            # HTML이나 텍스트가 와서 JSON 변환 실패 시
+            print(f"[Address JSON Fail] {resp.text[:100]}", file=sys.stderr)
             return jsonify({
                 "status": "PARSING_ERROR",
-                "message": "V-World returned non-JSON response. Check API Key/Domain.",
-                "raw_response": raw_text
-            }), 500
+                "message": "Invalid JSON response from V-World",
+                "raw": resp.text[:200]
+            }), 200
 
-    except RetryError:
-        print("[Address] Max Retries Exceeded", file=sys.stderr)
-        return jsonify({
-            "status": "EXTERNAL_ERROR", 
-            "message": "V-World API is currently unstable (502 Bad Gateway)."
-        }), 502
-    except Timeout:
-        print("[Address] Timeout", file=sys.stderr)
-        return jsonify({"status": "TIMEOUT", "message": "V-World API took too long (5s)."}), 504
     except Exception as e:
         print(f"[Address Exception] {str(e)}", file=sys.stderr)
-        return jsonify({"status": "SERVER_ERROR", "message": str(e)}), 500
+        # 절대 500 HTML 페이지를 내보내지 않고 JSON 에러 반환
+        return jsonify({"status": "SERVER_ERROR", "message": str(e)}), 200
 
 # ---------------------------------------------------------
-# 5. 한전(KEPCO) 및 6. 조례 정보
+# 5. 기타 API
 # ---------------------------------------------------------
 @app.route('/api/kepco')
 def proxy_kepco():
-    pnu = request.args.get('pnu')
-    if not pnu: return jsonify({"result": "FAIL", "msg": "PNU 누락"})
     return jsonify({"result": "OK", "msg": "Logic Connected"})
 
 @app.route('/api/ordinance')
@@ -233,7 +209,7 @@ def get_ordinance():
         "result": "OK", 
         "region": "조회 지역", 
         "law_name": "도시계획 조례",
-        "articles": ["도로 및 주거지로부터 일정 거리 이격 필요(지자체 조례 확인)"],
+        "articles": ["도로 및 주거지로부터 이격 거리 확인 필요"],
         "link": "https://www.law.go.kr"
     })
 
