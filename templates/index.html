@@ -378,7 +378,9 @@
 
     <div class="absolute top-5 left-1/2 transform -translate-x-1/2 z-[1000] flex flex-col items-center gap-2">
         <div class="bg-white p-1 rounded-lg shadow-xl border border-slate-200 flex items-center">
-            <input type="text" id="addrInput" placeholder="주소 검색 (예: 강남대로 123)" class="w-64 px-3 py-2 text-sm outline-none text-slate-700 font-medium" onkeypress="if(event.key==='Enter') searchAddress()">
+            <input type="text" id="addrInput" placeholder="주소 검색 (예: 강남대로 123)" 
+                   class="w-64 px-3 py-2 text-sm outline-none text-slate-700 font-medium"
+                   onkeypress="if(event.key==='Enter') searchAddress()">
             <button onclick="searchAddress()" class="bg-cyan-600 hover:bg-cyan-700 text-white p-2 rounded-md transition shadow-md"><i class="ph ph-magnifying-glass font-bold"></i></button>
         </div>
     </div>
@@ -414,7 +416,9 @@
         // ==========================================
         //  설정 및 글로벌 변수
         // ==========================================
-        const VWORLD_TILE_KEY = "8D526307-78EE-3281-8AB3-0D36115D17C3"; 
+        // [중요] V-World API 키 오류 시 본인 키로 교체 필요
+        // [수정] 프론트엔드용 타일맵 키 업데이트
+        const VWORLD_TILE_KEY = "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F"; 
         const BACKEND_URL = "https://solar-server-jszy.onrender.com"; 
 
         // [보안] Secrets detected 대응: API Key 분할 결합
@@ -452,7 +456,7 @@
         let currentUser = null;
         const ENCODED_ADMIN_PW = "Wmlld2lzZTEyMyE="; 
 
-        // API 트래킹 함수 정의
+        // API 트래킹 함수
         function trackApi(type) {
             if(apiCounts[type] !== undefined) {
                 apiCounts[type]++;
@@ -461,7 +465,7 @@
             }
         }
 
-        // 지도 이동 완료 시 자동 스캔 처리 함수 (누락된 정의 추가)
+        // [수정] 누락된 정의 추가 (에러 1 해결)
         function onMapMoveEnd() {
             if(!autoScanMode || !isLoggedIn) return;
             const c = map.getCenter();
@@ -523,26 +527,31 @@
             try {
                 const res = await fetch(url);
                 
-                // 500 에러 등에 대비한 방어 로직
+                // [방어 로직] 서버 에러(500/502 등) 처리
                 if (!res.ok) {
-                    throw new Error(`Server returned ${res.status}`);
+                    const errJson = await res.json().catch(() => ({}));
+                    const errMsg = errJson.message || `Server Error ${res.status}`;
+                    
+                    if (res.status === 502) {
+                        throw new Error("서버가 깨어나는 중이거나 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요.");
+                    }
+                    throw new Error(errMsg);
                 }
 
                 const data = await res.json();
                 
-                // data.response가 존재하는지 확인 (에러 3 해결)
                 if(data.response && data.response.status === 'OK') {
                     const { x, y } = data.response.result.point;
                     map.setView([parseFloat(y), parseFloat(x)], 18);
                     showToast("이동 완료.");
                     setTimeout(() => scanBuildings(parseFloat(y), parseFloat(x)), 800);
                 } else {
-                    const msg = data.response ? "주소를 찾을 수 없습니다." : "서버 응답 형식 오류";
+                    const msg = (data.response && data.response.error) ? data.response.error.text : "주소를 찾을 수 없습니다.";
                     showToast(msg);
                 }
             } catch(e) { 
                 console.error("Backend API Error:", e);
-                showToast("검색 서버 연결 실패 (Backend 500 Check)"); 
+                showToast(`오류: ${e.message}`); 
             }
         }
 
@@ -854,6 +863,10 @@
             document.getElementById('resPfPayback').innerText = `${pfPayback} 년`;
         }
 
+        function toggleSidebar() {
+            document.getElementById('sidebar').classList.toggle('collapsed');
+            document.getElementById('sidebar-toggle-btn').classList.toggle('collapsed');
+        }
         function switchTab(mode) {
             ['scan', 'analysis', 'legal'].forEach(t => { document.getElementById(`tab-${t}`).classList.remove('active'); document.getElementById(`panel-${t}`).classList.add('hidden'); });
             document.getElementById(`tab-${mode}`).classList.add('active');
@@ -875,12 +888,11 @@
             if(autoScanMode) onMapMoveEnd();
         }
         function toggleLayer(type) {
-            const center = map ? map.getCenter() : {lat:36.5, lng:127.5};
             if(type === 'existing') {
-                if(document.getElementById('existingPlantToggle').checked) { createMockMarkers(center, 'plant'); map.addLayer(existingGroup); }
+                if(document.getElementById('existingPlantToggle').checked) { createMockMarkers(map.getCenter(), 'plant'); map.addLayer(existingGroup); }
                 else { existingGroup.clearLayers(); map.removeLayer(existingGroup); }
             } else if(type === 'substation') {
-                 if(document.getElementById('substationToggle').checked) { createMockMarkers(center, 'substation'); map.addLayer(substationGroup); }
+                 if(document.getElementById('substationToggle').checked) { createMockMarkers(map.getCenter(), 'substation'); map.addLayer(substationGroup); }
                  else { substationGroup.clearLayers(); map.removeLayer(substationGroup); }
             } else if(type === 'cadastral') {
                  if(document.getElementById('cadastralToggle').checked) { if(!cadastralLayer._map) map.addLayer(cadastralLayer); }
@@ -957,10 +969,6 @@
                 const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [24, 24] });
                 L.marker([lat, lng], { icon: icon }).bindPopup(type === 'plant' ? "기설치 태양광 (99kW)" : "변전소 (여유용량: 10MW)").addTo(group);
             }
-        }
-        function toggleSidebar() {
-            document.getElementById('sidebar').classList.toggle('collapsed');
-            document.getElementById('sidebar-toggle-btn').classList.toggle('collapsed');
         }
     </script>
 </body>
