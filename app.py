@@ -2,7 +2,6 @@
 import os
 import requests
 import sys
-import json
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from requests.adapters import HTTPAdapter
@@ -17,13 +16,13 @@ app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 # ---------------------------------------------------------
-# 1. 설정
+# 1. 설정 (API 키 및 도메인)
 # ---------------------------------------------------------
 VWORLD_KEY = os.environ.get("VWORLD_KEY", "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F")
 KEPCO_KEY = os.environ.get("KEPCO_KEY", "19BZ8JWfae590LQCR6f2tEIyyD94wBBYEzY3UpYp")
 LAW_API_ID = os.environ.get("LAW_API_ID", "kennyyang")
 
-# [수정됨] Cloudtype 서버 주소 적용
+# [수정됨] Cloudtype 서버 주소 (V-World 등록 주소와 일치해야 함)
 MY_DOMAIN_URL = "https://port-0-solar-server-mkiol9jsc308f567.sel3.cloudtype.app"
 
 # 세션 설정
@@ -33,7 +32,6 @@ adapter = HTTPAdapter(max_retries=retry)
 session.mount("https://", adapter)
 session.mount("http://", adapter)
 
-# 헤더 설정
 COMMON_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Referer": MY_DOMAIN_URL,
@@ -70,13 +68,11 @@ def proxy_address():
         
         resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
         
-        # V-World 에러도 200 OK로 감싸서 반환 (CORS 방지)
         if resp.status_code != 200:
             return jsonify({"status": "VWORLD_ERROR", "details": resp.text[:200]}), 200
 
         try:
             data = resp.json()
-            # 검색 결과 없음 -> 지번 재시도
             if data.get("response", {}).get("status") == "NOT_FOUND":
                  params["type"] = "parcel"
                  resp_p = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
