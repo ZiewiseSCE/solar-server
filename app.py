@@ -13,17 +13,18 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
-# CORS: 모든 도메인 허용
+# 모든 도메인 허용 (CORS 해결)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 # ---------------------------------------------------------
-# 설정
+# 1. 설정 (API 키 및 도메인)
 # ---------------------------------------------------------
 VWORLD_KEY = os.environ.get("VWORLD_KEY", "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F")
 KEPCO_KEY = os.environ.get("KEPCO_KEY", "19BZ8JWfae590LQCR6f2tEIyyD94wBBYEzY3UpYp")
 LAW_API_ID = os.environ.get("LAW_API_ID", "kennyyang")
 MY_DOMAIN_URL = "https://solar-server-jszy.onrender.com"
 
+# 세션 설정
 session = requests.Session()
 retry = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
 adapter = HTTPAdapter(max_retries=retry)
@@ -31,13 +32,13 @@ session.mount("https://", adapter)
 session.mount("http://", adapter)
 
 COMMON_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
     "Referer": MY_DOMAIN_URL,
     "Origin": MY_DOMAIN_URL
 }
 
 # ---------------------------------------------------------
-# 기본 라우트
+# 2. 라우트
 # ---------------------------------------------------------
 @app.route('/')
 def index():
@@ -48,133 +49,160 @@ def health_check():
     return "OK", 200
 
 # ---------------------------------------------------------
-# [수정됨] V-World 주소 검색 (비상 모드 포함)
+# 3. V-World 주소 검색
 # ---------------------------------------------------------
 @app.route('/api/vworld/address')
 def proxy_address():
-    query = request.args.get('address')
-    if not query:
-        return jsonify({"status": "ERROR", "message": "주소를 입력해주세요."}), 200
-
-    print(f"[Address] Searching: {query}", file=sys.stdout)
-
-    url = "https://api.vworld.kr/req/address"
-    params = {
-        "service": "address", "request": "getcoord", "version": "2.0", "crs": "epsg:4326",
-        "address": query, "refine": "true", "simple": "false", "type": "road",
-        "key": VWORLD_KEY, "domain": MY_DOMAIN_URL, "format": "json"
-    }
-
     try:
-        # 타임아웃 5초 설정
-        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
-        
-        # 1. V-World가 명시적으로 에러를 낸 경우
-        if resp.status_code != 200:
-            print(f"[Address Error] Status: {resp.status_code}, Body: {resp.text[:100]}", file=sys.stderr)
-            # [비상 조치] 에러 대신 더미 좌표 반환하여 프론트엔드 작동 확인
-            return jsonify({
-                "status": "OK",
-                "response": {
-                    "status": "OK",
-                    "result": {"point": {"x": "126.9780", "y": "37.5665"}} # 서울시청 좌표
-                },
-                "message": f"V-World 통신 실패({resp.status_code}). 비상 좌표(서울시청)로 이동합니다."
-            })
+        query = request.args.get('address')
+        if not query: return jsonify({"status": "ERROR", "message": "주소 필요"}), 200
 
-        # 2. 정상 응답 파싱 시도
+        print(f"[Address] Searching: {query}", file=sys.stdout)
+        url = "https://api.vworld.kr/req/address"
+        params = {
+            "service": "address", "request": "getcoord", "version": "2.0", "crs": "epsg:4326",
+            "address": query, "refine": "true", "simple": "false", "type": "road",
+            "key": VWORLD_KEY, "domain": MY_DOMAIN_URL, "format": "json"
+        }
+        
+        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
+        
+        if resp.status_code != 200:
+            return jsonify({"status": "VWORLD_ERROR", "details": resp.text[:200]}), 200
+
         try:
             data = resp.json()
-            # 검색 결과가 없는 경우 재시도 로직
+            # 검색 결과 없음 -> 지번 재시도
             if data.get("response", {}).get("status") == "NOT_FOUND":
                  params["type"] = "parcel"
-                 resp_p = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
+                 resp_p = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
                  if resp_p.status_code == 200:
                      try: data = resp_p.json()
                      except: pass
-            
-            # 최종 결과 반환
             return jsonify(data)
-
-        except ValueError:
-            # HTML 등이 반환된 경우
-            print("[Address] Non-JSON response received", file=sys.stderr)
-            return jsonify({
-                "status": "OK",
-                "response": {
-                    "status": "OK",
-                    "result": {"point": {"x": "126.9780", "y": "37.5665"}}
-                },
-                "message": "V-World 응답 오류. 비상 좌표로 이동합니다."
-            })
-
+        except:
+            return jsonify({"status": "PARSING_ERROR", "raw": resp.text[:200]}), 200
     except Exception as e:
-        # 타임아웃 등 연결 실패 시
-        print(f"[Address Exception] {str(e)}", file=sys.stderr)
-        return jsonify({
-            "status": "OK", # 프론트엔드가 멈추지 않게 OK로 위장
-            "response": {
-                "status": "OK",
-                "result": {"point": {"x": "126.9780", "y": "37.5665"}}
-            },
-            "message": f"서버 통신 오류({str(e)[:20]}...). 비상 좌표로 이동합니다."
-        })
+        return jsonify({"status": "SERVER_ERROR", "message": str(e)}), 200
 
 # ---------------------------------------------------------
-# [수정됨] V-World 데이터 조회 (비상 모드 포함)
+# 4. V-World 데이터 조회
 # ---------------------------------------------------------
 @app.route('/api/vworld/data')
 def proxy_data():
     try:
         layer = request.args.get('data', 'LT_C_SPBD')
-        geom_filter = request.args.get('geomFilter')
-        if not geom_filter:
-            return jsonify({"status": "ERROR", "message": "geomFilter 누락"}), 200
+        geom = request.args.get('geomFilter')
+        if not geom: return jsonify({"status": "ERROR", "message": "geomFilter 필요"}), 200
 
         url = "https://api.vworld.kr/req/data"
         params = {
             "service": "data", "request": "GetFeature", "data": layer,
-            "key": VWORLD_KEY, "geomFilter": geom_filter, "size": "1000",
+            "key": VWORLD_KEY, "geomFilter": geom, "size": "1000",
             "domain": MY_DOMAIN_URL, "format": "json"
         }
 
-        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
+        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=20, verify=False)
         
         if resp.status_code != 200:
             return jsonify({"status": "VWORLD_ERROR", "details": resp.text[:200]}), 200
             
         return jsonify(resp.json())
-
     except Exception as e:
-        # 데이터 조회 실패 시 빈 결과 반환 (지도 멈춤 방지)
-        return jsonify({
-            "response": {"status": "OK", "result": {"featureCollection": {"features": []}}}
-        }), 200
+        return jsonify({"status": "SERVER_ERROR", "message": str(e)}), 200
 
 # ---------------------------------------------------------
-# 기타 API
+# 5. 종합 분석 (한전, 용도, 생태 등)
 # ---------------------------------------------------------
-def fetch_kepco_capacity_by_address(address_str):
-    # (이전 로직 유지 - 생략)
-    return None
-
-def fetch_vworld_feature(layer, bbox):
-    # (이전 로직 유지 - 생략)
-    return None
-
 @app.route('/api/analyze/comprehensive')
 def analyze_site():
-    # (종합 분석 로직 - 안전하게 더미 데이터 반환)
-    address = request.args.get('address', '')
-    return jsonify({
-        "status": "OK",
-        "address": address,
-        "zoning": "확인 불가 (API 통신 장애)",
-        "eco_grade": "확인 불가",
-        "kepco_capacity": "확인 필요",
-        "messages": ["현재 V-World API와 통신이 불안정합니다."],
-        "links": { "kepco": "https://online.kepco.co.kr/" }
-    })
+    try:
+        lat = request.args.get('lat')
+        lng = request.args.get('lng')
+        area_size = float(request.args.get('area', 0))
+        address = request.args.get('address', '')
+
+        if not lat or not lng: return jsonify({"status": "ERROR"}), 200
+
+        delta = 0.0001
+        bbox = f"{float(lng)-delta},{float(lat)-delta},{float(lng)+delta},{float(lat)+delta}"
+        
+        # 1. 용도지역 확인
+        zoning_info = fetch_vworld_feature("LT_C_UQ111", bbox) 
+        zoning_name = zoning_info.get('properties', {}).get('MNUM_NM', '확인불가') if zoning_info else "확인불가"
+
+        # 2. 생태자연도 확인
+        eco_info = fetch_vworld_feature("LT_C_WISNAT", bbox) 
+        eco_grade = eco_info.get('properties', {}).get('GRD_NM', '등급외') if eco_info else "확인불가"
+        
+        # 3. 환경영향평가 대상 여부
+        env_check = "대상 아님"
+        if "보전" in zoning_name and area_size >= 5000: env_check = "✅ 대상 (5,000m²↑)"
+        elif "생산" in zoning_name and area_size >= 7500: env_check = "✅ 대상 (7,500m²↑)"
+        elif "계획" in zoning_name and area_size >= 10000: env_check = "✅ 대상 (10,000m²↑)"
+        
+        # 4. 한전 용량
+        kepco_cap = "확인 불가"
+        if address:
+            k_res = fetch_kepco_capacity(address)
+            if k_res:
+                kepco_cap = f"{k_res.get('vol3','-')} (변전소 여유: {k_res.get('vol1','-')})"
+            else:
+                kepco_cap = "데이터 없음 (한전ON 확인)"
+
+        return jsonify({
+            "status": "OK",
+            "address": address,
+            "zoning": zoning_name,
+            "eco_grade": eco_grade,
+            "env_assessment": env_check,
+            "kepco_capacity": kepco_cap,
+            "messages": [
+                f"📌 용도지역: {zoning_name}",
+                f"🌿 생태등급: {eco_grade}",
+                f"⚡ 한전 선로: {kepco_cap}",
+                f"⚠️ 환경영향평가: {env_check}"
+            ],
+            "links": { 
+                "kepco": "https://online.kepco.co.kr/",
+                "eum": "https://www.eum.go.kr/web/am/amMain.jsp"
+            }
+        })
+    except Exception as e:
+        return jsonify({"status": "ERROR", "message": str(e)}), 200
+
+# --- 헬퍼 함수 ---
+def fetch_vworld_feature(layer, bbox):
+    url = "https://api.vworld.kr/req/data"
+    params = {"service": "data", "request": "GetFeature", "data": layer, "key": VWORLD_KEY, "geomFilter": f"BOX({bbox})", "size": "1", "domain": MY_DOMAIN_URL, "format": "json"}
+    try:
+        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
+        data = resp.json()
+        if data['response']['status'] == 'OK': return data['response']['result']['featureCollection']['features'][0]
+    except: pass
+    return None
+
+def fetch_kepco_capacity(addr):
+    try:
+        # V-World로 지번 변환
+        v_url = "https://api.vworld.kr/req/address"
+        v_params = {"service": "address", "request": "getcoord", "version": "2.0", "crs": "epsg:4326", "address": addr, "refine": "true", "simple": "false", "type": "PARCEL", "key": VWORLD_KEY, "domain": MY_DOMAIN_URL, "format": "json"}
+        v_resp = session.get(v_url, params=v_params, headers=COMMON_HEADERS, timeout=5, verify=False)
+        v_data = v_resp.json()
+        if v_data['response']['status'] != 'OK': return None
+        
+        # 한전 API 호출
+        st = v_data['response']['refined']['structure']
+        k_url = "https://bigdata.kepco.co.kr/openapi/v1/dispersedGeneration.do"
+        jibun = f"{st.get('mainNum','')}-{st.get('subNum','')}" if st.get('subNum')!='0' else st.get('mainNum','')
+        k_params = {"apiKey": KEPCO_KEY, "returnType": "json", "addrLidong": st.get('level4L') or st.get('level4A',''), "addrJibun": jibun}
+        
+        k_resp = requests.get(k_url, params=k_params, timeout=10)
+        if k_resp.status_code == 200:
+            d = k_resp.json()
+            if "data" in d and len(d["data"]) > 0: return d["data"][0]
+    except: pass
+    return None
 
 @app.route('/api/kepco')
 def proxy_kepco():
