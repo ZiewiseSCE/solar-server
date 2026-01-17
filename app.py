@@ -13,16 +13,18 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
-# 모든 도메인 허용 (CORS 해결)
+# CORS: 모든 도메인 허용
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 # ---------------------------------------------------------
-# 1. 설정 (API 키 및 도메인)
+# 1. 설정
 # ---------------------------------------------------------
 VWORLD_KEY = os.environ.get("VWORLD_KEY", "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F")
 KEPCO_KEY = os.environ.get("KEPCO_KEY", "19BZ8JWfae590LQCR6f2tEIyyD94wBBYEzY3UpYp")
 LAW_API_ID = os.environ.get("LAW_API_ID", "kennyyang")
-MY_DOMAIN_URL = "https://solar-server-jszy.onrender.com"
+
+# [수정됨] Cloudtype 서버 주소 적용
+MY_DOMAIN_URL = "https://port-0-solar-server-mkiol9jsc308f567.sel3.cloudtype.app"
 
 # 세션 설정
 session = requests.Session()
@@ -31,14 +33,15 @@ adapter = HTTPAdapter(max_retries=retry)
 session.mount("https://", adapter)
 session.mount("http://", adapter)
 
+# 헤더 설정
 COMMON_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Referer": MY_DOMAIN_URL,
     "Origin": MY_DOMAIN_URL
 }
 
 # ---------------------------------------------------------
-# 2. 라우트
+# 2. 기본 라우트
 # ---------------------------------------------------------
 @app.route('/')
 def index():
@@ -67,6 +70,7 @@ def proxy_address():
         
         resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
         
+        # V-World 에러도 200 OK로 감싸서 반환 (CORS 방지)
         if resp.status_code != 200:
             return jsonify({"status": "VWORLD_ERROR", "details": resp.text[:200]}), 200
 
@@ -112,7 +116,7 @@ def proxy_data():
         return jsonify({"status": "SERVER_ERROR", "message": str(e)}), 200
 
 # ---------------------------------------------------------
-# 5. 종합 분석 (한전, 용도, 생태 등)
+# 5. 종합 분석
 # ---------------------------------------------------------
 @app.route('/api/analyze/comprehensive')
 def analyze_site():
@@ -127,26 +131,25 @@ def analyze_site():
         delta = 0.0001
         bbox = f"{float(lng)-delta},{float(lat)-delta},{float(lng)+delta},{float(lat)+delta}"
         
-        # 1. 용도지역 확인
         zoning_info = fetch_vworld_feature("LT_C_UQ111", bbox) 
         zoning_name = zoning_info.get('properties', {}).get('MNUM_NM', '확인불가') if zoning_info else "확인불가"
 
-        # 2. 생태자연도 확인
         eco_info = fetch_vworld_feature("LT_C_WISNAT", bbox) 
         eco_grade = eco_info.get('properties', {}).get('GRD_NM', '등급외') if eco_info else "확인불가"
         
-        # 3. 환경영향평가 대상 여부
         env_check = "대상 아님"
         if "보전" in zoning_name and area_size >= 5000: env_check = "✅ 대상 (5,000m²↑)"
         elif "생산" in zoning_name and area_size >= 7500: env_check = "✅ 대상 (7,500m²↑)"
         elif "계획" in zoning_name and area_size >= 10000: env_check = "✅ 대상 (10,000m²↑)"
+        elif "농림" in zoning_name and area_size >= 7500: env_check = "✅ 대상 (7,500m²↑)"
         
-        # 4. 한전 용량
         kepco_cap = "확인 불가"
+        kepco_info = "API 키 필요"
         if address:
             k_res = fetch_kepco_capacity(address)
             if k_res:
                 kepco_cap = f"{k_res.get('vol3','-')} (변전소 여유: {k_res.get('vol1','-')})"
+                kepco_info = f"변전소: {k_res.get('substNm','-')}"
             else:
                 kepco_cap = "데이터 없음 (한전ON 확인)"
 
@@ -160,7 +163,7 @@ def analyze_site():
             "messages": [
                 f"📌 용도지역: {zoning_name}",
                 f"🌿 생태등급: {eco_grade}",
-                f"⚡ 한전 선로: {kepco_cap}",
+                f"⚡ 한전 선로: {kepco_cap} / {kepco_info}",
                 f"⚠️ 환경영향평가: {env_check}"
             ],
             "links": { 
@@ -184,14 +187,12 @@ def fetch_vworld_feature(layer, bbox):
 
 def fetch_kepco_capacity(addr):
     try:
-        # V-World로 지번 변환
         v_url = "https://api.vworld.kr/req/address"
         v_params = {"service": "address", "request": "getcoord", "version": "2.0", "crs": "epsg:4326", "address": addr, "refine": "true", "simple": "false", "type": "PARCEL", "key": VWORLD_KEY, "domain": MY_DOMAIN_URL, "format": "json"}
         v_resp = session.get(v_url, params=v_params, headers=COMMON_HEADERS, timeout=5, verify=False)
         v_data = v_resp.json()
         if v_data['response']['status'] != 'OK': return None
         
-        # 한전 API 호출
         st = v_data['response']['refined']['structure']
         k_url = "https://bigdata.kepco.co.kr/openapi/v1/dispersedGeneration.do"
         jibun = f"{st.get('mainNum','')}-{st.get('subNum','')}" if st.get('subNum')!='0' else st.get('mainNum','')
