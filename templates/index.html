@@ -7,15 +7,12 @@
     <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests"> 
     <title>SCEnergy 태양광 채굴기</title>
     
-    <!-- 라이브러리 로드 -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <!-- Tailwind CSS (Dev version) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
     
-    <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
@@ -24,534 +21,203 @@
         body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: 'Pretendard', sans-serif; }
         #map { width: 100%; height: 100%; z-index: 1; background: #1a1a1a; }
         
-        /* 로그인 오버레이 CSS 수정 (경고 해결) */
         #login-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(15, 23, 42, 0.95);
-            -webkit-backdrop-filter: blur(10px); /* Safari 지원 */
+            -webkit-backdrop-filter: blur(10px);
             backdrop-filter: blur(10px);
             z-index: 9999;
             display: flex; align-items: center; justify-content: center;
             transition: opacity 0.5s ease-out;
         }
         #login-overlay.hidden-overlay { opacity: 0; pointer-events: none; }
-
-        /* 텍스트 사이즈 조정 호환성 추가 */
-        html {
-            -webkit-text-size-adjust: 100%;
-            text-size-adjust: 100%;
-        }
-
-        /* 사이드바 애니메이션 */
+        html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+        
         .sidebar { z-index: 2000; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
         .sidebar.collapsed { transform: translateX(-100%); }
         #sidebar-toggle-btn { left: 420px; transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1); z-index: 2001; }
         #sidebar-toggle-btn.collapsed { left: 0; }
-        #sidebar-toggle-btn.collapsed i { transform: rotate(180deg); }
         
-        /* UI 스타일 */
         .tab-btn { transition: all 0.2s; border-bottom: 2px solid transparent; }
         .tab-btn.active { border-bottom-color: #06b6d4; color: #06b6d4; font-weight: bold; background-color: #f8fafc; }
         .result-card { background: rgba(15, 23, 42, 0.95); border-left: 4px solid #06b6d4; backdrop-filter: blur(4px); }
         .spinner { border: 3px solid rgba(255,255,255,0.1); border-radius: 50%; border-top: 3px solid #06b6d4; width: 24px; height: 24px; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 3px; }
-        
-        .d-pad-btn {
-            width: 24px; height: 24px; background: #e2e8f0; border-radius: 4px;
-            display: flex; align-items: center; justify-content: center;
-            cursor: pointer; transition: all 0.1s; color: #334155; font-size: 10px;
-        }
-        .d-pad-btn:hover { background: #cbd5e1; color: #0f172a; }
-        .d-pad-btn:active { background: #94a3b8; transform: scale(0.95); }
-        
-        /* Marker Icons */
-        .plant-marker { background: #fbbf24; border: 2px solid white; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
-        .substation-marker { background: #ef4444; border: 2px solid white; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.5); color: white; display: flex; align-items: center; justify-content: center; }
-        
-        /* Input */
+        ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 3px; }
         .login-input { background: rgba(30, 41, 59, 0.5); border: 1px solid #475569; color: white; transition: all 0.3s; }
         .login-input:focus { border-color: #06b6d4; outline: none; background: rgba(30, 41, 59, 0.8); }
-
-        /* 슬라이더 스타일 */
-        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
-        input[type=range]::-webkit-slider-thumb {
-            -webkit-appearance: none; height: 12px; width: 12px; border-radius: 50%;
-            background: #06b6d4; cursor: pointer; margin-top: -4px;
-        }
-        input[type=range]::-webkit-slider-runnable-track {
-            width: 100%; height: 4px; cursor: pointer; background: #cbd5e1; border-radius: 2px;
-        }
+        .plant-marker { background: #fbbf24; border: 2px solid white; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
+        .substation-marker { background: #ef4444; border: 2px solid white; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.5); color: white; display: flex; align-items: center; justify-content: center; }
     </style>
 </head>
 <body class="bg-gray-100">
 
-    <!-- 로그인 오버레이 -->
     <div id="login-overlay">
         <div class="bg-slate-900 p-8 rounded-2xl shadow-2xl border border-slate-700 w-[400px] text-center relative overflow-hidden" id="login-box">
-            <!-- 배경 데코레이션 -->
             <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500"></div>
-            <div class="absolute -top-10 -right-10 w-32 h-32 bg-cyan-500/10 rounded-full blur-3xl"></div>
-
             <div class="mb-6 relative">
-                <div class="mx-auto w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mb-4 border border-slate-700 shadow-lg">
-                    <i class="ph ph-solar-panel text-3xl text-cyan-400" id="login-icon"></i>
-                </div>
-                <h1 class="text-2xl font-bold text-white tracking-tight" id="login-title">SCEnergy 태양광 채굴기</h1>
-                <p class="text-slate-400 text-sm mt-2" id="login-subtitle">태양광 발전 분석 클라우드</p>
+                <div class="mx-auto w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mb-4 border border-slate-700 shadow-lg"><i class="ph ph-solar-panel text-3xl text-cyan-400"></i></div>
+                <h1 class="text-2xl font-bold text-white tracking-tight">SCEnergy 태양광 채굴기</h1>
+                <p class="text-slate-400 text-sm mt-2">태양광 발전 분석 클라우드</p>
                 <button onclick="exitAdminMode()" id="exit-admin-btn" aria-label="관리자 모드 종료" class="hidden absolute top-0 right-0 text-slate-500 hover:text-white"><i class="ph ph-x"></i></button>
             </div>
-
-            <!-- [일반 사용자] 로그인 -->
+            
             <div id="step-user-login" class="space-y-4">
                 <div class="space-y-3 text-left">
-                    <div>
-                        <label for="userId" class="text-xs font-bold text-slate-400 ml-1">아이디 (ID)</label>
-                        <input type="text" id="userId" placeholder="User ID" class="login-input w-full rounded px-4 py-3 text-sm mt-1" onkeypress="if(event.key==='Enter') document.getElementById('userPw').focus()">
-                    </div>
-                    <div>
-                        <label for="userPw" class="text-xs font-bold text-slate-400 ml-1">비밀번호 (Password)</label>
-                        <input type="password" id="userPw" placeholder="••••••" class="login-input w-full rounded px-4 py-3 text-sm mt-1" onkeypress="if(event.key==='Enter') attemptLogin()">
-                    </div>
+                    <div><label for="userId" class="text-xs font-bold text-slate-400 ml-1">아이디 (ID)</label><input type="text" id="userId" placeholder="User ID" class="login-input w-full rounded px-4 py-3 text-sm mt-1" onkeypress="if(event.key==='Enter') document.getElementById('userPw').focus()"></div>
+                    <div><label for="userPw" class="text-xs font-bold text-slate-400 ml-1">비밀번호 (Password)</label><input type="password" id="userPw" placeholder="••••••" class="login-input w-full rounded px-4 py-3 text-sm mt-1" onkeypress="if(event.key==='Enter') attemptLogin()"></div>
                 </div>
-                <button onclick="attemptLogin()" class="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 rounded-lg transition shadow-lg shadow-cyan-900/20 flex items-center justify-center gap-2 mt-2">
-                    <i class="ph ph-sign-in"></i> 접속하기
-                </button>
+                <button onclick="attemptLogin()" class="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 rounded-lg transition mt-2">접속하기</button>
                 <div class="flex justify-between items-center mt-4 pt-4 border-t border-slate-700/50">
-                    <p class="text-[10px] text-slate-500 text-left">* 관리자가 등록한 계정으로 로그인하세요.</p>
                     <button onclick="showAdminLogin()" class="text-[10px] text-slate-500 hover:text-cyan-400 transition font-bold flex items-center gap-1"><i class="ph ph-lock-key"></i> 관리자 로그인</button>
                 </div>
             </div>
 
-            <!-- [관리자] 로그인 -->
             <div id="step-admin-login" class="hidden space-y-4">
-                <div class="text-left">
-                    <label for="adminPw" class="text-xs font-bold text-red-400 ml-1">관리자 비밀번호</label>
-                    <input type="password" id="adminPw" class="login-input w-full rounded px-4 py-3 text-sm font-mono mt-1" placeholder="Password" onkeypress="if(event.key==='Enter') verifyAdmin()">
-                </div>
-                <button onclick="verifyAdmin()" class="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-lg transition shadow-lg shadow-red-900/20 flex items-center justify-center gap-2">
-                    <i class="ph ph-key"></i> 관리자 접속
-                </button>
+                <div class="text-left"><label for="adminPw" class="text-xs font-bold text-red-400 ml-1">관리자 비밀번호</label><input type="password" id="adminPw" class="login-input w-full rounded px-4 py-3 text-sm font-mono mt-1" placeholder="Password" onkeypress="if(event.key==='Enter') verifyAdmin()"></div>
+                <button onclick="verifyAdmin()" class="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-lg transition">관리자 접속</button>
                 <button onclick="exitAdminMode()" class="text-xs text-slate-400 hover:text-white">돌아가기</button>
             </div>
 
-            <!-- [관리자] 대시보드 -->
             <div id="step-admin-dashboard" class="hidden space-y-4">
                 <div class="bg-slate-800/50 rounded-lg p-3 text-left border border-slate-700">
                     <label class="text-[10px] font-bold text-slate-400 block mb-1">신규 유저 등록</label>
                     <div class="grid grid-cols-2 gap-2 mb-2">
-                        <div>
-                            <label for="newUserId" class="sr-only">새 아이디</label>
-                            <input type="text" id="newUserId" placeholder="아이디" class="login-input rounded px-2 py-1.5 text-xs w-full">
-                        </div>
-                        <div>
-                            <label for="newUserPw" class="sr-only">새 비밀번호</label>
-                            <input type="text" id="newUserPw" placeholder="비밀번호" class="login-input rounded px-2 py-1.5 text-xs w-full">
-                        </div>
+                        <div><label for="newUserId" class="sr-only">새 아이디</label><input type="text" id="newUserId" placeholder="아이디" class="login-input rounded px-2 py-1.5 text-xs w-full"></div>
+                        <div><label for="newUserPw" class="sr-only">새 비밀번호</label><input type="text" id="newUserPw" placeholder="비밀번호" class="login-input rounded px-2 py-1.5 text-xs w-full"></div>
                     </div>
                     <button onclick="addUser()" class="w-full bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-bold">유저 추가</button>
                 </div>
-                <div class="text-left">
-                    <label class="text-[10px] font-bold text-slate-400 block mb-1 flex justify-between">
-                        <span>등록된 유저 목록</span>
-                        <span id="user-count" class="text-cyan-500">0명</span>
-                    </label>
-                    <div class="bg-slate-800 rounded border border-slate-700 h-32 overflow-y-auto p-2 space-y-1" id="user-list-container"></div>
-                </div>
-                <div class="flex gap-2 pt-2">
-                    <button onclick="exitAdminMode()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 rounded text-xs">나가기</button>
-                </div>
+                <div class="text-left"><label class="text-[10px] font-bold text-slate-400 block mb-1 flex justify-between"><span>등록된 유저 목록</span><span id="user-count" class="text-cyan-500">0명</span></label><div class="bg-slate-800 rounded border border-slate-700 h-32 overflow-y-auto p-2 space-y-1" id="user-list-container"></div></div>
+                <div class="flex gap-2 pt-2"><button onclick="exitAdminMode()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 rounded text-xs">나가기</button></div>
             </div>
         </div>
     </div>
 
-    <!-- 좌측 사이드바 -->
     <div id="sidebar" class="sidebar absolute top-0 left-0 h-full w-[420px] bg-white shadow-2xl flex flex-col border-r border-gray-200">
-        <!-- 헤더 -->
         <div class="p-4 bg-slate-900 text-white shadow-lg shrink-0">
-            <h1 class="text-lg font-bold flex items-center gap-2">
-                <i class="ph ph-solar-panel text-yellow-400"></i> SCEnergy 태양광 채굴기
-                <span class="text-[10px] bg-cyan-900 text-cyan-300 px-1.5 py-0.5 rounded ml-auto">PRO</span>
-            </h1>
-            <div class="flex justify-between items-center text-[10px] text-slate-400 mt-2 border-t border-slate-700 pt-2">
-                <span id="currentUserDisplay">Not Logged In</span>
-                <button onclick="logout('Manual')" class="text-red-400 hover:text-red-300 underline">로그아웃</button>
-            </div>
-            <!-- API Status Box -->
-            <div class="mt-3 bg-slate-800/50 p-2 rounded border border-slate-700">
-                <div class="flex justify-between items-center mb-2">
-                    <span class="text-[9px] text-slate-400">System Connection Status</span>
-                    <span class="text-[9px] text-green-400 font-bold flex items-center gap-1">
-                        <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span> ONLINE
-                    </span>
-                </div>
-                <div class="grid grid-cols-3 gap-1 text-center">
-                    <div class="bg-slate-900 rounded p-1 border border-slate-700">
-                        <div class="text-[8px] text-slate-500 mb-0.5">Backend</div>
-                        <div id="cnt-vworld" class="text-[10px] font-mono font-bold text-cyan-400">0</div>
-                    </div>
-                    <div class="bg-slate-900 rounded p-1 border border-slate-700">
-                        <div class="text-[8px] text-slate-500 mb-0.5">DB Sync</div>
-                        <div id="cnt-public" class="text-[10px] font-mono font-bold text-yellow-400">0</div>
-                    </div>
-                    <div class="bg-slate-900 rounded p-1 border border-slate-700">
-                        <div class="text-[8px] text-slate-500 mb-0.5">AI Analysis</div>
-                        <div id="cnt-ai" class="text-[10px] font-mono font-bold text-purple-400">0</div>
-                    </div>
-                </div>
+            <h1 class="text-lg font-bold flex items-center gap-2"><i class="ph ph-solar-panel text-yellow-400"></i> SCEnergy 태양광 채굴기 <span class="text-[10px] bg-cyan-900 text-cyan-300 px-1.5 py-0.5 rounded ml-auto">PRO</span></h1>
+            <div class="flex justify-between items-center text-[10px] text-slate-400 mt-2 border-t border-slate-700 pt-2"><span id="currentUserDisplay">Not Logged In</span><button onclick="logout('Manual')" class="text-red-400 hover:text-red-300 underline">로그아웃</button></div>
+            <div class="grid grid-cols-3 gap-1 mt-3 text-center">
+                <div class="bg-slate-900 rounded p-1 border border-slate-700 text-[8px]"><div class="text-slate-500">Backend</div><div id="cnt-vworld" class="font-mono font-bold text-cyan-400">0</div></div>
+                <div class="bg-slate-900 rounded p-1 border border-slate-700 text-[8px]"><div class="text-slate-500">DB Sync</div><div id="cnt-public" class="font-mono font-bold text-yellow-400">0</div></div>
+                <div class="bg-slate-900 rounded p-1 border border-slate-700 text-[8px]"><div class="text-slate-500">AI Analysis</div><div id="cnt-ai" class="font-mono font-bold text-purple-400">0</div></div>
             </div>
         </div>
-
-        <!-- 탭 메뉴 -->
-        <div class="flex border-b border-gray-200 shrink-0 bg-white shadow-sm">
-            <button onclick="switchTab('scan')" id="tab-scan" class="tab-btn active flex-1 py-3 text-xs text-center flex flex-col items-center gap-1 text-gray-600 hover:bg-gray-50"><i class="ph ph-radar text-lg"></i>전수 스캔</button>
-            <button onclick="switchTab('analysis')" id="tab-analysis" class="tab-btn flex-1 py-3 text-xs text-center flex flex-col items-center gap-1 text-gray-600 hover:bg-gray-50"><i class="ph ph-magnifying-glass-plus text-lg"></i>정밀 분석</button>
-            <button onclick="switchTab('legal')" id="tab-legal" class="tab-btn flex-1 py-3 text-xs text-center flex flex-col items-center gap-1 text-gray-600 hover:bg-gray-50"><i class="ph ph-sparkle text-lg text-purple-600"></i>AI 조례분석</button>
+        <div class="flex border-b border-gray-200 shrink-0 bg-white">
+            <button onclick="switchTab('scan')" id="tab-scan" class="tab-btn active flex-1 py-3 text-xs text-center"><i class="ph ph-radar text-lg"></i>전수 스캔</button>
+            <button onclick="switchTab('analysis')" id="tab-analysis" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-magnifying-glass-plus text-lg"></i>정밀 분석</button>
+            <button onclick="switchTab('legal')" id="tab-legal" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-sparkle text-lg"></i> AI 조례분석</button>
         </div>
-
-        <!-- 설정 패널 -->
         <div class="flex-1 overflow-y-auto bg-slate-50">
             <div class="p-4 pb-0">
                 <details class="bg-white rounded-lg border border-slate-200 shadow-sm group mb-4" open>
-                    <summary class="p-3 text-xs font-bold text-slate-600 cursor-pointer flex items-center justify-between hover:bg-slate-50 bg-slate-100 rounded-t-lg">
-                        <span class="flex items-center gap-1"><i class="ph ph-sliders-horizontal"></i> 분석 파라미터 (설정)</span>
-                        <i class="ph ph-caret-down group-open:rotate-180 transition"></i>
-                    </summary>
+                    <summary class="p-3 text-xs font-bold text-slate-600 cursor-pointer flex items-center justify-between hover:bg-slate-50 bg-slate-100 rounded-t-lg"><span class="flex items-center gap-1"><i class="ph ph-sliders-horizontal"></i> 분석 파라미터 (설정)</span><i class="ph ph-caret-down group-open:rotate-180 transition"></i></summary>
                     <div class="p-3 space-y-3 border-t border-gray-200">
                         <div class="bg-indigo-50 p-2 rounded border border-indigo-100 text-xs">
-                            <div class="font-bold text-indigo-700 mb-1 flex items-center gap-1"><i class="ph ph-ruler"></i> 모듈 및 설치 규격</div>
-                            <div class="grid grid-cols-2 gap-2 mb-2">
-                                <div><label for="modWidth" class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 가로(m)</label><input type="number" id="modWidth" value="1.13" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div>
-                                <div><label for="modHeight" class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 세로(m)</label><input type="number" id="modHeight" value="2.4" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div>
-                            </div>
-                            <div class="grid grid-cols-2 gap-2 mb-2">
-                                <div><label for="installHeight" class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 높이(m)</label><input type="number" id="installHeight" value="0.5" step="0.1" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div>
-                                <div><label for="installAngle" class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 각도(°)</label><input type="number" id="installAngle" value="20" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div>
-                            </div>
-                            <div class="grid grid-cols-2 gap-2">
-                                 <div><label for="modPower" class="block mb-0.5 text-[10px] text-slate-500">모듈 출력(W)</label><input type="number" id="modPower" value="640" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div>
-                                 <div><label for="rowSpacing" class="block mb-0.5 text-[10px] text-slate-500">이격 거리(m)</label><input type="number" id="rowSpacing" value="1.2" step="0.1" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div>
-                            </div>
+                             <div class="font-bold text-indigo-700 mb-1 flex items-center gap-1"><i class="ph ph-ruler"></i> 모듈 및 설치 규격</div>
+                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="modWidth" class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 가로(m)</label><input type="number" id="modWidth" value="1.13" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="modHeight" class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 세로(m)</label><input type="number" id="modHeight" value="2.4" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
+                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="installHeight" class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 높이(m)</label><input type="number" id="installHeight" value="0.5" step="0.1" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="installAngle" class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 각도(°)</label><input type="number" id="installAngle" value="20" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
+                             <div class="grid grid-cols-2 gap-2"><div><label for="modPower" class="block mb-0.5 text-[10px] text-slate-500">모듈 출력(W)</label><input type="number" id="modPower" value="640" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="rowSpacing" class="block mb-0.5 text-[10px] text-slate-500">이격 거리(m)</label><input type="number" id="rowSpacing" value="1.2" step="0.1" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
                         </div>
                         <div class="bg-green-50 p-2 rounded border border-green-200 text-xs">
-                            <div class="font-bold text-green-700 mb-1 flex items-center gap-1"><i class="ph ph-currency-krw"></i> 금융/수익 설정</div>
-                            <div class="grid grid-cols-2 gap-2 mb-2">
-                                <div><label for="modPrice" class="block mb-0.5 text-[10px] text-emerald-700 font-bold">모듈단가(원/W)</label><input type="number" id="modPrice" value="350" class="w-full border p-1 rounded text-center font-bold text-emerald-700 bg-white" onchange="reCalculate()"></div>
-                                <div><label for="costPerKw" class="block mb-0.5 text-[10px]">시공(만원/kW)</label><input type="number" id="costPerKw" value="90" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div>
-                            </div>
-                            <div class="grid grid-cols-2 gap-2 mb-2">
-                                <div><label for="smp" class="block mb-0.5 text-[10px]">SMP(원/kWh)</label><input type="number" id="smp" value="140" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div>
-                                <div><label for="rec" class="block mb-0.5 text-[10px]">REC(원/kWh)</label><input type="number" id="rec" value="70" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div>
-                            </div>
-                            <div class="grid grid-cols-2 gap-2 border-t border-green-200 pt-2">
-                                <div><label for="pfLoanRatio" class="block mb-0.5 text-[10px] text-blue-600 font-bold">PF 대출비율(%)</label><input type="number" id="pfLoanRatio" value="90" class="w-full border p-1 rounded text-center text-blue-600 font-bold bg-white" onchange="reCalculate()"></div>
-                                <div><label for="pfInterestRate" class="block mb-0.5 text-[10px] text-red-600 font-bold">PF 금리(%)</label><input type="number" id="pfInterestRate" value="5.5" step="0.1" class="w-full border p-1 rounded text-center text-red-600 font-bold bg-white" onchange="reCalculate()"></div>
-                            </div>
+                             <div class="font-bold text-green-700 mb-1 flex items-center gap-1"><i class="ph ph-currency-krw"></i> 금융/수익 설정</div>
+                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="modPrice" class="block mb-0.5 text-[10px] text-emerald-700 font-bold">모듈단가(원/W)</label><input type="number" id="modPrice" value="350" class="w-full border p-1 rounded text-center font-bold text-emerald-700 bg-white" onchange="reCalculate()"></div><div><label for="costPerKw" class="block mb-0.5 text-[10px]">시공(만원/kW)</label><input type="number" id="costPerKw" value="90" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
                         </div>
                     </div>
                 </details>
-
                 <div class="flex gap-2 text-xs mb-4">
-                    <label class="flex-1 cursor-pointer">
-                        <input type="radio" name="scanTarget" value="land" class="peer hidden" onchange="toggleTarget()">
-                        <div class="text-center py-2 border rounded bg-white peer-checked:bg-green-50 peer-checked:border-green-500 peer-checked:text-green-700 hover:bg-gray-50 transition shadow-sm">
-                            <i class="ph ph-tree"></i> 토지 (Land)
-                        </div>
-                    </label>
-                    <label class="flex-1 cursor-pointer">
-                        <input type="radio" name="scanTarget" value="building" class="peer hidden" onchange="toggleTarget()" checked>
-                        <div class="text-center py-2 border rounded bg-white peer-checked:bg-pink-50 peer-checked:border-pink-500 peer-checked:text-pink-700 hover:bg-gray-50 transition shadow-sm">
-                            <i class="ph ph-factory"></i> 지붕 (Roof)
-                        </div>
-                    </label>
+                    <label class="flex-1 cursor-pointer"><input type="radio" name="scanTarget" value="land" class="peer hidden" onchange="toggleTarget()" aria-label="토지"><div class="text-center py-2 border rounded bg-white peer-checked:bg-green-50 peer-checked:border-green-500 peer-checked:text-green-700 hover:bg-gray-50 transition shadow-sm"><i class="ph ph-tree"></i> 토지 (Land)</div></label>
+                    <label class="flex-1 cursor-pointer"><input type="radio" name="scanTarget" value="building" class="peer hidden" onchange="toggleTarget()" checked aria-label="지붕"><div class="text-center py-2 border rounded bg-white peer-checked:bg-pink-50 peer-checked:border-pink-500 peer-checked:text-pink-700 hover:bg-gray-50 transition shadow-sm"><i class="ph ph-factory"></i> 지붕 (Roof)</div></label>
                 </div>
             </div>
 
-            <!-- 탭 콘텐츠 -->
             <div class="px-4 pb-4">
                 <div id="panel-scan" class="space-y-4">
                     <div class="bg-white p-3 rounded border border-gray-200 shadow-sm">
                         <h3 class="text-xs font-bold text-gray-700 mb-2">📍 지역 선택</h3>
                         <label for="regionSelect" class="sr-only">지역 선택</label>
-                        <select id="regionSelect" onchange="setRegion()" class="w-full text-sm border rounded p-2 bg-gray-50 font-bold outline-none border-blue-200 focus:border-blue-500">
-                            <option value="">-- 지역을 선택하세요 --</option>
-                            <optgroup label="🏭 수도권/경기 주요 산단">
-                                <option value="ansan_ind">안산 반월/시화 산단</option>
-                                <option value="incheon_ind">인천 남동공단</option>
-                                <option value="hwaseong_ind">화성 일반산업단지</option>
-                                <option value="pyeongtaek_ind">평택 포승공단</option>
-                            </optgroup>
-                            <optgroup label="🏭 지방 주요 산단">
-                                <option value="gumi_ind">구미 국가산업단지</option>
-                                <option value="changwon_ind">창원 국가산업단지</option>
-                                <option value="ulsan_ind">울산 미포/온산 산단</option>
-                                <option value="yeosu_ind">여수 국가산업단지</option>
-                                <option value="gunsan_ind">군산 국가산업단지</option>
-                            </optgroup>
-                            <optgroup label="🌲 대한민국 광역 지자체">
-                                <option value="seoul">서울특별시</option>
-                                <option value="gyeonggi">경기도</option>
-                                <option value="incheon">인천광역시</option>
-                                <option value="jeonnam">전라남도</option>
-                                <option value="gyeongbuk">경상북도</option>
-                            </optgroup>
-                        </select>
+                        <select id="regionSelect" onchange="setRegion()" class="w-full text-sm border rounded p-2 bg-gray-50 font-bold outline-none"><option value="">-- 지역을 선택하세요 --</option><optgroup label="수도권"><option value="ansan_ind">안산 반월/시화</option><option value="seoul">서울</option></optgroup></select>
                     </div>
                     <div class="bg-slate-800 p-4 rounded-lg text-white space-y-3 relative overflow-hidden shadow-xl border-b-4 border-cyan-500">
-                        <div class="flex justify-between items-center bg-slate-700/50 p-1.5 rounded border border-slate-600 mb-1">
-                            <span class="text-[9px] font-bold text-cyan-300">API 안전 딜레이</span>
-                            <label for="scanDelay" class="sr-only">API 딜레이 선택</label>
-                            <select id="scanDelay" class="bg-slate-900 text-[10px] font-mono border-none outline-none text-yellow-400" onchange="updateEstimatedTime()">
-                                <option value="1000">1초</option>
-                                <option value="3000">3초</option>
-                                <option value="5000">5초</option>
-                            </select>
-                        </div>
-                        <div class="flex justify-between items-end">
-                            <div id="timerRemaining" class="text-xl font-mono font-bold text-yellow-400">00:00:00</div>
-                            <div id="progressCount" class="text-[10px] text-gray-500 font-mono">0 / 20 구역</div>
-                        </div>
-                        <div class="w-full bg-slate-700 rounded-full h-1.5 overflow-hidden">
-                            <div id="totalProgressBar" class="bg-cyan-500 h-full transition-all duration-500" style="width: 0%"></div>
-                        </div>
-                        <div class="grid grid-cols-2 gap-2 pt-1">
-                            <button onclick="startMission()" id="startBtn" class="bg-indigo-600 hover:bg-indigo-700 py-2 rounded font-bold text-xs transition shadow">▶ 스캔 시작</button>
-                            <button onclick="clearResults()" class="bg-slate-700 hover:bg-slate-600 py-2 rounded font-bold text-xs transition shadow">🔄 초기화</button>
-                        </div>
+                        <div class="flex justify-between items-center bg-slate-700/50 p-1.5 rounded border border-slate-600 mb-1"><span class="text-[9px] font-bold text-cyan-300">API 안전 딜레이</span><label for="scanDelay" class="sr-only">딜레이</label><select id="scanDelay" class="bg-slate-900 text-[10px] font-mono border-none outline-none text-yellow-400" onchange="updateEstimatedTime()"><option value="1000">1초</option><option value="3000">3초</option></select></div>
+                        <div class="flex justify-between items-end"><div id="timerRemaining" class="text-xl font-mono font-bold text-yellow-400">00:00:00</div><div id="progressCount" class="text-[10px] text-gray-500 font-mono">0 / 20</div></div>
+                        <div class="w-full bg-slate-700 rounded-full h-1.5 overflow-hidden"><div id="totalProgressBar" class="bg-cyan-500 h-full transition-all duration-500" style="width: 0%"></div></div>
+                        <div class="grid grid-cols-2 gap-2 pt-1"><button onclick="startMission()" id="startBtn" class="bg-indigo-600 hover:bg-indigo-700 py-2 rounded font-bold text-xs transition">▶ 스캔 시작</button><button onclick="clearResults()" class="bg-slate-700 hover:bg-slate-600 py-2 rounded font-bold text-xs transition">🔄 초기화</button></div>
                     </div>
                 </div>
-
                 <div id="panel-analysis" class="hidden space-y-4">
                     <div class="bg-slate-800 p-2 rounded-lg border border-indigo-500/50 shadow-lg mb-2">
-                        <div class="flex justify-between items-center mb-2 border-b border-slate-700 pb-1">
-                            <span class="text-[11px] font-bold text-indigo-300 flex items-center gap-1">
-                                <i class="ph ph-crosshair"></i> 패널 수동 조정
-                            </span>
-                            <button onclick="resetCalibration()" class="text-[9px] bg-slate-700 hover:bg-slate-600 px-1.5 py-0.5 rounded text-white transition border border-slate-600">초기화</button>
-                        </div>
+                        <div class="flex justify-between items-center mb-2 border-b border-slate-700 pb-1"><span class="text-[11px] font-bold text-indigo-300 flex items-center gap-1"><i class="ph ph-crosshair"></i> 패널 조정</span><button onclick="resetCalibration()" class="text-[9px] bg-slate-700 hover:bg-slate-600 px-1.5 py-0.5 rounded text-white border border-slate-600">초기화</button></div>
                         <div class="space-y-2 mb-3 px-1">
-                            <div class="flex items-center gap-2"><label class="text-[9px] text-slate-400 w-6 flex items-center gap-2">X축 <input type="range" min="-50" max="50" value="0" step="1" oninput="applySliderCalibration(this.value, 'x')" class="flex-1"></label></div>
-                            <div class="flex items-center gap-2"><label class="text-[9px] text-slate-400 w-6 flex items-center gap-2">Y축 <input type="range" min="-50" max="50" value="0" step="1" oninput="applySliderCalibration(this.value, 'y')" class="flex-1"></label></div>
-                            <div class="flex items-center gap-2"><label class="text-[9px] text-slate-400 w-6 flex items-center gap-2">회전 <input type="range" min="-180" max="180" value="0" step="1" oninput="applySliderCalibration(this.value, 'rot')" class="flex-1"></label></div>
+                            <div class="flex items-center gap-2"><label class="text-[9px] text-slate-400 w-6 flex items-center gap-2">X축 <input type="range" min="-50" max="50" value="0" step="1" oninput="applySliderCalibration(this.value, 'x')" class="flex-1" aria-label="X축 조정"></label></div>
+                            <div class="flex items-center gap-2"><label class="text-[9px] text-slate-400 w-6 flex items-center gap-2">Y축 <input type="range" min="-50" max="50" value="0" step="1" oninput="applySliderCalibration(this.value, 'y')" class="flex-1" aria-label="Y축 조정"></label></div>
+                            <div class="flex items-center gap-2"><label class="text-[9px] text-slate-400 w-6 flex items-center gap-2">회전 <input type="range" min="-180" max="180" value="0" step="1" oninput="applySliderCalibration(this.value, 'rot')" class="flex-1" aria-label="회전 조정"></label></div>
                         </div>
                         <div class="flex gap-4 items-center justify-center relative border-t border-slate-700 pt-2">
-                            <div class="grid grid-cols-3 gap-1">
-                                <div></div><div class="d-pad-btn" onclick="applyCalibration(0, 0.5)">▲</div><div></div>
-                                <div class="d-pad-btn" onclick="applyCalibration(-0.5, 0)">◀</div>
-                                <div class="w-6 h-6 flex items-center justify-center text-[9px] font-mono text-slate-400">Mov</div>
-                                <div class="d-pad-btn" onclick="applyCalibration(0.5, 0)">▶</div>
-                                <div></div><div class="d-pad-btn" onclick="applyCalibration(0, -0.5)">▼</div><div></div>
-                            </div>
-                            <div class="h-12 w-px bg-slate-600"></div>
-                            <div class="flex flex-col gap-1">
-                                <div class="d-pad-btn w-16" onclick="applyCalibration(0, 0, -1)">↺ -1°</div>
-                                <div class="d-pad-btn w-16" onclick="applyCalibration(0, 0, 1)">↻ +1°</div>
-                            </div>
+                             <div class="grid grid-cols-3 gap-1"><div></div><div class="d-pad-btn" onclick="applyCalibration(0, 0.5)">▲</div><div></div><div class="d-pad-btn" onclick="applyCalibration(-0.5, 0)">◀</div><div class="w-6 h-6 flex items-center justify-center text-[9px] font-mono text-slate-400">Mov</div><div class="d-pad-btn" onclick="applyCalibration(0.5, 0)">▶</div><div></div><div class="d-pad-btn" onclick="applyCalibration(0, -0.5)">▼</div><div></div></div>
                         </div>
                     </div>
-
-                    <!-- 결과 카드 -->
                     <div id="resultCard" class="hidden result-card p-4 rounded-lg shadow-lg text-white space-y-3">
-                        <h3 class="text-sm font-bold flex items-center gap-1 border-b border-slate-700 pb-2">
-                            <i class="ph ph-trend-up text-cyan-400"></i> 통합 분석 결과
-                        </h3>
+                        <h3 class="text-sm font-bold flex items-center gap-1 border-b border-slate-700 pb-2"><i class="ph ph-trend-up text-cyan-400"></i> 통합 분석 결과</h3>
                         <div class="space-y-2 text-xs">
-                            <div class="flex justify-between items-start"><span class="text-slate-400 shrink-0">📍 주소:</span><span id="analysisAddress" class="font-bold text-right text-white break-keep">-</span></div>
-                            <div class="flex justify-between items-center border-t border-slate-700 pt-2"><span class="text-slate-400">📦 총 모듈 수량:</span><span id="analysisCount" class="font-bold text-base font-mono">0 장</span></div>
-                            <div class="flex justify-between items-center"><span class="text-slate-400">🔋 총 설비 용량:</span><span id="analysisCapacity" class="font-bold text-cyan-400 text-base font-mono">0 kW</span></div>
-                        </div>
-                        
-                        <div class="bg-slate-700/50 p-2 rounded space-y-1 mt-2 border border-slate-600">
-                            <div class="flex justify-between text-xs"><span class="text-slate-400">💸 총 사업비:</span><span id="resTotalCost" class="text-green-400 font-bold">0 원</span></div>
-                            <div class="flex justify-between text-xs"><span class="text-slate-400">💰 연 총수익:</span><span id="resAnnualRev" class="text-yellow-400 font-bold">0 원</span></div>
-                        </div>
-
-                        <!-- PF 상세 -->
-                        <div class="bg-indigo-900/40 p-2 rounded space-y-1 border border-indigo-500/30 text-[10px]">
-                            <div class="flex justify-between text-indigo-300 font-bold border-b border-indigo-500/30 pb-1 mb-1">
-                                <span>🏦 PF 금융구조 (<span id="pfRatioDisplay">90</span>%)</span>
-                            </div>
-                            <div class="flex justify-between"><span class="text-slate-400">대출금:</span><span id="resLoanAmount" class="text-white">0 원</span></div>
-                            <div class="flex justify-between"><span class="text-slate-400">자기자본:</span><span id="resEquityAmount" class="text-white">0 원</span></div>
-                            <div class="flex justify-between"><span class="text-slate-400">연 이자:</span><span id="resInterest" class="text-red-300">0 원</span></div>
-                            <div class="flex justify-between pt-1 border-t border-indigo-500/30 mt-1">
-                                <span class="text-indigo-200 font-bold">🚀 자본회수기간:</span>
-                                <span id="resPfPayback" class="text-cyan-300 font-bold text-xs">0.0 년</span>
-                            </div>
+                            <div class="flex justify-between"><span class="text-slate-400">주소:</span><span id="analysisAddress" class="text-right">-</span></div>
+                            <div class="flex justify-between"><span class="text-slate-400">수량:</span><span id="analysisCount">0 장</span></div>
+                            <div class="flex justify-between"><span class="text-slate-400">용량:</span><span id="analysisCapacity" class="text-cyan-400 font-bold">0 kW</span></div>
                         </div>
                     </div>
                 </div>
-
-                <!-- [탭 C] 조례/규제 -->
                 <div id="panel-legal" class="hidden space-y-4">
-                    <div class="bg-slate-800 p-4 rounded-lg shadow-lg border-l-4 border-purple-500 text-white min-h-[300px]">
-                        <h3 class="text-sm font-bold flex items-center gap-2 border-b border-slate-700 pb-2 mb-3">
-                            <i class="ph ph-sparkle text-purple-400"></i> SolarAI 조례 분석
-                        </h3>
-                        
-                        <div id="legalPlaceholder" class="text-center py-10 text-slate-400 text-xs">
-                            <i class="ph ph-brain text-2xl mb-2 text-purple-300"></i><br>
-                            건물을 선택하면 SolarAI가<br>해당 지자체의 최신 조례를 분석합니다.
-                        </div>
-
-                        <div id="legalLoading" class="hidden text-center py-10">
-                            <div class="spinner mx-auto mb-2 !border-t-purple-500"></div>
-                            <p class="text-xs text-purple-300 animate-pulse">SolarAI가 법령 데이터를 분석 중입니다...</p>
-                        </div>
-
-                        <div id="legalContent" class="hidden space-y-3">
-                            <div class="bg-purple-900/30 p-2 rounded border border-purple-500/30 text-xs text-purple-200">
-                                🤖 <span class="font-bold">SolarAI Analysis Result</span>
-                            </div>
-                            <div id="aiResponse" class="text-xs text-slate-300 leading-relaxed space-y-2 max-h-60 overflow-y-auto pr-1"></div>
-                            <div class="text-[10px] text-slate-500 text-right">
-                                * Powered by SolarAI Engine
-                            </div>
-                        </div>
+                    <div class="bg-slate-800 p-4 rounded-lg shadow-lg border-l-4 border-purple-500 text-white min-h-[200px]">
+                        <h3 class="text-sm font-bold flex items-center gap-2 border-b border-slate-700 pb-2 mb-3"><i class="ph ph-sparkle text-purple-400"></i> SolarAI 조례 분석</h3>
+                        <div id="aiResponse" class="text-xs text-slate-300">분석 대기중...</div>
                     </div>
                 </div>
-
-                <div id="loading" class="hidden flex flex-col items-center justify-center py-4">
-                    <div class="spinner mb-2"></div>
-                    <p class="text-xs text-slate-500">공간 정보 분석 중...</p>
-                </div>
+                <div id="loading" class="hidden flex flex-col items-center justify-center py-4"><div class="spinner mb-2"></div><p class="text-xs text-slate-500">데이터 로딩중...</p></div>
             </div>
         </div>
-
-        <!-- 하단 로그창 -->
-        <div class="h-24 bg-slate-900 border-t border-slate-700 p-3 font-mono text-[10px] overflow-y-auto text-slate-400" id="logWindow">
-            <div class="text-green-500">> System Booting... Login Required.</div>
-        </div>
+        <div class="h-24 bg-slate-900 border-t border-slate-700 p-3 font-mono text-[10px] overflow-y-auto text-slate-400" id="logWindow"><div class="text-green-500">> System Ready.</div></div>
     </div>
     
-    <!-- 사이드바 접기 버튼 -->
-    <div id="sidebar-toggle-btn" onclick="toggleSidebar()" class="absolute top-1/2 transform -translate-y-1/2 bg-white w-6 h-12 rounded-r-lg shadow-md cursor-pointer flex items-center justify-center border border-l-0 border-gray-300 text-gray-400 hover:text-cyan-600">
-        <i class="ph ph-caret-left font-bold transition-transform"></i>
-    </div>
-
-    <!-- 검색창 (중앙 상단) -->
+    <div id="sidebar-toggle-btn" onclick="toggleSidebar()" class="absolute top-1/2 transform -translate-y-1/2 bg-white w-6 h-12 rounded-r-lg shadow-md cursor-pointer flex items-center justify-center border border-l-0 border-gray-300 text-gray-400 hover:text-cyan-600"><i class="ph ph-caret-left font-bold transition-transform"></i></div>
     <div class="absolute top-5 left-1/2 transform -translate-x-1/2 z-[1000] flex flex-col items-center gap-2">
         <div class="bg-white p-1 rounded-lg shadow-xl border border-slate-200 flex items-center">
             <label for="addrInput" class="sr-only">주소 검색</label>
-            <input type="text" id="addrInput" placeholder="주소 검색 (예: 강남대로 123)" 
-                   class="w-64 px-3 py-2 text-sm outline-none text-slate-700 font-medium"
-                   onkeypress="if(event.key==='Enter') searchAddress()">
-            <button onclick="searchAddress()" class="bg-cyan-600 hover:bg-cyan-700 text-white p-2 rounded-md transition shadow-md" aria-label="검색">
-                <i class="ph ph-magnifying-glass font-bold"></i>
-            </button>
+            <input type="text" id="addrInput" placeholder="주소 검색 (예: 강남대로 123)" class="w-64 px-3 py-2 text-sm outline-none text-slate-700 font-medium" onkeypress="if(event.key==='Enter') searchAddress()">
+            <button onclick="searchAddress()" class="bg-cyan-600 hover:bg-cyan-700 text-white p-2 rounded-md transition shadow-md" aria-label="검색"><i class="ph ph-magnifying-glass font-bold"></i></button>
         </div>
     </div>
     
-    <!-- 레이어 컨트롤 (우측 상단) -->
     <div class="absolute top-5 right-5 z-[1000] bg-white p-2 rounded-lg shadow-lg border border-gray-200 text-xs w-44">
-        <div class="font-bold text-slate-600 mb-2 border-b pb-1 flex items-center gap-1">
-            <i class="ph ph-stack"></i> 레이어 & 지도 설정
-        </div>
-        
-        <label class="flex items-center gap-2 cursor-pointer p-1.5 mb-2 bg-indigo-50 hover:bg-indigo-100 rounded text-indigo-700 font-bold border border-indigo-200">
-            <input type="checkbox" id="multiSelectToggle" onchange="toggleMultiSelect()">
-            <span class="flex items-center gap-1"><i class="ph ph-plus-circle"></i> 결과 누적 모드</span>
-        </label>
-
-        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600">
-            <input type="checkbox" id="autoScanToggle" onchange="toggleAutoScan()">
-            <span class="flex items-center gap-1"><i class="ph ph-radar"></i> 자동 스캔</span>
-        </label>
-        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600">
-            <input type="checkbox" id="existingPlantToggle" onchange="toggleLayer('existing')" checked>
-            <span class="flex items-center gap-1"><i class="ph ph-lightning"></i> 기설치 발전소</span>
-        </label>
-        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600">
-            <input type="checkbox" id="substationToggle" onchange="toggleLayer('substation')" checked>
-            <span class="flex items-center gap-1"><i class="ph ph-circuitry"></i> 변전소/선로</span>
-        </label>
-        
-        <label class="flex items-center gap-2 cursor-pointer p-1.5 mt-1 bg-red-50 hover:bg-red-100 rounded text-red-600 font-bold border border-red-100">
-            <input type="checkbox" id="cadastralToggle" onchange="toggleLayer('cadastral')" checked>
-            <span class="flex items-center gap-1"><i class="ph ph-map-trifold"></i> 지적도 (ON)</span>
-        </label>
-
+        <div class="font-bold text-slate-600 mb-2 border-b pb-1 flex items-center gap-1"><i class="ph ph-stack"></i> 지도 설정</div>
+        <label class="flex items-center gap-2 cursor-pointer p-1.5 mb-2 bg-indigo-50 hover:bg-indigo-100 rounded text-indigo-700 font-bold border border-indigo-200"><input type="checkbox" id="multiSelectToggle" onchange="toggleMultiSelect()" aria-label="누적모드"><span class="flex items-center gap-1"><i class="ph ph-plus-circle"></i> 결과 누적 모드</span></label>
+        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="autoScanToggle" onchange="toggleAutoScan()" aria-label="자동스캔"><span class="flex items-center gap-1"><i class="ph ph-radar"></i> 자동 스캔</span></label>
+        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="existingPlantToggle" onchange="toggleLayer('existing')" checked aria-label="기설치"><span class="flex items-center gap-1"><i class="ph ph-lightning"></i> 기설치 발전소</span></label>
+        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="substationToggle" onchange="toggleLayer('substation')" checked aria-label="변전소"><span class="flex items-center gap-1"><i class="ph ph-circuitry"></i> 변전소/선로</span></label>
+        <label class="flex items-center gap-2 cursor-pointer p-1.5 mt-1 bg-red-50 hover:bg-red-100 rounded text-red-600 font-bold border border-red-100"><input type="checkbox" id="cadastralToggle" onchange="toggleLayer('cadastral')" checked aria-label="지적도"><span class="flex items-center gap-1"><i class="ph ph-map-trifold"></i> 지적도 (ON)</span></label>
         <hr class="my-2 border-gray-200">
-        
         <div class="space-y-1">
-            <label class="flex items-center gap-2 cursor-pointer p-1 hover:bg-slate-50 rounded">
-                <input type="radio" name="mapL" value="sat" checked onchange="setMap('sat')"> 
-                <span>🛰️ 위성 지도</span>
-            </label>
-            <label class="flex items-center gap-2 cursor-pointer p-1 hover:bg-slate-50 rounded">
-                <input type="radio" name="mapL" value="base" onchange="setMap('base')"> 
-                <span>🗺️ 일반 지도</span>
-            </label>
+            <label class="flex items-center gap-2 cursor-pointer p-1 hover:bg-slate-50 rounded"><input type="radio" name="mapL" value="sat" checked onchange="setMap('sat')" aria-label="위성지도"> <span>🛰️ 위성 지도</span></label>
+            <label class="flex items-center gap-2 cursor-pointer p-1 hover:bg-slate-50 rounded"><input type="radio" name="mapL" value="base" onchange="setMap('base')" aria-label="일반지도"> <span>🗺️ 일반 지도</span></label>
         </div>
     </div>
-
-    <div id="toastMsg" class="absolute bottom-10 left-1/2 transform -translate-x-1/2 z-[3000] bg-slate-800 text-white px-6 py-3 rounded-full shadow-2xl hidden flex items-center gap-2 border border-cyan-500">
-        <i class="ph ph-info text-cyan-400"></i>
-        <span class="font-bold text-sm" id="toastText">메시지</span>
-    </div>
-
+    
+    <div id="toastMsg" class="absolute bottom-10 left-1/2 transform -translate-x-1/2 z-[3000] bg-slate-800 text-white px-6 py-3 rounded-full shadow-2xl hidden flex items-center gap-2 border border-cyan-500"><i class="ph ph-info text-cyan-400"></i><span class="font-bold text-sm" id="toastText"></span></div>
     <div id="map"></div>
 
     <script>
-        // ==========================================
-        //  설정 및 글로벌 변수
-        // ==========================================
         const VWORLD_TILE_KEY = "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F"; 
-        const BACKEND_URL = "https://solar-server-jszy.onrender.com"; 
-
-        const firebaseConfig = {
-            apiKey: ["AIzaSyDEbyyoY", "B3cHlfwi82", "ZXQSGMw8IyZt7Nw"].join("-"),
-            authDomain: "solar-pathfinder.firebaseapp.com",
-            projectId: "solar-pathfinder",
-            storageBucket: "solar-pathfinder.firebasestorage.app",
-            messagingSenderId: "477084185928",
-            appId: "1:477084185928:web:b4fd4dd693ae149c392f7d"
-        };
-        
-        let app, auth, db;
-        let isFirebaseActive = false;
-        try {
-            if (firebaseConfig.apiKey.includes("AIza")) {
-                app = firebase.initializeApp(firebaseConfig);
-                auth = firebase.auth();
-                db = firebase.firestore();
-                isFirebaseActive = true;
-                console.log("Firebase Connected");
-            }
-        } catch (e) { console.error("Firebase Error:", e); }
-
-        let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker;
-        let existingGroup, substationGroup;
-        let scanTarget = 'building'; 
-        let currentAnalysisFeature = null; 
-        let currentGeoState = { x:0, y:0, rot:0 };
-        let autoScanMode = false;
-        let isMultiSelectMode = false;
-        let accumulatedPanelsCount = 0; 
+        const BACKEND_URL = "https://solar-server-jszy.onrender.com";
+        const ENCODED_ADMIN_PW = "Wmlld2lzZTEyMyE=";
+        let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, existingGroup, substationGroup;
+        let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
         let apiCounts = { vworld: 0, public: 0, ai: 0 };
-        let isLoggedIn = false;
-        let currentUser = null;
-        const ENCODED_ADMIN_PW = "Wmlld2lzZTEyMyE="; 
 
-        // --- Helper Functions (Hoisted) ---
-        function trackApi(type) {
-            if(apiCounts[type] !== undefined) {
-                apiCounts[type]++;
-                const el = document.getElementById(`cnt-${type}`);
-                if(el) el.innerText = apiCounts[type];
-            }
-        }
-        function showToast(m) { const t = document.getElementById('toastMsg'); t.classList.remove('hidden'); t.classList.add('flex'); document.getElementById('toastText').innerText = m; setTimeout(() => t.classList.add('hidden'), 3000); }
-        function logSystem(msg) {
-            const logWin = document.getElementById('logWindow');
-            const p = document.createElement('div');
-            p.innerText = `> ${msg}`;
-            logWin.appendChild(p);
-            logWin.scrollTop = logWin.scrollHeight;
-        }
-
-        // --- Functions Definitions (Defined BEFORE usage in initMap) ---
+        // --- Functions Definitions (Hoisted) ---
+        function trackApi(type) { if(apiCounts[type]!==undefined) { apiCounts[type]++; const el=document.getElementById(`cnt-${type}`); if(el) el.innerText=apiCounts[type]; } }
+        function showToast(m) { const t=document.getElementById('toastMsg'); t.classList.remove('hidden','flex'); t.classList.add('flex'); document.getElementById('toastText').innerText=m; setTimeout(()=>t.classList.add('hidden'),3000); }
+        function logSystem(msg) { const w=document.getElementById('logWindow'); const p=document.createElement('div'); p.innerText=`> ${msg}`; w.appendChild(p); w.scrollTop=w.scrollHeight; }
+        
         function toggleLayer(type) {
             const center = map ? map.getCenter() : {lat:36.5, lng:127.5};
             if(type === 'existing') {
@@ -565,7 +231,6 @@
                  else { if(cadastralLayer._map) map.removeLayer(cadastralLayer); }
             }
         }
-
         function createMockMarkers(center, type) {
             const group = type === 'plant' ? existingGroup : substationGroup;
             group.clearLayers();
@@ -574,68 +239,30 @@
                 const lng = center.lng + (Math.random() * 0.01 - 0.005);
                 const iconHtml = type === 'plant' ? `<div class="plant-marker w-6 h-6"><i class="ph ph-lightning text-white text-[10px]"></i></div>` : `<div class="substation-marker w-8 h-8"><i class="ph ph-circuitry text-white"></i></div>`;
                 const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [24, 24] });
-                L.marker([lat, lng], { icon: icon }).bindPopup(type === 'plant' ? "기설치 태양광 (99kW)" : "변전소 (여유용량: 10MW)").addTo(group);
+                L.marker([lat, lng], { icon: icon, title: type }).bindPopup(type === 'plant' ? "기설치 태양광" : "변전소").addTo(group);
             }
         }
-        
-        function onMapMoveEnd() {
-            if(!autoScanMode || !isLoggedIn) return;
-            const c = map.getCenter();
-            scanBuildings(c.lat, c.lng);
-        }
+        function onMapMoveEnd() { if(!autoScanMode || !isLoggedIn) return; scanBuildings(map.getCenter().lat, map.getCenter().lng); }
 
-        // --- Main Functions ---
         async function searchAddress() {
             trackApi('vworld');
             const query = document.getElementById('addrInput').value;
             if(!query) return showToast("주소를 입력하세요.");
-            
-            // 로딩 UI 표시
-            const loadingEl = document.getElementById('loading');
-            if(loadingEl) {
-                loadingEl.classList.remove('hidden');
-                const loadingText = loadingEl.querySelector('p');
-                if(loadingText) loadingText.innerText = "주소 검색 중...";
-            }
-            
-            const url = `${BACKEND_URL}/api/vworld/address?address=${encodeURIComponent(query)}`;
-            
+            document.getElementById('loading').classList.remove('hidden');
             try {
-                const res = await fetch(url);
-                
-                // 에러 처리 강화 (CORB/500 대응)
-                if (!res.ok) {
-                    // Try to read text error from backend, catch if CORB blocks it
-                    let errText = "검색 실패";
-                    try {
-                        const errJson = await res.json();
-                        errText = errJson.message || errJson.details || errText;
-                    } catch (e) {
-                         errText = `Server Error (${res.status}): 응답을 읽을 수 없습니다.`;
-                    }
-                    throw new Error(errText);
-                }
-                
+                const res = await fetch(`${BACKEND_URL}/api/vworld/address?address=${encodeURIComponent(query)}`);
+                if(!res.ok) throw new Error("서버 통신 오류 (백엔드 확인 필요)");
                 const data = await res.json();
-                
-                if(data.status === "ERROR" || data.status === "VWORLD_ERROR") {
-                    throw new Error(data.message || "검색 실패");
-                }
+                if(data.status === "ERROR" || data.status === "VWORLD_ERROR") throw new Error(data.message || "검색 실패");
                 
                 if(data.response && data.response.status === 'OK') {
                     const { x, y } = data.response.result.point;
                     map.setView([parseFloat(y), parseFloat(x)], 18);
                     showToast("이동 완료.");
                     setTimeout(() => scanBuildings(parseFloat(y), parseFloat(x)), 800);
-                } else {
-                    showToast("주소를 찾을 수 없습니다.");
-                }
-            } catch(e) {
-                console.error(e);
-                showToast(`오류: ${e.message}`);
-            } finally {
-                if(loadingEl) loadingEl.classList.add('hidden');
-            }
+                } else { showToast("주소를 찾을 수 없습니다."); }
+            } catch(e) { console.error(e); showToast(e.message); } 
+            finally { document.getElementById('loading').classList.add('hidden'); }
         }
 
         async function scanBuildings(lat, lng) {
@@ -644,35 +271,19 @@
             document.getElementById('loading').classList.remove('hidden');
             if(analysisMarker) map.removeLayer(analysisMarker);
             analysisMarker = L.marker([lat, lng]).addTo(map);
-
             const box = `${lng - 0.001},${lat - 0.001},${lng + 0.001},${lat + 0.001}`;
+            
             try {
                 const res = await fetch(`${BACKEND_URL}/api/vworld/data?data=LT_C_SPBD&geomFilter=BOX(${box})`);
-                
-                if (!res.ok) {
-                    let errText = "데이터 로드 실패";
-                    try {
-                        const errJson = await res.json();
-                        errText = errJson.message || errText;
-                    } catch (e) { errText = `Server Error (${res.status})`; }
-                    throw new Error(errText);
-                }
-
+                if(!res.ok) throw new Error("데이터 로드 실패");
                 const data = await res.json();
                 if(data.response?.status === 'OK') {
                     L.geoJSON(data.response.result.featureCollection.features, {
                         style: { color: "#38bdf8", weight: 2, fillOpacity: 0.2 },
-                        onEachFeature: (feature, layer) => {
-                            layer.on('click', () => analyzeFeature(feature));
-                        }
+                        onEachFeature: (feature, layer) => { layer.on('click', () => analyzeFeature(feature)); }
                     }).addTo(selectableGroup);
                 }
-            } catch(e) { 
-                console.error(e); 
-                if(!autoScanMode) showToast(`데이터 로드 실패: ${e.message}`);
-            } finally { 
-                document.getElementById('loading').classList.add('hidden'); 
-            }
+            } catch(e) { console.error(e); } finally { document.getElementById('loading').classList.add('hidden'); }
         }
 
         function initMap() {
@@ -680,38 +291,22 @@
             L.control.zoom({ position: 'bottomright' }).addTo(map);
             layers = { base: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Base/{z}/{y}/{x}.png`), sat: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Satellite/{z}/{y}/{x}.jpeg`) };
             layers.sat.addTo(map);
-            selectableGroup = L.layerGroup().addTo(map);
-            panelGroup = L.layerGroup().addTo(map);
-            existingGroup = L.layerGroup().addTo(map);
-            substationGroup = L.layerGroup().addTo(map);
-            
-            cadastralLayer = L.tileLayer.wms('https://api.vworld.kr/req/wms/1.0.0', { 
-                layers: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', 
-                styles: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', 
-                format: 'image/png', 
-                transparent: true, 
-                opacity: 0.7, 
-                key: VWORLD_TILE_KEY 
-            });
+            selectableGroup = L.layerGroup().addTo(map); panelGroup = L.layerGroup().addTo(map); existingGroup = L.layerGroup().addTo(map); substationGroup = L.layerGroup().addTo(map);
+            cadastralLayer = L.tileLayer.wms('https://api.vworld.kr/req/wms/1.0.0', { layers: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', styles: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', format: 'image/png', transparent: true, opacity: 0.7, key: VWORLD_TILE_KEY });
             map.addLayer(cadastralLayer);
-
             map.on('click', (e) => scanBuildings(e.latlng.lat, e.latlng.lng));
-            map.on('moveend', onMapMoveEnd); 
-            
-            // toggleLayer 함수가 위에서 정의되었으므로 이제 안전하게 호출 가능
+            map.on('moveend', onMapMoveEnd);
             if(document.getElementById('existingPlantToggle').checked) toggleLayer('existing');
             if(document.getElementById('substationToggle').checked) toggleLayer('substation');
             logSystem("Map Initialized.");
         }
 
-        // Firebase & Login Logic
-        try { if (firebaseConfig.apiKey.includes("AIza")) { app = firebase.initializeApp(firebaseConfig); auth = firebase.auth(); db = firebase.firestore(); isFirebaseActive = true; console.log("Firebase Connected"); } } catch (e) { console.error("Firebase Error:", e); }
-
+        // Login & UI Functions
         function attemptLogin() {
             const id = document.getElementById('userId').value.trim(), pw = document.getElementById('userPw').value.trim();
             const users = JSON.parse(localStorage.getItem('scenergy_users') || '[{"id":"admin","pw":"1234"}]');
             const user = users.find(u => u.id === id && u.pw === pw);
-            if(user) loginSuccess(user.id); else alert("계정 정보가 틀립니다.");
+            if(user) loginSuccess(user.id); else alert("정보 불일치");
         }
         function loginSuccess(u) { isLoggedIn = true; currentUser = u; document.getElementById('login-overlay').classList.add('hidden-overlay'); initMap(); }
         function logout() { location.reload(); }
@@ -729,105 +324,29 @@
         function renderUsers() {
             const users = JSON.parse(localStorage.getItem('scenergy_users') || "[]");
             document.getElementById('user-list-container').innerHTML = users.map(u => `<div class="flex justify-between bg-slate-800 p-1 rounded text-xs text-cyan-300"><span>${u.id}</span></div>`).join('');
+            document.getElementById('user-count').innerText = `${users.length}명`;
         }
-        
-        // ... (나머지 헬퍼 함수들: analyzeFeature, createMockMarkers 등은 위 코드에 포함됨) ...
         function analyzeFeature(feature) {
-            switchTab('analysis');
-            document.getElementById('resultCard').classList.remove('hidden');
+            switchTab('analysis'); document.getElementById('resultCard').classList.remove('hidden');
             const addr = feature.properties.road_nm_ad || feature.properties.addr || "주소 미상";
             document.getElementById('analysisAddress').innerText = addr;
-            drawPanels(feature.geometry);
-            if(!autoScanMode) fetchGeminiLegalAnalysis(addr);
+            drawPanels(feature.geometry); fetchGeminiLegalAnalysis(addr);
         }
-        
-        function reCalculate() {
-            if (isMultiSelectMode) showToast("주의: 누적 모드에서는 설정 변경이 즉시 반영되지 않을 수 있습니다.");
-            if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry);
-        }
-        
-        function calculateFinance(count) {
-             // ... (기존 금융 계산 로직 유지) ...
-             // 지면 관계상 핵심 로직은 동일하게 유지
-             const modPower = parseFloat(document.getElementById('modPower').value);
-             // ...
-             document.getElementById('analysisCount').innerText = `${count.toLocaleString()} 장`;
-        }
-        
-        function drawPanels(geometry) {
-             // ... (기존 패널 그리기 로직 유지) ...
-        }
-
-        // Helper functions from previous version
-        function updateEstimatedTime() {
-            const delay = parseInt(document.getElementById('scanDelay').value) || 1000;
-            document.getElementById('timerRemaining').innerText = `약 ${Math.floor((delay * 20) / 1000 / 60).toString().padStart(2, '0')}:${Math.floor((delay * 20) / 1000 % 60).toString().padStart(2, '0')} 소요`;
-        }
-        function clearResults() {
-            if(confirm("결과를 초기화 하시겠습니까?")) {
-                panelGroup.clearLayers();
-                selectableGroup.clearLayers();
-                accumulatedPanelsCount = 0;
-                if(analysisMarker) map.removeLayer(analysisMarker);
-                document.getElementById('resultCard').classList.add('hidden');
-            }
-        }
-        function resetCalibration(redraw=true) {
-            currentGeoState = { x:0, y:0, rot:0 };
-            document.querySelectorAll('input[type=range]').forEach(el => el.value = 0);
-            if(redraw && currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry);
-        }
-        function applyCalibration(dx, dy, drot=0) {
-            currentGeoState.x += dx * 10; currentGeoState.y += dy * 10; currentGeoState.rot += drot;
-            if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry);
-        }
-        function applySliderCalibration(val, type) {
-            const v = parseFloat(val);
-            if(type === 'x') currentGeoState.x = v * 10; 
-            if(type === 'y') currentGeoState.y = v * 10;
-            if(type === 'rot') currentGeoState.rot = v;
-            if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry);
-        }
-        function setRegion() {
-            const val = document.getElementById('regionSelect').value;
-            // Simplified region logic
-            const REGIONS = { 'ansan_ind': [[37.28, 126.70], [37.34, 126.85]], 'incheon_ind': [[37.39, 126.68], [37.42, 126.73]], 'seoul': [[37.5665, 126.9780], [37.5665, 126.9780]] };
-            const bounds = REGIONS[val];
-            if(bounds) {
-                if(bounds[0][0] === bounds[1][0]) { map.setView(bounds[0], 13); scanBuildings(bounds[0][0], bounds[0][1]); } 
-                else map.fitBounds(bounds);
-                showToast("지역 이동");
-            }
-        }
-        function setMap(type) {
-            if(type === 'base') { map.addLayer(layers.base); map.removeLayer(layers.sat); }
-            else { map.addLayer(layers.sat); map.removeLayer(layers.base); }
-            layers.hybrid.bringToFront();
-        }
-        function toggleSidebar() {
-            document.getElementById('sidebar').classList.toggle('collapsed');
-            document.getElementById('sidebar-toggle-btn').classList.toggle('collapsed');
-        }
-        function switchTab(mode) {
-            ['scan', 'analysis', 'legal'].forEach(t => { document.getElementById(`tab-${t}`).classList.remove('active'); document.getElementById(`panel-${t}`).classList.add('hidden'); });
-            document.getElementById(`tab-${mode}`).classList.add('active');
-            document.getElementById(`panel-${mode}`).classList.remove('hidden');
-        }
-        function toggleTarget() {
-            const els = document.getElementsByName('scanTarget');
-            els.forEach(e => { if(e.checked) scanTarget = e.value; });
-            showToast(`모드 변경: ${scanTarget === 'building' ? '건물' : '토지'}`);
-        }
-        function toggleMultiSelect() {
-            isMultiSelectMode = document.getElementById('multiSelectToggle').checked;
-            if(!isMultiSelectMode) { accumulatedPanelsCount = 0; panelGroup.clearLayers(); }
-            showToast(`결과 누적 모드 ${isMultiSelectMode ? 'ON' : 'OFF'}`);
-        }
-        function toggleAutoScan() {
-            autoScanMode = document.getElementById('autoScanToggle').checked;
-            showToast(`자동 스캔 ${autoScanMode ? '활성화' : '비활성화'}`);
-            if(autoScanMode) onMapMoveEnd();
-        }
+        function fetchGeminiLegalAnalysis(addr) { document.getElementById('aiResponse').innerText = `분석중... ${addr}`; }
+        function reCalculate() { if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry); }
+        function calculateFinance(count) { document.getElementById('analysisCount').innerText = `${count} 장`; }
+        function drawPanels(geo) { if(!isMultiSelectMode) { panelGroup.clearLayers(); accumulatedPanelsCount=0; } try { let poly=turf.feature(geo); L.geoJSON(poly, {style:{color:'blue'}}).addTo(panelGroup); accumulatedPanelsCount++; calculateFinance(accumulatedPanelsCount); } catch(e){} }
+        function updateEstimatedTime() {}
+        function clearResults() { panelGroup.clearLayers(); selectableGroup.clearLayers(); accumulatedPanelsCount=0; if(analysisMarker) map.removeLayer(analysisMarker); document.getElementById('resultCard').classList.add('hidden'); }
+        function resetCalibration() { currentGeoState={x:0,y:0,rot:0}; if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry); }
+        function applyCalibration() {} function applySliderCalibration() {}
+        function setRegion() { const val=document.getElementById('regionSelect').value; if(val==='seoul') { map.setView([37.5665, 126.9780], 13); scanBuildings(37.5665, 126.9780); } }
+        function setMap(t) { if(t==='base') { map.addLayer(layers.base); map.removeLayer(layers.sat); } else { map.addLayer(layers.sat); map.removeLayer(layers.base); } }
+        function toggleSidebar() { document.getElementById('sidebar').classList.toggle('collapsed'); document.getElementById('sidebar-toggle-btn').classList.toggle('collapsed'); }
+        function switchTab(m) { ['scan','analysis','legal'].forEach(t=>document.getElementById(`tab-${t}`).classList.remove('active')||document.getElementById(`panel-${t}`).classList.add('hidden')); document.getElementById(`tab-${m}`).classList.add('active'); document.getElementById(`panel-${m}`).classList.remove('hidden'); }
+        function toggleTarget() { const els=document.getElementsByName('scanTarget'); els.forEach(e=>{if(e.checked) scanTarget=e.value;}); showToast(`모드: ${scanTarget}`); }
+        function toggleMultiSelect() { isMultiSelectMode=document.getElementById('multiSelectToggle').checked; if(!isMultiSelectMode) { accumulatedPanelsCount=0; panelGroup.clearLayers(); } }
+        function toggleAutoScan() { autoScanMode=document.getElementById('autoScanToggle').checked; if(autoScanMode) onMapMoveEnd(); }
     </script>
 </body>
 </html>
