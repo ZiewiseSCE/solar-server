@@ -2,6 +2,7 @@
 import os
 import requests
 import sys
+import json
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from requests.adapters import HTTPAdapter
@@ -16,16 +17,13 @@ app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 # ---------------------------------------------------------
-# 1. 설정 (API 키 및 도메인)
+# 1. 설정
 # ---------------------------------------------------------
 VWORLD_KEY = os.environ.get("VWORLD_KEY", "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F")
 KEPCO_KEY = os.environ.get("KEPCO_KEY", "19BZ8JWfae590LQCR6f2tEIyyD94wBBYEzY3UpYp")
 LAW_API_ID = os.environ.get("LAW_API_ID", "kennyyang")
-
-# [수정됨] Cloudtype 서버 주소 (V-World 등록 주소와 일치해야 함)
 MY_DOMAIN_URL = "https://port-0-solar-server-mkiol9jsc308f567.sel3.cloudtype.app"
 
-# 세션 설정
 session = requests.Session()
 retry = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
 adapter = HTTPAdapter(max_retries=retry)
@@ -39,7 +37,7 @@ COMMON_HEADERS = {
 }
 
 # ---------------------------------------------------------
-# 2. 기본 라우트
+# 2. 라우트
 # ---------------------------------------------------------
 @app.route('/')
 def index():
@@ -49,6 +47,21 @@ def index():
 def health_check():
     return "OK", 200
 
+# [신규] 종합 리포트 페이지 (POST로 데이터를 받아서 렌더링)
+@app.route('/report', methods=['POST'])
+def report_page():
+    # 프론트엔드에서 보낸 분석 데이터를 받음
+    data = request.form.to_dict()
+    # JSON 문자열로 넘어온 리스트나 객체를 파싱
+    try:
+        if 'finance' in data:
+            data['finance'] = json.loads(data['finance'])
+        if 'ai_analysis' in data:
+            data['ai_analysis'] = json.loads(data['ai_analysis'])
+    except:
+        pass
+    return render_template('report.html', data=data)
+
 # ---------------------------------------------------------
 # 3. V-World 주소 검색
 # ---------------------------------------------------------
@@ -57,8 +70,8 @@ def proxy_address():
     try:
         query = request.args.get('address')
         if not query: return jsonify({"status": "ERROR", "message": "주소 필요"}), 200
-
         print(f"[Address] Searching: {query}", file=sys.stdout)
+        
         url = "https://api.vworld.kr/req/address"
         params = {
             "service": "address", "request": "getcoord", "version": "2.0", "crs": "epsg:4326",
@@ -67,7 +80,6 @@ def proxy_address():
         }
         
         resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
-        
         if resp.status_code != 200:
             return jsonify({"status": "VWORLD_ERROR", "details": resp.text[:200]}), 200
 
@@ -103,16 +115,14 @@ def proxy_data():
         }
 
         resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=20, verify=False)
-        
         if resp.status_code != 200:
             return jsonify({"status": "VWORLD_ERROR", "details": resp.text[:200]}), 200
-            
         return jsonify(resp.json())
     except Exception as e:
         return jsonify({"status": "SERVER_ERROR", "message": str(e)}), 200
 
 # ---------------------------------------------------------
-# 5. 종합 분석
+# 5. 종합 분석 API
 # ---------------------------------------------------------
 @app.route('/api/analyze/comprehensive')
 def analyze_site():
@@ -170,7 +180,6 @@ def analyze_site():
     except Exception as e:
         return jsonify({"status": "ERROR", "message": str(e)}), 200
 
-# --- 헬퍼 함수 ---
 def fetch_vworld_feature(layer, bbox):
     url = "https://api.vworld.kr/req/data"
     params = {"service": "data", "request": "GetFeature", "data": layer, "key": VWORLD_KEY, "geomFilter": f"BOX({bbox})", "size": "1", "domain": MY_DOMAIN_URL, "format": "json"}
@@ -203,7 +212,11 @@ def fetch_kepco_capacity(addr):
 
 @app.route('/api/kepco')
 def proxy_kepco():
-    return jsonify({"result": "OK", "msg": "Logic Connected"})
+    addr = request.args.get('address')
+    if not addr: return jsonify({"result": "FAIL", "msg": "주소 필요"}), 200
+    data = fetch_kepco_capacity(addr)
+    if data: return jsonify({"result": "OK", "data": data})
+    return jsonify({"result": "FAIL", "msg": "데이터 없음"})
 
 @app.route('/api/ordinance')
 def get_ordinance():
