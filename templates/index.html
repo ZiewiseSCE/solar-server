@@ -33,11 +33,11 @@
         .tab-btn.active { border-bottom-color: #06b6d4; color: #06b6d4; font-weight: bold; background-color: #f8fafc; }
         .result-card { background: rgba(15, 23, 42, 0.95); border-left: 4px solid #06b6d4; backdrop-filter: blur(4px); }
         .spinner { border: 3px solid rgba(255,255,255,0.1); border-radius: 50%; border-top: 3px solid #06b6d4; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .login-input { background: rgba(30, 41, 59, 0.5); border: 1px solid #475569; color: white; transition: all 0.3s; }
         .login-input:focus { border-color: #06b6d4; outline: none; background: rgba(30, 41, 59, 0.8); }
         .plant-marker { background: #fbbf24; border: 2px solid white; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
         .substation-marker { background: #ef4444; border: 2px solid white; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.5); color: white; display: flex; align-items: center; justify-content: center; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body class="bg-gray-100">
@@ -91,10 +91,12 @@
                 <div class="bg-slate-900 rounded p-1 border border-slate-700 text-[8px]"><div class="text-slate-500">AI Analysis</div><div id="cnt-ai" class="font-mono font-bold text-purple-400">OK</div></div>
             </div>
         </div>
-        <!-- 탭 메뉴 -->
+        <!-- 탭 메뉴 (기록 탭 복구) -->
         <div class="flex border-b border-gray-200 shrink-0 bg-white shadow-sm">
             <button onclick="switchTab('scan')" id="tab-scan" class="tab-btn active flex-1 py-3 text-xs text-center"><i class="ph ph-radar text-lg"></i>전수 스캔</button>
             <button onclick="switchTab('analysis')" id="tab-analysis" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-magnifying-glass-plus text-lg"></i>정밀 분석</button>
+            <button onclick="switchTab('legal')" id="tab-legal" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-sparkle text-lg"></i>종합 리포트</button>
+            <!-- [복구됨] 기록 탭 -->
             <button onclick="switchTab('history')" id="tab-history" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-clock-counter-clockwise text-lg"></i>기록</button>
         </div>
 
@@ -106,6 +108,7 @@
                     <div class="p-3 space-y-3 border-t border-gray-200">
                         <div class="bg-indigo-50 p-2 rounded border border-indigo-100 text-xs">
                              <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="modWidth" class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 가로(m)</label><input type="number" id="modWidth" value="1.13" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="modHeight" class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 세로(m)</label><input type="number" id="modHeight" value="2.4" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
+                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="installHeight" class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 높이(m)</label><input type="number" id="installHeight" value="0.5" step="0.1" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="installAngle" class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 각도(°)</label><input type="number" id="installAngle" value="20" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
                              <div class="grid grid-cols-2 gap-2"><div><label for="modPower" class="block mb-0.5 text-[10px] text-slate-500">모듈 출력(W)</label><input type="number" id="modPower" value="640" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="rowSpacing" class="block mb-0.5 text-[10px] text-slate-500">이격(m)</label><input type="number" id="rowSpacing" value="1.2" step="0.1" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
                         </div>
                         <div class="bg-green-50 p-2 rounded border border-green-200 text-xs">
@@ -126,7 +129,7 @@
             </div>
 
             <div class="px-4 pb-4">
-                <!-- 1. 스캔 패널 (지역 리스트 복구됨) -->
+                <!-- 1. 스캔 패널 -->
                 <div id="panel-scan" class="space-y-4">
                     <div class="bg-white p-3 rounded border border-gray-200 shadow-sm">
                         <label for="regionSelect" class="text-xs font-bold text-gray-700 mb-2 block">📍 지역 선택</label>
@@ -174,11 +177,7 @@
                     <div class="bg-slate-800 p-4 rounded-lg text-white space-y-3 relative overflow-hidden shadow-xl border-b-4 border-cyan-500">
                         <div class="flex justify-between items-center bg-slate-700/50 p-1.5 rounded border border-slate-600 mb-1">
                             <label for="scanDelay" class="text-[9px] font-bold text-cyan-300">API 안전 딜레이</label>
-                            <select id="scanDelay" class="bg-slate-900 text-[10px] font-mono border-none outline-none text-yellow-400" onchange="updateEstimatedTime()">
-                                <option value="1000">1초</option>
-                                <option value="3000">3초</option>
-                                <option value="5000">5초</option>
-                            </select>
+                            <select id="scanDelay" class="bg-slate-900 text-[10px] font-mono border-none outline-none text-yellow-400" onchange="updateEstimatedTime()"><option value="1000">1초</option><option value="3000">3초</option><option value="5000">5초</option></select>
                         </div>
                         <div class="flex justify-between items-end"><div id="timerRemaining" class="text-xl font-mono font-bold text-yellow-400">00:00:00</div><div id="progressCount" class="text-[10px] text-gray-500 font-mono">0 / 20</div></div>
                         <div class="w-full bg-slate-700 rounded-full h-1.5 overflow-hidden"><div id="totalProgressBar" class="bg-cyan-500 h-full transition-all duration-500" style="width: 0%"></div></div>
@@ -205,14 +204,12 @@
                             <div class="flex justify-between"><span class="text-slate-400">주소:</span><span id="analysisAddress" class="text-right">-</span></div>
                             <div class="flex justify-between"><span class="text-slate-400">수량:</span><span id="analysisCount">0 장</span></div>
                             <div class="flex justify-between"><span class="text-slate-400">용량:</span><span id="analysisCapacity" class="text-cyan-400 font-bold">0 kW</span></div>
-                            <!-- 한전 용량 표시 -->
                             <div class="flex justify-between items-center border-t border-slate-700 pt-2"><span class="text-slate-400">⚡ 한전 선로용량:</span><span id="kepcoCapacity" class="font-bold text-yellow-400 font-mono">-</span></div>
                         </div>
                         <div class="bg-slate-700/50 p-2 rounded space-y-1 mt-2 border border-slate-600">
                             <div class="flex justify-between text-xs"><span class="text-slate-400">💸 총 사업비:</span><span id="resTotalCost" class="text-green-400 font-bold">0 원</span></div>
                             <div class="flex justify-between text-xs"><span class="text-slate-400">💰 연 총수익:</span><span id="resAnnualRev" class="text-yellow-400 font-bold">0 원</span></div>
                         </div>
-                        <!-- PF 정보 -->
                         <div class="bg-indigo-900/40 p-2 rounded space-y-1 border border-indigo-500/30 text-[10px]">
                             <div class="flex justify-between text-indigo-300 font-bold border-b border-indigo-500/30 pb-1 mb-1"><span>🏦 PF 금융구조 (<span id="pfRatioDisplay">90</span>%)</span></div>
                             <div class="flex justify-between"><span class="text-slate-400">대출금:</span><span id="resLoanAmount" class="text-white">0 원</span></div>
@@ -220,7 +217,6 @@
                             <div class="flex justify-between"><span class="text-slate-400">연 이자:</span><span id="resInterest" class="text-red-300">0 원</span></div>
                             <div class="flex justify-between pt-1 border-t border-indigo-500/30 mt-1"><span class="text-indigo-200 font-bold">🚀 자본회수기간:</span><span id="resPfPayback" class="text-cyan-300 font-bold text-xs">0.0 년</span></div>
                         </div>
-                        <!-- [복구됨] 결과 저장 버튼 -->
                         <button onclick="saveResult()" class="w-full bg-slate-700 hover:bg-slate-600 py-2 rounded text-xs font-bold mt-2 border border-slate-600 transition flex items-center justify-center gap-1"><i class="ph ph-floppy-disk"></i> 분석 결과 저장</button>
                     </div>
                 </div>
