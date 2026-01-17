@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ET
 import re
 import sys
 import json
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, make_response
 from flask_cors import CORS
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -16,21 +16,22 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
-# CORS 모든 도메인 허용 (브라우저 차단 방지 핵심)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+# [수정] CORS 설정 강화: 모든 출처, 모든 헤더, 모든 메소드 허용
+# 이렇게 해야 백엔드가 에러를 뱉어도 브라우저가 차단하지 않습니다.
+CORS(app, resources={r"/api/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"], "allow_headers": "*"}})
 
 # ---------------------------------------------------------
 # 1. 설정 (API 키 및 도메인)
 # ---------------------------------------------------------
 VWORLD_KEY = os.environ.get("VWORLD_KEY", "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F")
-# [중요] 한전 빅데이터 센터 API 키 (없으면 아래처럼 기본값 유지)
 KEPCO_KEY = os.environ.get("KEPCO_KEY", "19BZ8JWfae590LQCR6f2tEIyyD94wBBYEzY3UpYp")
 LAW_API_ID = os.environ.get("LAW_API_ID", "kennyyang")
 
-# [중요] V-World 관리자 페이지 '서비스 URL'과 일치해야 함
+# [중요] V-World 관리자 페이지 '서비스 URL'에 등록된 주소
 MY_DOMAIN_URL = "https://solar-server-jszy.onrender.com"
 
-# 세션 설정 (연결 재사용 및 재시도)
+# 세션 설정
 session = requests.Session()
 retry_strategy = Retry(
     total=3,
@@ -78,10 +79,9 @@ def diagnose_vworld():
         "domain": MY_DOMAIN_URL, 
         "format": "json"
     }
-    
     try:
         print(f"[Diagnose] Requesting...", file=sys.stdout)
-        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
+        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
         return jsonify({
             "status": "CHECK_COMPLETED",
             "vworld_http_status": resp.status_code,
@@ -92,7 +92,7 @@ def diagnose_vworld():
         return jsonify({"status": "DIAGNOSE_FAILED", "error": str(e)})
 
 # ---------------------------------------------------------
-# 3. V-World 데이터 프록시 (건물/지적도)
+# 3. V-World 데이터 프록시
 # ---------------------------------------------------------
 @app.route('/api/vworld/data')
 def proxy_data():
@@ -101,7 +101,7 @@ def proxy_data():
         geom_filter = request.args.get('geomFilter')
         
         if not geom_filter:
-            return jsonify({"status": "ERROR", "message": "Missing geomFilter"}), 200
+            return jsonify({"status": "ERROR", "message": "Missing geomFilter"}), 400
 
         url = "https://api.vworld.kr/req/data"
         params = {
@@ -115,21 +115,22 @@ def proxy_data():
             "format": "json"
         }
 
-        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=20, verify=False)
+        resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
         
-        # [중요] 500 에러 방지를 위해, 외부 API 에러도 200 OK로 포장해서 보냄
         if resp.status_code != 200:
+            print(f"[Data Error] {resp.status_code} {resp.text[:100]}", file=sys.stderr)
+            # [수정] 500 에러를 내지 않고 200 OK로 에러 메시지를 보냄 (CORS 방지)
             return jsonify({
                 "status": "VWORLD_ERROR", 
                 "message": f"V-World Error {resp.status_code}",
-                "details": resp.text[:500]
-            }), 200
+                "details": resp.text
+            })
             
         return jsonify(resp.json())
 
     except Exception as e:
         print(f"[Data Exception] {str(e)}", file=sys.stderr)
-        return jsonify({"status": "SERVER_ERROR", "message": str(e)}), 200
+        return jsonify({"status": "SERVER_ERROR", "message": str(e)})
 
 # ---------------------------------------------------------
 # 4. V-World 주소 검색 프록시
@@ -139,7 +140,7 @@ def proxy_address():
     try:
         query = request.args.get('address')
         if not query:
-            return jsonify({"status": "ERROR", "message": "Missing address"}), 200
+            return jsonify({"status": "ERROR", "message": "Missing address"}), 400
 
         print(f"[Address] Query: {query}", file=sys.stdout)
 
@@ -158,16 +159,18 @@ def proxy_address():
             "format": "json"
         }
         
-        # 1차 시도 (도로명)
+        # 1차 시도
         resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
         
+        # 에러 응답 처리
         if resp.status_code != 200:
             print(f"[Address Error] {resp.status_code} {resp.text[:100]}", file=sys.stderr)
+            # [수정] 500 대신 200으로 반환하여 프론트엔드가 JSON을 읽게 함
             return jsonify({
-                "status": "VWORLD_ERROR", 
+                "status": "ERROR", 
                 "message": f"V-World API Error ({resp.status_code})",
                 "details": resp.text[:200]
-            }), 200
+            })
 
         try:
             data = resp.json()
@@ -177,20 +180,25 @@ def proxy_address():
                  params["type"] = "parcel"
                  resp_p = session.get(url, params=params, headers=COMMON_HEADERS, timeout=10, verify=False)
                  if resp_p.status_code == 200:
-                     try: data = resp_p.json()
+                     try:
+                         data = resp_p.json()
                      except: pass
+            
             return jsonify(data)
+
         except ValueError:
+            # HTML이나 텍스트가 와서 JSON 변환 실패 시
             print(f"[Address JSON Fail] {resp.text[:100]}", file=sys.stderr)
             return jsonify({
                 "status": "PARSING_ERROR",
                 "message": "Invalid JSON response from V-World",
                 "raw": resp.text[:200]
-            }), 200
+            })
 
     except Exception as e:
         print(f"[Address Exception] {str(e)}", file=sys.stderr)
-        return jsonify({"status": "SERVER_ERROR", "message": str(e)}), 200
+        # [수정] 절대 500 에러를 내지 않음
+        return jsonify({"status": "SERVER_ERROR", "message": str(e)})
 
 # ---------------------------------------------------------
 # 5. 종합 분석 API (8대 항목 통합)
@@ -217,7 +225,7 @@ def analyze_site():
         eco_info = fetch_vworld_feature("LT_C_WISNAT", bbox) 
         eco_grade = eco_info.get('properties', {}).get('GRD_NM', '등급 외') if eco_info else "확인 불가"
         
-        # 3. 환경영향평가 대상 여부
+        # 3. 환경영향평가
         env_impact_check = "대상 아님"
         if "보전관리" in zoning_name and area_size >= 5000: env_impact_check = "✅ 대상 (5,000m² 이상)"
         elif "생산관리" in zoning_name and area_size >= 7500: env_impact_check = "✅ 대상 (7,500m² 이상)"
