@@ -681,7 +681,12 @@
         function initMap() {
             map = L.map('map', { zoomControl: false }).setView([36.5, 127.5], 7);
             L.control.zoom({ position: 'bottomright' }).addTo(map);
-            layers = { base: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Base/{z}/{y}/{x}.png`), sat: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Satellite/{z}/{y}/{x}.jpeg`) };
+            layers = { 
+                base: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Base/{z}/{y}/{x}.png`), 
+                sat: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Satellite/{z}/{y}/{x}.jpeg`),
+                // 하이브리드 레이어 추가 (setMap에서 호출됨)
+                hybrid: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Hybrid/{z}/{y}/{x}.png`) 
+            };
             layers.sat.addTo(map);
             selectableGroup = L.layerGroup().addTo(map);
             panelGroup = L.layerGroup().addTo(map);
