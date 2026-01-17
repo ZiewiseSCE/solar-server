@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- https 강제 업그레이드 -->
+    <!-- https 강제 업그레이드 (Mixed Content 방지) -->
     <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests"> 
     <title>SCEnergy 태양광 채굴기</title>
     
@@ -26,6 +26,7 @@
         body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: 'Pretendard', sans-serif; }
         #map { width: 100%; height: 100%; z-index: 1; background: #1a1a1a; }
         
+        /* 로그인 오버레이 CSS 수정 (Safari 호환성 및 경고 해결) */
         #login-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(15, 23, 42, 0.95);
@@ -36,8 +37,14 @@
             transition: opacity 0.5s ease-out;
         }
         #login-overlay.hidden-overlay { opacity: 0; pointer-events: none; }
-        html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-        
+
+        /* 텍스트 사이즈 조정 호환성 추가 */
+        html {
+            -webkit-text-size-adjust: 100%;
+            text-size-adjust: 100%;
+        }
+
+        /* 사이드바 애니메이션 */
         .sidebar { z-index: 2000; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
         .sidebar.collapsed { transform: translateX(-100%); }
         #sidebar-toggle-btn { left: 420px; transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1); z-index: 2001; }
@@ -61,9 +68,11 @@
         .d-pad-btn:hover { background: #cbd5e1; color: #0f172a; }
         .d-pad-btn:active { background: #94a3b8; transform: scale(0.95); }
         
+        /* Marker Icons */
         .plant-marker { background: #fbbf24; border: 2px solid white; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
         .substation-marker { background: #ef4444; border: 2px solid white; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.5); color: white; display: flex; align-items: center; justify-content: center; }
         
+        /* Input */
         .login-input { background: rgba(30, 41, 59, 0.5); border: 1px solid #475569; color: white; transition: all 0.3s; }
         .login-input:focus { border-color: #06b6d4; outline: none; background: rgba(30, 41, 59, 0.8); }
 
@@ -83,7 +92,10 @@
     <!-- 로그인 오버레이 -->
     <div id="login-overlay">
         <div class="bg-slate-900 p-8 rounded-2xl shadow-2xl border border-slate-700 w-[400px] text-center relative overflow-hidden" id="login-box">
+            <!-- 배경 데코레이션 -->
             <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500"></div>
+            <div class="absolute -top-10 -right-10 w-32 h-32 bg-cyan-500/10 rounded-full blur-3xl"></div>
+
             <div class="mb-6 relative">
                 <div class="mx-auto w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mb-4 border border-slate-700 shadow-lg">
                     <i class="ph ph-solar-panel text-3xl text-cyan-400" id="login-icon"></i>
@@ -489,6 +501,8 @@
         //  설정 및 글로벌 변수
         // ==========================================
         const VWORLD_TILE_KEY = "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F"; 
+        
+        // [중요] 백엔드 서버 주소 설정 (Cloudtype)
         const BACKEND_URL = "https://port-0-solar-server-mkiol9jsc308f567.sel3.cloudtype.app";
 
         const firebaseConfig = {
@@ -581,6 +595,7 @@
             const query = document.getElementById('addrInput').value;
             if(!query) return showToast("주소를 입력하세요.");
             
+            // 로딩 UI 표시
             const loadingEl = document.getElementById('loading');
             if(loadingEl) {
                 loadingEl.classList.remove('hidden');
