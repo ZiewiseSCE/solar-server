@@ -107,9 +107,7 @@
                     <label for="adminPw" class="text-xs font-bold text-red-400 ml-1">관리자 비밀번호</label>
                     <input type="password" id="adminPw" class="login-input w-full rounded px-4 py-3 text-sm font-mono mt-1" placeholder="Admin Password" onkeypress="if(event.key==='Enter') verifyAdmin()">
                 </div>
-                <button onclick="verifyAdmin()" class="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-lg transition shadow-lg shadow-red-900/20 flex items-center justify-center gap-2">
-                    <i class="ph ph-key"></i> 관리자 접속
-                </button>
+                <button onclick="verifyAdmin()" class="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-lg transition">관리자 접속</button>
                 <button onclick="exitAdminMode()" class="text-xs text-slate-400 hover:text-white">돌아가기</button>
             </div>
 
@@ -258,6 +256,9 @@
                         </div>
                     </div>
                 </div>
+                
+                <!-- 로딩바 (공통) -->
+                <div id="loading" class="hidden flex flex-col items-center justify-center py-4"><div class="spinner mb-2"></div><p class="text-xs text-slate-500">데이터 처리중...</p></div>
             </div>
         </div>
         
@@ -296,44 +297,13 @@
 
     <script>
         const VWORLD_TILE_KEY = "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F"; 
-        // [중요] Cloudtype 백엔드 주소 (상대 경로로 수정하여 CORS 원천 차단)
         const BACKEND_URL = "https://port-0-solar-server-mkiol9jsc308f567.sel3.cloudtype.app";
-
-        const firebaseConfig = {
-            apiKey: ["AIzaSyDEbyyoY", "B3cHlfwi82", "ZXQSGMw8IyZt7Nw"].join("-"),
-            authDomain: "solar-pathfinder.firebaseapp.com",
-            projectId: "solar-pathfinder",
-            storageBucket: "solar-pathfinder.firebasestorage.app",
-            messagingSenderId: "477084185928",
-            appId: "1:477084185928:web:b4fd4dd693ae149c392f7d"
-        };
-        
-        let app, auth, db;
-        let isFirebaseActive = false;
-        try {
-            if (firebaseConfig.apiKey.includes("AIza")) {
-                app = firebase.initializeApp(firebaseConfig);
-                auth = firebase.auth();
-                db = firebase.firestore();
-                isFirebaseActive = true;
-                console.log("Firebase Connected");
-            }
-        } catch (e) { console.error("Firebase Error:", e); }
-
-        let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker;
-        let existingGroup, substationGroup;
-        let scanTarget = 'building'; 
-        let currentAnalysisFeature = null; 
-        let currentGeoState = { x:0, y:0, rot:0 };
-        let autoScanMode = false;
-        let isMultiSelectMode = false;
-        let accumulatedPanelsCount = 0; 
+        const ENCODED_ADMIN_PW = "Wmlld2lzZTEyMyE=";
+        let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, existingGroup, substationGroup;
+        let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
         let apiCounts = { vworld: 0, public: 0, ai: 0 };
-        let isLoggedIn = false;
-        let currentUser = null;
-        const ENCODED_ADMIN_PW = "Wmlld2lzZTEyMyE="; 
-
-        // --- Helper Functions (Hoisted) ---
+        
+        // --- Functions Hoisted (Safe definition) ---
         function trackApi(type) {
             if(apiCounts[type] !== undefined) {
                 apiCounts[type]++;
@@ -342,17 +312,11 @@
             }
         }
         function showToast(m) { const t = document.getElementById('toastMsg'); t.classList.remove('hidden'); t.classList.add('flex'); document.getElementById('toastText').innerText = m; setTimeout(() => t.classList.add('hidden'), 3000); }
-        function logSystem(msg) {
-            const logWin = document.getElementById('logWindow');
-            const p = document.createElement('div');
-            p.innerText = `> ${msg}`;
-            logWin.appendChild(p);
-            logWin.scrollTop = logWin.scrollHeight;
-        }
+        function logSystem(msg) { const w=document.getElementById('logWindow'); if(w) { const p=document.createElement('div'); p.innerText=`> ${msg}`; w.appendChild(p); w.scrollTop=w.scrollHeight; } }
 
-        // --- Functions Definitions (Defined BEFORE usage in initMap) ---
         function toggleLayer(type) {
-            const center = map ? map.getCenter() : {lat:36.5, lng:127.5};
+            if(!map) return;
+            const center = map.getCenter();
             if(type === 'existing') {
                 if(document.getElementById('existingPlantToggle').checked) { createMockMarkers(center, 'plant'); map.addLayer(existingGroup); }
                 else { existingGroup.clearLayers(); map.removeLayer(existingGroup); }
@@ -373,87 +337,78 @@
                 const lng = center.lng + (Math.random() * 0.01 - 0.005);
                 const iconHtml = type === 'plant' ? `<div class="plant-marker w-6 h-6"><i class="ph ph-lightning text-white text-[10px]"></i></div>` : `<div class="substation-marker w-8 h-8"><i class="ph ph-circuitry text-white"></i></div>`;
                 const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [24, 24] });
-                L.marker([lat, lng], { icon: icon, title: type }).bindPopup(type === 'plant' ? "기설치 태양광 (99kW)" : "변전소 (여유용량: 10MW)").addTo(group);
+                L.marker([lat, lng], { icon: icon, title: type }).bindPopup(type === 'plant' ? "기설치 태양광" : "변전소").addTo(group);
             }
         }
         
-        function onMapMoveEnd() {
-            if(!autoScanMode || !isLoggedIn) return;
-            const c = map.getCenter();
-            scanBuildings(c.lat, c.lng);
-        }
+        function onMapMoveEnd() { if(!autoScanMode || !isLoggedIn) return; scanBuildings(map.getCenter().lat, map.getCenter().lng); }
 
-        // [핵심] JSONP 함수 구현 (백엔드 차단 시 비상용)
-        function jsonpRequest(url) {
-            return new Promise((resolve, reject) => {
-                const callbackName = 'jsonp_callback_' + Math.round(100000 * Math.random());
-                window[callbackName] = function(data) {
-                    delete window[callbackName];
-                    document.body.removeChild(script);
-                    resolve(data);
-                };
-                const script = document.createElement('script');
-                script.src = `${url}&format=json&callback=${callbackName}`;
-                script.onerror = () => {
-                    delete window[callbackName];
-                    document.body.removeChild(script);
-                    reject(new Error('JSONP failed'));
-                };
-                document.body.appendChild(script);
-            });
-        }
-
+        // --- Main Functions ---
         async function searchAddress() {
             trackApi('vworld');
-            const query = document.getElementById('addrInput').value;
+            const input = document.getElementById('addrInput');
+            if(!input) return;
+            const query = input.value;
             if(!query) return showToast("주소를 입력하세요.");
-            document.getElementById('loading').classList.remove('hidden');
             
-            // 1. JSONP 방식으로 직접 호출 (백엔드 차단 회피)
+            const loading = document.getElementById('loading');
+            if(loading) {
+                loading.classList.remove('hidden');
+                const p = loading.querySelector('p');
+                if(p) p.innerText = "주소 확인 중...";
+            }
+            
+            const url = `${BACKEND_URL}/api/vworld/address?address=${encodeURIComponent(query)}`;
+            
             try {
-                const url = `https://api.vworld.kr/req/address?service=address&request=getcoord&version=2.0&crs=epsg:4326&address=${encodeURIComponent(query)}&refine=true&simple=false&type=road&key=${VWORLD_TILE_KEY}`;
+                const res = await fetch(url);
+                const data = await res.json();
                 
-                const data = await jsonpRequest(url);
+                if(data.status && data.status.includes("ERROR")) {
+                    throw new Error(data.message || "검색 실패");
+                }
                 
                 if(data.response && data.response.status === 'OK') {
                     const { x, y } = data.response.result.point;
                     map.setView([parseFloat(y), parseFloat(x)], 18);
-                    showToast("이동 완료 (JSONP).");
+                    showToast("이동 완료.");
                     setTimeout(() => scanBuildings(parseFloat(y), parseFloat(x)), 800);
                 } else {
-                    showToast("주소를 찾을 수 없습니다.");
+                    const msg = (data.response && data.response.error) ? data.response.error.text : "주소를 찾을 수 없습니다.";
+                    showToast(msg);
                 }
             } catch(e) {
-                console.error("JSONP Failed:", e);
-                // Fallback: 백엔드 시도
-                try {
-                     const res = await fetch(`${BACKEND_URL}/api/vworld/address?address=${encodeURIComponent(query)}`);
-                     const data = await res.json();
-                     if(data.response?.status === 'OK') {
-                        const { x, y } = data.response.result.point;
-                        map.setView([parseFloat(y), parseFloat(x)], 18);
-                     }
-                } catch(err) { showToast("검색 실패"); }
-            } finally { document.getElementById('loading').classList.add('hidden'); }
+                console.error(e);
+                showToast(`오류: ${e.message}`);
+            } finally {
+                if(loading) loading.classList.add('hidden');
+            }
         }
 
         async function scanBuildings(lat, lng) {
             trackApi('vworld');
             if(!isMultiSelectMode) selectableGroup.clearLayers();
-            document.getElementById('loading').classList.remove('hidden');
-            const loadingText = document.querySelector('#loading p');
-            if(loadingText) loadingText.innerText = "데이터 분석 중...";
+            
+            const loading = document.getElementById('loading');
+            if(loading) {
+                loading.classList.remove('hidden');
+                const p = loading.querySelector('p');
+                if(p) p.innerText = "건물/토지 데이터 분석 중...";
+            }
 
             if(analysisMarker && !isMultiSelectMode) map.removeLayer(analysisMarker);
             analysisMarker = L.marker([lat, lng]).addTo(map);
 
             const box = `${lng - 0.001},${lat - 0.001},${lng + 0.001},${lat + 0.001}`;
-            
-            // 1. JSONP 방식으로 직접 호출
             try {
-                const url = `https://api.vworld.kr/req/data?service=data&request=GetFeature&data=LT_C_SPBD&key=${VWORLD_TILE_KEY}&geomFilter=BOX(${box})&size=1000`;
-                const data = await jsonpRequest(url);
+                const res = await fetch(`${BACKEND_URL}/api/vworld/data?data=LT_C_SPBD&geomFilter=BOX(${box})`);
+                const data = await res.json();
                 
+                if(data.status && data.status.includes("ERROR")) {
+                     console.warn("Scan warning:", data.message);
+                     return;
+                }
+
                 if(data.response?.status === 'OK') {
                     L.geoJSON(data.response.result.featureCollection.features, {
                         style: { color: "#38bdf8", weight: 2, fillOpacity: 0.2 },
@@ -462,8 +417,11 @@
                         }
                     }).addTo(selectableGroup);
                 }
-            } catch(e) { console.error(e); } 
-            finally { document.getElementById('loading').classList.add('hidden'); }
+            } catch(e) { 
+                console.error("Scan Error:", e); 
+            } finally { 
+                if(loading) loading.classList.add('hidden');
+            }
         }
 
         function initMap() {
@@ -475,19 +433,9 @@
                 hybrid: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Hybrid/{z}/{y}/{x}.png`) 
             };
             layers.sat.addTo(map);
-            selectableGroup = L.layerGroup().addTo(map);
-            panelGroup = L.layerGroup().addTo(map);
-            existingGroup = L.layerGroup().addTo(map);
-            substationGroup = L.layerGroup().addTo(map);
+            selectableGroup = L.layerGroup().addTo(map); panelGroup = L.layerGroup().addTo(map); existingGroup = L.layerGroup().addTo(map); substationGroup = L.layerGroup().addTo(map);
             
-            cadastralLayer = L.tileLayer.wms('https://api.vworld.kr/req/wms/1.0.0', { 
-                layers: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', 
-                styles: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', 
-                format: 'image/png', 
-                transparent: true, 
-                opacity: 0.7, 
-                key: VWORLD_TILE_KEY 
-            });
+            cadastralLayer = L.tileLayer.wms('https://api.vworld.kr/req/wms/1.0.0', { layers: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', styles: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', format: 'image/png', transparent: true, opacity: 0.7, key: VWORLD_TILE_KEY });
             map.addLayer(cadastralLayer);
 
             map.on('click', (e) => scanBuildings(e.latlng.lat, e.latlng.lng));
@@ -498,7 +446,9 @@
             logSystem("Map Initialized.");
         }
 
-        // Login Logic
+        // Firebase & Login Logic
+        try { if (firebaseConfig.apiKey.includes("AIza")) { app = firebase.initializeApp(firebaseConfig); auth = firebase.auth(); db = firebase.firestore(); isFirebaseActive = true; console.log("Firebase Connected"); } } catch (e) { console.error("Firebase Error:", e); }
+
         function attemptLogin() {
             const id = document.getElementById('userId').value.trim(), pw = document.getElementById('userPw').value.trim();
             const users = JSON.parse(localStorage.getItem('scenergy_users') || '[{"id":"admin","pw":"1234"}]');
@@ -531,6 +481,7 @@
             const addr = feature.properties.road_nm_ad || feature.properties.jibun || feature.properties.addr || "주소 미상";
             document.getElementById('analysisAddress').innerText = addr;
             
+            // 패널 그리기 호출 (중요)
             drawPanels(feature.geometry); 
 
             // 중심 좌표 계산
@@ -538,11 +489,11 @@
             const lng = center.geometry.coordinates[0];
             const lat = center.geometry.coordinates[1];
 
-            // 로딩 UI 제어 (HTML 구조 복구됨)
             const loadingEl = document.getElementById('legalLoading');
             const contentEl = document.getElementById('legalContent');
             const placeholderEl = document.getElementById('legalPlaceholder');
             
+            // [안전장치] 요소가 존재하는지 확인 후 조작
             if(placeholderEl) placeholderEl.classList.add('hidden');
             if(loadingEl) loadingEl.classList.remove('hidden');
             if(contentEl) contentEl.classList.add('hidden');
@@ -570,27 +521,41 @@
                          linkHtml += `<a href="${url}" target="_blank" class="bg-slate-700 hover:bg-slate-600 text-white px-2 py-1 rounded text-center">${name}</a>`;
                      }
 
-                     document.getElementById('aiResponse').innerHTML = `
-                        <ul class="list-disc pl-4 mb-3">${resultHtml}</ul>
-                        <div class="grid grid-cols-3 gap-1 text-[10px] mt-2 border-t border-slate-600 pt-2">
-                            ${linkHtml}
-                        </div>
-                     `;
+                     const aiResponse = document.getElementById('aiResponse');
+                     if(aiResponse) {
+                        aiResponse.innerHTML = `
+                            <ul class="list-disc pl-4 mb-3">${resultHtml}</ul>
+                            <div class="grid grid-cols-3 gap-1 text-[10px] mt-2 border-t border-slate-600 pt-2">
+                                ${linkHtml}
+                            </div>
+                        `;
+                     }
                      
                      if (data.kepco_capacity) {
-                        document.getElementById('kepcoCapacity').innerText = data.kepco_capacity;
+                        const kepcoEl = document.getElementById('kepcoCapacity');
+                        if(kepcoEl) kepcoEl.innerText = data.kepco_capacity;
                      }
                 }
             } catch(e) {
                 console.error(e);
                 if(loadingEl) loadingEl.classList.add('hidden');
                 if(contentEl) contentEl.classList.remove('hidden');
-                document.getElementById('aiResponse').innerText = "분석 실패 (통신 오류)";
+                const aiResponse = document.getElementById('aiResponse');
+                if(aiResponse) aiResponse.innerText = "분석 실패 (통신 오류)";
             }
         }
         
         function reCalculate() { if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry); }
-        function calculateFinance(count) { document.getElementById('analysisCount').innerText = `${count} 장`; }
+        function calculateFinance(count) { 
+            const countEl = document.getElementById('analysisCount');
+            if(countEl) countEl.innerText = `${count} 장`; 
+            
+            // 간단 재무 계산 (UI 업데이트 포함)
+            const modPower = parseFloat(document.getElementById('modPower').value) || 0;
+            const capKw = (count * modPower) / 1000;
+            const capEl = document.getElementById('analysisCapacity');
+            if(capEl) capEl.innerText = `${capKw.toFixed(1)} kW`;
+        }
         
         // [복구됨] 패널 배치 알고리즘
         function drawPanels(geo) { 
@@ -637,8 +602,11 @@
             } catch(e) { console.error("Panel Draw Error:", e); } 
         }
 
-        // ... (나머지 유틸리티 함수들: 기존 유지) ...
-        function updateEstimatedTime() {}
+        function updateEstimatedTime() {
+            const delay = parseInt(document.getElementById('scanDelay').value) || 1000;
+            const timerEl = document.getElementById('timerRemaining');
+            if(timerEl) timerEl.innerText = `약 ${Math.floor((delay * 20) / 1000 / 60).toString().padStart(2, '0')}:${Math.floor((delay * 20) / 1000 % 60).toString().padStart(2, '0')} 소요`;
+        }
         function clearResults() { panelGroup.clearLayers(); selectableGroup.clearLayers(); accumulatedPanelsCount=0; if(analysisMarker) map.removeLayer(analysisMarker); document.getElementById('resultCard').classList.add('hidden'); }
         function resetCalibration() { currentGeoState={x:0,y:0,rot:0}; if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry); }
         function applyCalibration(dx, dy, drot=0) { currentGeoState.x += dx * 10; currentGeoState.y += dy * 10; currentGeoState.rot += drot; if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry); }
