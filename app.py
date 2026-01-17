@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
 import requests
-import xml.etree.ElementTree as ET
-import re
 import sys
 import json
 from flask import Flask, render_template, request, jsonify, make_response
