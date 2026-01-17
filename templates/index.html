@@ -3,17 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- https 강제 업그레이드 -->
+    <!-- https 강제 업그레이드 (Mixed Content 방지) -->
     <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests"> 
     <title>SCEnergy 태양광 채굴기</title>
     
-    <!-- Favicon 추가 (404 에러 방지) -->
+    <!-- 파비콘 (404 에러 방지) -->
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>☀️</text></svg>">
 
     <!-- 라이브러리 로드 -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <!-- Tailwind CSS (Dev version) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
@@ -27,11 +26,11 @@
         body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: 'Pretendard', sans-serif; }
         #map { width: 100%; height: 100%; z-index: 1; background: #1a1a1a; }
         
-        /* 로그인 오버레이 CSS 수정 (경고 해결) */
+        /* 로그인 오버레이 CSS 수정 (Safari 호환성 및 경고 해결) */
         #login-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(15, 23, 42, 0.95);
-            -webkit-backdrop-filter: blur(10px); /* Safari 지원 */
+            -webkit-backdrop-filter: blur(10px);
             backdrop-filter: blur(10px);
             z-index: 9999;
             display: flex; align-items: center; justify-content: center;
@@ -479,11 +478,11 @@
         
         <div class="space-y-1">
             <label class="flex items-center gap-2 cursor-pointer p-1 hover:bg-slate-50 rounded">
-                <input type="radio" name="mapL" value="sat" checked onchange="setMap('sat')"> 
+                <input type="radio" name="mapL" value="sat" checked onchange="setMap('sat')" aria-label="위성지도"> 
                 <span>🛰️ 위성 지도</span>
             </label>
             <label class="flex items-center gap-2 cursor-pointer p-1 hover:bg-slate-50 rounded">
-                <input type="radio" name="mapL" value="base" onchange="setMap('base')"> 
+                <input type="radio" name="mapL" value="base" onchange="setMap('base')" aria-label="일반지도"> 
                 <span>🗺️ 일반 지도</span>
             </label>
         </div>
@@ -605,14 +604,24 @@
             
             try {
                 const res = await fetch(url);
+                
+                // 에러 처리 강화 (CORB/500 대응)
+                if (!res.ok) {
+                    // Try to read text error from backend, catch if CORB blocks it
+                    let errText = "검색 실패";
+                    try {
+                        const errJson = await res.json();
+                        errText = errJson.message || errJson.details || errText;
+                    } catch (e) {
+                         errText = `Server Error (${res.status}): 응답을 읽을 수 없습니다.`;
+                    }
+                    throw new Error(errText);
+                }
+                
                 const data = await res.json();
                 
-                // 에러 처리 강화
                 if(data.status === "ERROR" || data.status === "VWORLD_ERROR") {
-                    let errMsg = data.message;
-                    // 상세 에러가 있는 경우 추가 (예: V-World 응답 코드)
-                    if(data.details) errMsg += ` (${data.details})`;
-                    throw new Error(errMsg || "검색 실패");
+                    throw new Error(data.message || "검색 실패");
                 }
                 
                 if(data.response && data.response.status === 'OK') {
@@ -621,9 +630,7 @@
                     showToast("이동 완료.");
                     setTimeout(() => scanBuildings(parseFloat(y), parseFloat(x)), 800);
                 } else {
-                    // 응답이 왔지만 결과가 없는 경우
-                    const msg = (data.response && data.response.error) ? data.response.error.text : "주소를 찾을 수 없습니다. (응답 코드: NOT_FOUND)";
-                    showToast(msg);
+                    showToast("주소를 찾을 수 없습니다.");
                 }
             } catch(e) {
                 console.error(e);
@@ -643,14 +650,17 @@
             const box = `${lng - 0.001},${lat - 0.001},${lng + 0.001},${lat + 0.001}`;
             try {
                 const res = await fetch(`${BACKEND_URL}/api/vworld/data?data=LT_C_SPBD&geomFilter=BOX(${box})`);
-                const data = await res.json();
                 
-                if (data.status === "ERROR" || data.status === "VWORLD_ERROR") {
-                     console.warn("Building Scan Failed:", data.message);
-                     // 건물이 없어도 에러는 띄우지 않고 조용히 넘어감 (토지일 수 있으므로)
-                     return; 
+                if (!res.ok) {
+                    let errText = "데이터 로드 실패";
+                    try {
+                        const errJson = await res.json();
+                        errText = errJson.message || errText;
+                    } catch (e) { errText = `Server Error (${res.status})`; }
+                    throw new Error(errText);
                 }
 
+                const data = await res.json();
                 if(data.response?.status === 'OK') {
                     L.geoJSON(data.response.result.featureCollection.features, {
                         style: { color: "#38bdf8", weight: 2, fillOpacity: 0.2 },
@@ -660,7 +670,8 @@
                     }).addTo(selectableGroup);
                 }
             } catch(e) { 
-                console.error("Scan Error:", e); 
+                console.error(e); 
+                if(!autoScanMode) showToast(`데이터 로드 실패: ${e.message}`);
             } finally { 
                 document.getElementById('loading').classList.add('hidden'); 
             }
