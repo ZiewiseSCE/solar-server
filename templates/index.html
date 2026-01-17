@@ -19,13 +19,7 @@
     <style>
         body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: 'Pretendard', sans-serif; }
         #map { width: 100%; height: 100%; z-index: 1; background: #1a1a1a; }
-        #login-overlay {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(15, 23, 42, 0.95);
-            -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-            z-index: 9999; display: flex; align-items: center; justify-content: center;
-            transition: opacity 0.5s ease-out;
-        }
+        #login-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.95); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); z-index: 9999; display: flex; align-items: center; justify-content: center; transition: opacity 0.5s ease-out; }
         #login-overlay.hidden-overlay { opacity: 0; pointer-events: none; }
         html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
         .sidebar { z-index: 2000; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
@@ -36,15 +30,18 @@
         .result-card { background: rgba(15, 23, 42, 0.95); border-left: 4px solid #06b6d4; backdrop-filter: blur(4px); }
         .spinner { border: 3px solid rgba(255,255,255,0.1); border-radius: 50%; border-top: 3px solid #06b6d4; width: 24px; height: 24px; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 3px; }
         .login-input { background: rgba(30, 41, 59, 0.5); border: 1px solid #475569; color: white; transition: all 0.3s; }
         .login-input:focus { border-color: #06b6d4; outline: none; background: rgba(30, 41, 59, 0.8); }
+        .plant-marker { background: #fbbf24; border: 2px solid white; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
+        .substation-marker { background: #ef4444; border: 2px solid white; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.5); color: white; display: flex; align-items: center; justify-content: center; }
     </style>
 </head>
 <body class="bg-gray-100">
 
     <div id="login-overlay">
-        <!-- 로그인 화면 (기존 유지) -->
         <div class="bg-slate-900 p-8 rounded-2xl shadow-2xl border border-slate-700 w-[400px] text-center relative overflow-hidden" id="login-box">
+            <!-- 로그인 UI (기존 동일) -->
             <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500"></div>
             <div class="mb-6 relative">
                 <div class="mx-auto w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mb-4 border border-slate-700 shadow-lg"><i class="ph ph-solar-panel text-3xl text-cyan-400"></i></div>
@@ -52,24 +49,19 @@
                 <p class="text-slate-400 text-sm mt-2">태양광 발전 분석 클라우드</p>
                 <button onclick="exitAdminMode()" id="exit-admin-btn" aria-label="관리자 모드 종료" class="hidden absolute top-0 right-0 text-slate-500 hover:text-white"><i class="ph ph-x"></i></button>
             </div>
-            
             <div id="step-user-login" class="space-y-4">
                 <div class="space-y-3 text-left">
-                    <div><label for="userId" class="text-xs font-bold text-slate-400 ml-1">아이디 (ID)</label><input type="text" id="userId" placeholder="User ID" class="login-input w-full rounded px-4 py-3 text-sm mt-1" onkeypress="if(event.key==='Enter') document.getElementById('userPw').focus()"></div>
-                    <div><label for="userPw" class="text-xs font-bold text-slate-400 ml-1">비밀번호 (Password)</label><input type="password" id="userPw" placeholder="••••••" class="login-input w-full rounded px-4 py-3 text-sm mt-1" onkeypress="if(event.key==='Enter') attemptLogin()"></div>
+                    <div><label for="userId" class="text-xs font-bold text-slate-400 ml-1">아이디</label><input type="text" id="userId" placeholder="User ID" class="login-input w-full rounded px-4 py-3 text-sm mt-1" onkeypress="if(event.key==='Enter') document.getElementById('userPw').focus()"></div>
+                    <div><label for="userPw" class="text-xs font-bold text-slate-400 ml-1">비밀번호</label><input type="password" id="userPw" placeholder="••••••" class="login-input w-full rounded px-4 py-3 text-sm mt-1" onkeypress="if(event.key==='Enter') attemptLogin()"></div>
                 </div>
                 <button onclick="attemptLogin()" class="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 rounded-lg transition mt-2">접속하기</button>
-                <div class="flex justify-between items-center mt-4 pt-4 border-t border-slate-700/50">
-                    <button onclick="showAdminLogin()" class="text-[10px] text-slate-500 hover:text-cyan-400 transition font-bold flex items-center gap-1"><i class="ph ph-lock-key"></i> 관리자 로그인</button>
-                </div>
+                <div class="flex justify-between items-center mt-4 pt-4 border-t border-slate-700/50"><button onclick="showAdminLogin()" class="text-[10px] text-slate-500 hover:text-cyan-400 transition font-bold flex items-center gap-1"><i class="ph ph-lock-key"></i> 관리자 로그인</button></div>
             </div>
-
             <div id="step-admin-login" class="hidden space-y-4">
                 <div class="text-left"><label for="adminPw" class="text-xs font-bold text-red-400 ml-1">관리자 비밀번호</label><input type="password" id="adminPw" class="login-input w-full rounded px-4 py-3 text-sm font-mono mt-1" placeholder="Admin Password" onkeypress="if(event.key==='Enter') verifyAdmin()"></div>
                 <button onclick="verifyAdmin()" class="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-lg transition">관리자 접속</button>
                 <button onclick="exitAdminMode()" class="text-xs text-slate-400 hover:text-white">돌아가기</button>
             </div>
-
             <div id="step-admin-dashboard" class="hidden space-y-4">
                 <div class="bg-slate-800/50 rounded-lg p-3 text-left border border-slate-700">
                     <label class="text-[10px] font-bold text-slate-400 block mb-1">신규 유저 등록</label>
@@ -103,25 +95,31 @@
         </div>
         <div class="flex-1 overflow-y-auto bg-slate-50">
             <div class="p-4 pb-0">
-                <!-- 설정 패널 (기존 유지) -->
                 <details class="bg-white rounded-lg border border-slate-200 shadow-sm group mb-4" open>
                     <summary class="p-3 text-xs font-bold text-slate-600 cursor-pointer flex items-center justify-between hover:bg-slate-50 bg-slate-100 rounded-t-lg"><span class="flex items-center gap-1"><i class="ph ph-sliders-horizontal"></i> 분석 파라미터</span><i class="ph ph-caret-down group-open:rotate-180 transition"></i></summary>
                     <div class="p-3 space-y-3 border-t border-gray-200">
                         <div class="bg-indigo-50 p-2 rounded border border-indigo-100 text-xs">
-                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="modWidth" class="block mb-0.5 text-[10px] text-slate-500">모듈 가로(m)</label><input type="number" id="modWidth" value="1.13" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="modHeight" class="block mb-0.5 text-[10px] text-slate-500">모듈 세로(m)</label><input type="number" id="modHeight" value="2.4" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
-                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="installHeight" class="block mb-0.5 text-[10px] text-slate-500">설치 높이(m)</label><input type="number" id="installHeight" value="0.5" step="0.1" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="installAngle" class="block mb-0.5 text-[10px] text-slate-500">설치 각도(°)</label><input type="number" id="installAngle" value="20" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
-                             <div class="grid grid-cols-2 gap-2"><div><label for="modPower" class="block mb-0.5 text-[10px] text-slate-500">모듈 출력(W)</label><input type="number" id="modPower" value="640" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="rowSpacing" class="block mb-0.5 text-[10px] text-slate-500">이격 거리(m)</label><input type="number" id="rowSpacing" value="1.2" step="0.1" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
+                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="modWidth" class="block mb-0.5 text-[10px] text-slate-500">모듈 가로</label><input type="number" id="modWidth" value="1.13" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="modHeight" class="block mb-0.5 text-[10px] text-slate-500">모듈 세로</label><input type="number" id="modHeight" value="2.4" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
+                             <div class="grid grid-cols-2 gap-2"><div><label for="modPower" class="block mb-0.5 text-[10px] text-slate-500">모듈 출력(W)</label><input type="number" id="modPower" value="640" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="rowSpacing" class="block mb-0.5 text-[10px] text-slate-500">이격 거리</label><input type="number" id="rowSpacing" value="1.2" step="0.1" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
                         </div>
                         <div class="bg-green-50 p-2 rounded border border-green-200 text-xs">
-                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="modPrice" class="block mb-0.5 text-[10px] text-emerald-700 font-bold">모듈단가(원/W)</label><input type="number" id="modPrice" value="350" class="w-full border p-1 rounded text-center font-bold text-emerald-700 bg-white" onchange="reCalculate()"></div><div><label for="costPerKw" class="block mb-0.5 text-[10px]">시공(만원/kW)</label><input type="number" id="costPerKw" value="90" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
-                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="smp" class="block mb-0.5 text-[10px]">SMP(원/kWh)</label><input type="number" id="smp" value="140" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="rec" class="block mb-0.5 text-[10px]">REC(원/kWh)</label><input type="number" id="rec" value="70" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
-                             <div class="grid grid-cols-2 gap-2 border-t border-green-200 pt-2"><div><label for="pfLoanRatio" class="block mb-0.5 text-[10px] text-blue-600 font-bold">PF 대출비율(%)</label><input type="number" id="pfLoanRatio" value="90" class="w-full border p-1 rounded text-center text-blue-600 font-bold bg-white" onchange="reCalculate()"></div><div><label for="pfInterestRate" class="block mb-0.5 text-[10px] text-red-600 font-bold">PF 금리(%)</label><input type="number" id="pfInterestRate" value="5.5" step="0.1" class="w-full border p-1 rounded text-center text-red-600 font-bold bg-white" onchange="reCalculate()"></div></div>
+                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="modPrice" class="block mb-0.5 text-[10px] text-emerald-700 font-bold">모듈단가</label><input type="number" id="modPrice" value="350" class="w-full border p-1 rounded text-center font-bold text-emerald-700 bg-white" onchange="reCalculate()"></div><div><label for="costPerKw" class="block mb-0.5 text-[10px]">시공(만)</label><input type="number" id="costPerKw" value="90" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
+                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="smp" class="block mb-0.5 text-[10px]">SMP</label><input type="number" id="smp" value="140" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="rec" class="block mb-0.5 text-[10px]">REC</label><input type="number" id="rec" value="70" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
+                             <div class="grid grid-cols-2 gap-2 border-t border-green-200 pt-2"><div><label for="pfLoanRatio" class="block mb-0.5 text-[10px] text-blue-600 font-bold">PF 대출(%)</label><input type="number" id="pfLoanRatio" value="90" class="w-full border p-1 rounded text-center text-blue-600 font-bold bg-white" onchange="reCalculate()"></div><div><label for="pfInterestRate" class="block mb-0.5 text-[10px] text-red-600 font-bold">PF 금리(%)</label><input type="number" id="pfInterestRate" value="5.5" step="0.1" class="w-full border p-1 rounded text-center text-red-600 font-bold bg-white" onchange="reCalculate()"></div></div>
                         </div>
+                         <!-- 설치 설정 추가 -->
+                         <div class="bg-blue-50 p-2 rounded border border-blue-100 text-xs mt-2">
+                             <div class="grid grid-cols-2 gap-2">
+                                <div><label for="installHeight" class="block mb-0.5 text-[10px] text-slate-500">설치 높이</label><input type="number" id="installHeight" value="0.5" step="0.1" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div>
+                                <div><label for="installAngle" class="block mb-0.5 text-[10px] text-slate-500">설치 각도</label><input type="number" id="installAngle" value="20" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div>
+                             </div>
+                         </div>
                     </div>
                 </details>
+
                 <div class="flex gap-2 text-xs mb-4">
-                    <label class="flex-1 cursor-pointer"><input type="radio" name="scanTarget" value="land" class="peer hidden" onchange="toggleTarget()" aria-label="토지"><div class="text-center py-2 border rounded bg-white peer-checked:bg-green-50 hover:bg-gray-50 transition shadow-sm"><i class="ph ph-tree"></i> 토지</div></label>
-                    <label class="flex-1 cursor-pointer"><input type="radio" name="scanTarget" value="building" class="peer hidden" onchange="toggleTarget()" checked aria-label="지붕"><div class="text-center py-2 border rounded bg-white peer-checked:bg-pink-50 hover:bg-gray-50 transition shadow-sm"><i class="ph ph-factory"></i> 지붕</div></label>
+                    <label class="flex-1 cursor-pointer"><input type="radio" name="scanTarget" value="land" class="peer hidden" onchange="toggleTarget()" aria-label="토지"><div class="text-center py-2 border rounded bg-white peer-checked:bg-green-50 peer-checked:border-green-500 peer-checked:text-green-700 hover:bg-gray-50 transition shadow-sm"><i class="ph ph-tree"></i> 토지</div></label>
+                    <label class="flex-1 cursor-pointer"><input type="radio" name="scanTarget" value="building" class="peer hidden" onchange="toggleTarget()" checked aria-label="지붕"><div class="text-center py-2 border rounded bg-white peer-checked:bg-pink-50 peer-checked:border-pink-500 peer-checked:text-pink-700 hover:bg-gray-50 transition shadow-sm"><i class="ph ph-factory"></i> 지붕</div></label>
                 </div>
             </div>
 
@@ -129,7 +127,47 @@
                 <div id="panel-scan" class="space-y-4">
                     <div class="bg-white p-3 rounded border border-gray-200 shadow-sm">
                         <label for="regionSelect" class="text-xs font-bold text-gray-700 mb-2 block">📍 지역 선택</label>
-                        <select id="regionSelect" onchange="setRegion()" class="w-full text-sm border rounded p-2 bg-gray-50 font-bold outline-none"><option value="">-- 지역을 선택하세요 --</option><option value="seoul">서울특별시</option></select>
+                        <!-- [복구됨] 전체 지역 리스트 -->
+                        <select id="regionSelect" onchange="setRegion()" class="w-full text-sm border rounded p-2 bg-gray-50 font-bold outline-none">
+                            <option value="">-- 지역을 선택하세요 --</option>
+                            <optgroup label="수도권">
+                                <option value="seoul">서울특별시</option>
+                                <option value="incheon">인천광역시</option>
+                                <option value="ansan_ind">안산 반월/시화 산단</option>
+                                <option value="incheon_ind">인천 남동공단</option>
+                                <option value="hwaseong_ind">화성 일반산업단지</option>
+                                <option value="pyeongtaek_ind">평택 포승공단</option>
+                            </optgroup>
+                            <optgroup label="충청권">
+                                <option value="cheonan_ind">천안 일반산업단지</option>
+                                <option value="osan_ind">오창 과학산업단지</option>
+                                <option value="daejeon_ind">대전 대덕테크노밸리</option>
+                                <option value="chungnam">충청남도</option>
+                                <option value="chungbuk">충청북도</option>
+                            </optgroup>
+                            <optgroup label="영남권">
+                                <option value="gumi_ind">구미 국가산업단지</option>
+                                <option value="changwon_ind">창원 국가산업단지</option>
+                                <option value="ulsan_ind">울산 미포/온산 산단</option>
+                                <option value="daegu_ind">대구 성서공단</option>
+                                <option value="pohang_ind">포항 철강산업단지</option>
+                                <option value="gyeongnam">경상남도</option>
+                                <option value="gyeongbuk">경상북도</option>
+                                <option value="busan">부산광역시</option>
+                            </optgroup>
+                            <optgroup label="호남권">
+                                <option value="gwangju_ind">광주 하남/첨단 산단</option>
+                                <option value="yeosu_ind">여수 국가산업단지</option>
+                                <option value="daebul_ind">영암 대불산단</option>
+                                <option value="gunsan_ind">군산 국가산업단지</option>
+                                <option value="jeonnam">전라남도</option>
+                                <option value="jeonbuk">전북특별자치도</option>
+                            </optgroup>
+                             <optgroup label="기타">
+                                <option value="gangwon">강원특별자치도</option>
+                                <option value="jeju">제주특별자치도</option>
+                            </optgroup>
+                        </select>
                     </div>
                     <div class="bg-slate-800 p-4 rounded-lg text-white space-y-3 relative overflow-hidden shadow-xl border-b-4 border-cyan-500">
                         <div class="flex justify-between items-center bg-slate-700/50 p-1.5 rounded border border-slate-600 mb-1">
@@ -164,17 +202,16 @@
                         </div>
                     </div>
                 </div>
-
                 <div id="panel-legal" class="hidden space-y-4">
                     <div class="bg-slate-800 p-4 rounded-lg shadow-lg text-white min-h-[200px]">
                         <h3 class="text-sm font-bold border-b border-slate-700 pb-2">⚖️ 입지 규제 종합 분석</h3>
-                        <!-- [수정] 분석 결과가 들어갈 공간 -->
-                        <div id="aiResponse" class="text-xs mt-3 text-slate-300 leading-relaxed space-y-2">
-                            건물을 선택하면 분석이 시작됩니다.
+                        <!-- 분석 결과 표시 영역 -->
+                        <div id="aiResponse" class="text-xs mt-3 text-slate-300 leading-relaxed space-y-2">건물을 선택하면 분석이 시작됩니다.</div>
+                        <div id="legalLinks" class="mt-4 pt-2 border-t border-slate-700 grid grid-cols-2 gap-2 text-[10px]">
+                            <!-- 링크 버튼들이 여기에 동적으로 추가됨 -->
                         </div>
                     </div>
                 </div>
-                
                 <div id="loading" class="hidden flex flex-col items-center justify-center py-4"><div class="spinner mb-2"></div><p class="text-xs text-slate-500">데이터 처리중...</p></div>
             </div>
         </div>
@@ -216,12 +253,12 @@
         let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, existingGroup, substationGroup;
         let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
         let apiCounts = { vworld: 0, public: 0, ai: 0 };
-
-        // --- Functions Definitions (Hoisted) ---
+        
+        // --- Functions Hoisted ---
         function trackApi(type) { if(apiCounts[type]!==undefined) { apiCounts[type]++; const el=document.getElementById(`cnt-${type}`); if(el) el.innerText=apiCounts[type]; } }
         function showToast(m) { const t=document.getElementById('toastMsg'); t.classList.remove('hidden','flex'); t.classList.add('flex'); document.getElementById('toastText').innerText=m; setTimeout(()=>t.classList.add('hidden'),3000); }
         function logSystem(msg) { const w=document.getElementById('logWindow'); const p=document.createElement('div'); p.innerText=`> ${msg}`; w.appendChild(p); w.scrollTop=w.scrollHeight; }
-        
+
         function toggleLayer(type) {
             const center = map ? map.getCenter() : {lat:36.5, lng:127.5};
             if(type === 'existing') {
@@ -248,6 +285,38 @@
         }
         function onMapMoveEnd() { if(!autoScanMode || !isLoggedIn) return; scanBuildings(map.getCenter().lat, map.getCenter().lng); }
 
+        // [복구됨] 지역 리스트 좌표 데이터 (이게 없으면 지역 이동이 안됨)
+        const REGIONS = {
+            'ansan_ind': [[37.31, 126.78], [37.31, 126.78]],
+            'incheon_ind': [[37.40, 126.70], [37.40, 126.70]],
+            'hwaseong_ind': [[37.20, 126.77], [37.20, 126.77]],
+            'pyeongtaek_ind': [[36.98, 126.85], [36.98, 126.85]],
+            'cheonan_ind': [[36.85, 127.12], [36.85, 127.12]],
+            'osan_ind': [[36.72, 127.44], [36.72, 127.44]],
+            'daejeon_ind': [[36.43, 127.39], [36.43, 127.39]],
+            'gumi_ind': [[36.11, 128.39], [36.11, 128.39]],
+            'changwon_ind': [[35.21, 128.65], [35.21, 128.65]],
+            'ulsan_ind': [[35.50, 129.37], [35.50, 129.37]],
+            'daegu_ind': [[35.85, 128.50], [35.85, 128.50]],
+            'pohang_ind': [[36.00, 129.37], [36.00, 129.37]],
+            'gwangju_ind': [[35.20, 126.80], [35.20, 126.80]],
+            'yeosu_ind': [[34.85, 127.70], [34.85, 127.70]],
+            'daebul_ind': [[34.77, 126.45], [34.77, 126.45]],
+            'gunsan_ind': [[35.97, 126.60], [35.97, 126.60]],
+            'seoul': [[37.5665, 126.9780], [37.5665, 126.9780]],
+            'gyeonggi': [[37.2752, 127.0097], [37.2752, 127.0097]],
+            'incheon': [[37.4563, 126.7052], [37.4563, 126.7052]],
+            'jeonnam': [[34.8163, 126.4629], [34.8163, 126.4629]],
+            'jeonbuk': [[35.8203, 127.1087], [35.8203, 127.1087]],
+            'gyeongnam': [[35.2383, 128.6924], [35.2383, 128.6924]],
+            'gyeongbuk': [[36.5741, 128.5093], [36.5741, 128.5093]],
+            'chungnam': [[36.6588, 126.6728], [36.6588, 126.6728]],
+            'chungbuk': [[36.6356, 127.4913], [36.6356, 127.4913]],
+            'gangwon': [[37.8854, 127.7298], [37.8854, 127.7298]],
+            'jeju': [[33.4996, 126.5312], [33.4996, 126.5312]]
+        };
+
+        // --- Main Functions ---
         async function searchAddress() {
             trackApi('vworld');
             const query = document.getElementById('addrInput').value;
@@ -255,12 +324,11 @@
             document.getElementById('loading').classList.remove('hidden');
             try {
                 const res = await fetch(`${BACKEND_URL}/api/vworld/address?address=${encodeURIComponent(query)}`);
-                if(!res.ok) {
-                    const err = await res.json().catch(()=>({}));
-                    throw new Error(err.message || `서버 오류 (${res.status})`);
-                }
                 const data = await res.json();
-                if(data.status === "ERROR" || data.status === "VWORLD_ERROR") throw new Error(data.message || "검색 실패");
+                
+                if(data.status && data.status.includes("ERROR")) {
+                    throw new Error(data.message || "검색 실패");
+                }
                 
                 if(data.response && data.response.status === 'OK') {
                     const { x, y } = data.response.result.point;
@@ -336,47 +404,52 @@
             document.getElementById('user-list-container').innerHTML = users.map(u => `<div class="flex justify-between bg-slate-800 p-1 rounded text-xs text-cyan-300"><span>${u.id}</span></div>`).join('');
             document.getElementById('user-count').innerText = `${users.length}명`;
         }
-
-        // [핵심 수정] 종합 분석 기능 (좌표 및 주소 전달)
+        
         async function analyzeFeature(feature) {
-            switchTab('analysis'); 
-            document.getElementById('resultCard').classList.remove('hidden');
-            const addr = feature.properties.road_nm_ad || feature.properties.jibun || feature.properties.addr || "주소 미상";
+            switchTab('analysis'); document.getElementById('resultCard').classList.remove('hidden');
+            const addr = feature.properties.road_nm_ad || feature.properties.addr || "주소 미상";
             document.getElementById('analysisAddress').innerText = addr;
-            
             drawPanels(feature.geometry); 
 
-            // 중심 좌표 계산 (Turf.js)
+            // 중심 좌표 계산
             const center = turf.center(feature);
             const lng = center.geometry.coordinates[0];
             const lat = center.geometry.coordinates[1];
-
+            
             document.getElementById('loading').classList.remove('hidden');
             try {
-                // 백엔드 종합 분석 API 호출
+                // 백엔드 종합 분석 호출
                 const res = await fetch(`${BACKEND_URL}/api/analyze/comprehensive?lat=${lat}&lng=${lng}&address=${encodeURIComponent(addr)}`);
                 const data = await res.json();
                 
                 if(data.status === 'OK') {
-                     // 분석 결과(용도지역, 생태, 한전 등) 표시
-                     const resultHtml = data.messages.map(msg => `<li class="mb-1">${msg}</li>`).join('');
-                     document.getElementById('aiResponse').innerHTML = `<ul class="list-disc pl-4">${resultHtml}</ul>`;
+                     const msgHtml = data.messages.map(m => `<li class="mb-1">${m}</li>`).join('');
                      
-                     // 한전 용량 별도 표시
+                     // 링크 버튼 생성
+                     let linkHtml = '';
+                     for (const [key, url] of Object.entries(data.links)) {
+                         let name = key.toUpperCase();
+                         if (key === 'elis') name = '자치조례';
+                         if (key === 'eum') name = '토지이음';
+                         if (key === 'kepco') name = '한전ON';
+                         linkHtml += `<a href="${url}" target="_blank" class="bg-slate-700 hover:bg-slate-600 text-white px-2 py-1 rounded text-center">${name}</a>`;
+                     }
+
+                     document.getElementById('aiResponse').innerHTML = `
+                        <ul class="list-disc pl-4 mb-3">${msgHtml}</ul>
+                        <div class="grid grid-cols-3 gap-1 text-[10px] mt-2 border-t border-slate-600 pt-2">
+                            ${linkHtml}
+                        </div>
+                     `;
+                     
                      if (data.kepco_capacity) {
                         document.getElementById('kepcoCapacity').innerText = data.kepco_capacity;
                      }
-                } else {
-                    document.getElementById('aiResponse').innerText = "분석 데이터를 불러오지 못했습니다.";
                 }
-            } catch(e) {
-                console.error(e);
-                document.getElementById('aiResponse').innerText = "서버 통신 오류";
-            } finally {
-                document.getElementById('loading').classList.add('hidden');
-            }
+            } catch(e) { console.error(e); }
+            finally { document.getElementById('loading').classList.add('hidden'); }
         }
-
+        
         function reCalculate() { if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry); }
         function calculateFinance(count) { document.getElementById('analysisCount').innerText = `${count} 장`; }
         function drawPanels(geo) { if(!isMultiSelectMode) { panelGroup.clearLayers(); accumulatedPanelsCount=0; } try { let poly=turf.feature(geo); L.geoJSON(poly, {style:{color:'blue'}}).addTo(panelGroup); accumulatedPanelsCount++; calculateFinance(accumulatedPanelsCount); } catch(e){} }
@@ -384,7 +457,22 @@
         function clearResults() { panelGroup.clearLayers(); selectableGroup.clearLayers(); accumulatedPanelsCount=0; if(analysisMarker) map.removeLayer(analysisMarker); document.getElementById('resultCard').classList.add('hidden'); }
         function resetCalibration() { currentGeoState={x:0,y:0,rot:0}; if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry); }
         function applyCalibration() {} function applySliderCalibration() {}
-        function setRegion() { const val=document.getElementById('regionSelect').value; if(val==='seoul') { map.setView([37.5665, 126.9780], 13); scanBuildings(37.5665, 126.9780); } }
+        
+        function setRegion() { 
+            const val = document.getElementById('regionSelect').value;
+            if(!val) return;
+            const bounds = REGIONS[val];
+            if(bounds) {
+                // 좌표가 하나면 해당 위치로 이동, 두 개면 영역으로 이동
+                if(bounds[0][0] === bounds[1][0]) { 
+                    map.setView(bounds[0], 13); 
+                    scanBuildings(bounds[0][0], bounds[0][1]); 
+                } else { 
+                    map.fitBounds(bounds); 
+                }
+                showToast("지역 이동");
+            }
+        }
         function setMap(t) { if(t==='base') { map.addLayer(layers.base); map.removeLayer(layers.sat); } else { map.addLayer(layers.sat); map.removeLayer(layers.base); } layers.hybrid.bringToFront(); }
         function toggleSidebar() { document.getElementById('sidebar').classList.toggle('collapsed'); document.getElementById('sidebar-toggle-btn').classList.toggle('collapsed'); }
         function switchTab(m) { ['scan','analysis','legal'].forEach(t=>document.getElementById(`tab-${t}`).classList.remove('active')||document.getElementById(`panel-${t}`).classList.add('hidden')); document.getElementById(`tab-${m}`).classList.add('active'); document.getElementById(`panel-${m}`).classList.remove('hidden'); }
