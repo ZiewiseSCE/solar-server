@@ -817,27 +817,38 @@
 
         window.resetCalibration = function() { 
             currentGeoState = { x: 0, y: 0, rot: 0 }; 
-            panelGroup.clearLayers(); 
-            if(currentAnalysisFeature) {
-                const res = window.drawPanels(currentAnalysisFeature.geometry);
-                if (res && !isMultiSelectMode) {
-                    selectedFeatures.clear();
-                    const center = turf.center(currentAnalysisFeature).geometry.coordinates;
-                    const fid = currentAnalysisFeature.properties.pnu || `${center[1].toFixed(6)}_${center[0].toFixed(6)}`;
-                    selectedFeatures.set(fid, { layer: res.layer, count: res.count, address: document.getElementById('analysisAddress').innerText });
-                    window.calculateFinance(res.count);
-                }
+            if(!currentAnalysisFeature) return;
+            // ✅ 깜빡임 방지: 기존 패널을 먼저 지우지 않고, 새 패널 생성 후 교체
+            const oldLayers = panelGroup ? panelGroup.getLayers().slice() : [];
+            // (옵션) 계산 중에는 기존 패널을 살짝 흐리게 표시
+            oldLayers.forEach(l => { try { if(l.setStyle) l.setStyle({ fillOpacity: 0.12, opacity: 0.4 }); } catch(e){} });
+            const res = window.drawPanels(currentAnalysisFeature.geometry);
+            if(res && panelGroup) {
+                // 새 레이어를 제외한 이전 레이어 제거
+                oldLayers.forEach(l => { try { if(l !== res.layer) panelGroup.removeLayer(l); } catch(e){} });
+                // 새 레이어는 선명하게
+                try { if(res.layer.setStyle) res.layer.setStyle({ fillOpacity: (scanTarget==='land'?0.1:0.3), opacity: 1 }); } catch(e){}
+                if (!isMultiSelectMode) window.calculateFinance(res.count);
             }
         };
         
         window.applyCalibration = function(dx, dy, drot = 0) { 
-            currentGeoState.x += dx * 5; 
+            currentGeoState.x += dx * 5; // 미터 단위(내부에서 /1000 변환)
             currentGeoState.y += dy * 5; 
             currentGeoState.rot += drot; 
-            panelGroup.clearLayers(); 
-            if(currentAnalysisFeature) {
-                const res = window.drawPanels(currentAnalysisFeature.geometry);
-                if (res && !isMultiSelectMode) window.calculateFinance(res.count);
+            if(!currentAnalysisFeature) return;
+
+            // ✅ 깜빡임 방지: 기존 패널 유지 → 새 패널 생성 후 교체
+            const oldLayers = panelGroup ? panelGroup.getLayers().slice() : [];
+            oldLayers.forEach(l => { try { if(l.setStyle) l.setStyle({ fillOpacity: 0.12, opacity: 0.4 }); } catch(e){} });
+
+            const res = window.drawPanels(currentAnalysisFeature.geometry);
+
+            if(res && panelGroup) {
+                oldLayers.forEach(l => { try { if(l !== res.layer) panelGroup.removeLayer(l); } catch(e){} });
+                try { if(res.layer.setStyle) res.layer.setStyle({ fillOpacity: (scanTarget==='land'?0.1:0.3), opacity: 1 }); } catch(e){}
+                // 단일 모드일 때만 실시간 재계산
+                if (!isMultiSelectMode) window.calculateFinance(res.count);
             }
         };
 
