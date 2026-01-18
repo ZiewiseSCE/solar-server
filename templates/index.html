@@ -340,11 +340,13 @@
         }
         function safeSetItem(key, val) {
             try { localStorage.setItem(key, val); } 
-// ✅ expose storage helpers to window (used by login/admin)
-window.safeGetItem = safeGetItem;
-window.safeSetItem = safeSetItem;
 catch(e) { console.warn("Storage restricted"); }
         }
+
+        // ✅ expose storage helpers to window (used by login/admin)
+        window.safeGetItem = safeGetItem;
+        window.safeSetItem = safeSetItem;
+
 
         window.trackApi = function(type) { 
             const el = document.getElementById(`cnt-${type}`); 
