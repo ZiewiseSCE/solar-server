@@ -33,16 +33,20 @@
         .tab-btn.active { border-bottom-color: #06b6d4; color: #06b6d4; font-weight: bold; background-color: #f8fafc; }
         .result-card { background: rgba(15, 23, 42, 0.95); border-left: 4px solid #06b6d4; backdrop-filter: blur(4px); }
         .spinner { border: 3px solid rgba(255,255,255,0.1); border-radius: 50%; border-top: 3px solid #06b6d4; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .login-input { background: rgba(30, 41, 59, 0.5); border: 1px solid #475569; color: white; transition: all 0.3s; }
+        
+        /* D-Pad 버튼 스타일 */
         .d-pad-btn { width: 36px; height: 36px; background: #334155; border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.1s; color: white; font-size: 16px; font-weight: bold; box-shadow: 0 2px 0 #0f172a; }
         .d-pad-btn:hover { background: #475569; transform: translateY(-1px); }
         .d-pad-btn:active { background: #1e293b; transform: translateY(2px); box-shadow: none; }
+        
         .plant-marker { background: #fbbf24; border: 2px solid white; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
         .substation-marker { background: #ef4444; border: 2px solid white; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.5); color: white; display: flex; align-items: center; justify-content: center; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body class="bg-gray-100">
+    <!-- 리포트 전송용 히든 폼 -->
     <form id="reportForm" method="POST" target="_blank" class="hidden">
         <input type="hidden" name="address" id="form_address">
         <input type="hidden" name="capacity" id="form_capacity">
@@ -53,7 +57,6 @@
     </form>
 
     <div id="login-overlay">
-        <!-- 로그인 UI -->
         <div class="bg-slate-900 p-8 rounded-2xl shadow-2xl border border-slate-700 w-[400px] text-center relative overflow-hidden" id="login-box">
             <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500"></div>
             <div class="mb-6 relative">
@@ -62,6 +65,7 @@
                 <p class="text-slate-400 text-sm mt-2">태양광 발전 분석 클라우드 (Enterprise)</p>
                 <button onclick="exitAdminMode()" id="exit-admin-btn" aria-label="닫기" class="hidden absolute top-0 right-0 text-slate-500 hover:text-white"><i class="ph ph-x"></i></button>
             </div>
+            <!-- 사용자 로그인 -->
             <div id="step-user-login" class="space-y-4">
                 <div class="space-y-3 text-left">
                     <div><label for="userId" class="text-xs font-bold text-slate-400 ml-1">아이디</label><input type="text" id="userId" placeholder="User ID" class="login-input w-full rounded px-4 py-3 text-sm mt-1"></div>
@@ -70,11 +74,13 @@
                 <button onclick="attemptLogin()" class="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 rounded-lg transition mt-2">접속하기</button>
                 <div class="flex justify-between items-center mt-4 pt-4 border-t border-slate-700/50"><button onclick="showAdminLogin()" class="text-[10px] text-slate-500 hover:text-cyan-400 transition font-bold flex items-center gap-1"><i class="ph ph-lock-key"></i> 관리자 로그인</button></div>
             </div>
+            <!-- 관리자 로그인 -->
             <div id="step-admin-login" class="hidden space-y-4">
                 <div class="text-left"><label for="adminPw" class="text-xs font-bold text-red-400 ml-1">관리자 비밀번호</label><input type="password" id="adminPw" class="login-input w-full rounded px-4 py-3 text-sm font-mono mt-1" placeholder="Admin Password" onkeypress="if(event.key==='Enter') verifyAdmin()"></div>
                 <button onclick="verifyAdmin()" class="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-lg transition">관리자 접속</button>
                 <button onclick="exitAdminMode()" class="text-xs text-slate-400 hover:text-white">돌아가기</button>
             </div>
+            <!-- 관리자 대시보드 -->
             <div id="step-admin-dashboard" class="hidden space-y-4">
                 <div class="bg-slate-800/50 rounded-lg p-3 text-left border border-slate-700">
                     <label class="text-[10px] font-bold text-slate-400 block mb-1">신규 유저 등록</label>
@@ -105,7 +111,6 @@
         <div class="flex border-b border-gray-200 shrink-0 bg-white shadow-sm">
             <button onclick="switchTab('scan')" id="tab-scan" class="tab-btn active flex-1 py-3 text-xs text-center"><i class="ph ph-radar text-lg"></i>전수 스캔</button>
             <button onclick="switchTab('analysis')" id="tab-analysis" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-magnifying-glass-plus text-lg"></i>정밀 분석</button>
-            <button onclick="switchTab('legal')" id="tab-legal" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-sparkle text-lg"></i>종합 리포트</button>
             <button onclick="switchTab('history')" id="tab-history" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-clock-counter-clockwise text-lg"></i>기록</button>
         </div>
 
@@ -117,6 +122,7 @@
                     <div class="p-3 space-y-3 border-t border-gray-200">
                         <div class="bg-indigo-50 p-2 rounded border border-indigo-100 text-xs">
                              <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="modWidth" class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 가로(m)</label><input type="number" id="modWidth" value="1.13" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="modHeight" class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 세로(m)</label><input type="number" id="modHeight" value="2.4" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
+                             <!-- [확인] 설치 최대높이 반영 -->
                              <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="installHeight" class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 최대높이(m)</label><input type="number" id="installHeight" value="0.5" step="0.1" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="installAngle" class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 각도(°)</label><input type="number" id="installAngle" value="20" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
                              <div class="grid grid-cols-2 gap-2"><div><label for="modPower" class="block mb-0.5 text-[10px] text-slate-500">모듈 출력(W)</label><input type="number" id="modPower" value="640" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="rowSpacing" class="block mb-0.5 text-[10px] text-slate-500">이격(m)</label><input type="number" id="rowSpacing" value="1.2" step="0.1" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
                         </div>
@@ -134,7 +140,7 @@
             </div>
 
             <div class="px-4 pb-4">
-                <!-- 1. 스캔 패널 -->
+                <!-- 1. 스캔 패널 (지역 리스트 복구됨) -->
                 <div id="panel-scan" class="space-y-4">
                     <div class="bg-white p-3 rounded border border-gray-200 shadow-sm">
                         <label for="regionSelect" class="text-xs font-bold text-gray-700 mb-2 block">📍 지역 선택</label>
@@ -196,6 +202,7 @@
                 <div id="panel-analysis" class="hidden space-y-4">
                     <div class="bg-slate-800 p-2 rounded-lg border border-indigo-500/50 shadow-lg mb-2">
                         <div class="flex justify-between items-center mb-2 border-b border-slate-700 pb-1"><span class="text-[11px] font-bold text-indigo-300 flex items-center gap-1"><i class="ph ph-crosshair"></i> 패널 조정 (D-Pad)</span><button onclick="resetCalibration()" class="text-[9px] bg-slate-700 hover:bg-slate-600 px-1.5 py-0.5 rounded text-white border border-slate-600">초기화</button></div>
+                        <!-- D-Pad UI -->
                         <div class="flex flex-col items-center justify-center gap-2 pt-2 pb-1">
                              <div class="grid grid-cols-3 gap-2">
                                 <div></div><button class="d-pad-btn" onclick="applyCalibration(0, 0.5)">▲</button><div></div>
@@ -209,6 +216,7 @@
                                 <button class="d-pad-btn flex-1 text-[10px]" onclick="applyCalibration(0, 0, 5)">↻ 회전</button>
                             </div>
                         </div>
+                        <p class="text-[9px] text-slate-500 text-center mt-1">* 버튼을 눌러 위치와 각도를 미세 조정하세요.</p>
                     </div>
 
                     <div id="resultCard" class="hidden result-card p-4 rounded-lg shadow-lg text-white space-y-3">
@@ -251,7 +259,7 @@
                     </div>
                 </div>
 
-                <!-- 4. 종합 리포트 패널 (AI 분석 대시보드) -->
+                <!-- 4. 종합 리포트 패널 -->
                 <div id="panel-legal" class="hidden space-y-4">
                     <div class="bg-slate-800 p-4 rounded-lg shadow-lg text-white min-h-[300px]">
                         <h3 class="text-sm font-bold border-b border-slate-700 pb-2 flex items-center gap-2"><i class="ph ph-files"></i> AI 인허가 분석 대시보드</h3>
@@ -318,7 +326,8 @@
         let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, analysisMarkerGroup, existingGroup, substationGroup;
         let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
         let apiCounts = { vworld: 0, public: 0, ai: 0 };
-        let selectedFeatureIds = new Set();
+        // [중복 방지 & 레이어 매핑]
+        let selectedFeatures = new Map();
         let currentAnalysisData = {}; 
         
         function trackApi(type) { if(apiCounts[type]!==undefined) { apiCounts[type]++; const el=document.getElementById(`cnt-${type}`); if(el) el.innerText=apiCounts[type]; } }
@@ -397,16 +406,18 @@
             const loading = document.getElementById('loading');
             if(loading) { loading.classList.remove('hidden'); loading.querySelector('p').innerText="데이터 분석 중..."; }
 
-            if(analysisMarkerGroup && !isMultiSelectMode) analysisMarkerGroup.clearLayers();
-            L.marker([lat, lng]).addTo(analysisMarkerGroup);
+            if(analysisMarker && !isMultiSelectMode) map.removeLayer(analysisMarker);
+            analysisMarker = L.marker([lat, lng]).addTo(map);
 
             const box = `${lng - 0.001},${lat - 0.001},${lng + 0.001},${lat + 0.001}`;
             try {
+                // [수정] 모드에 따른 레이어 선택
                 const layerName = scanTarget === 'land' ? 'LP_PA_CBND_BUBUN' : 'LT_C_SPBD';
                 const url = `https://api.vworld.kr/req/data?service=data&request=GetFeature&data=${layerName}&key=${VWORLD_TILE_KEY}&geomFilter=BOX(${box})&size=1000`;
                 const data = await jsonpRequest(url);
                 if(data.response?.status === 'OK') {
                     L.geoJSON(data.response.result.featureCollection.features, {
+                        // [수정] 토지 모드 스타일: 형광 녹색 테두리 + 투명도 0.1
                         style: scanTarget === 'land' 
                             ? { color: '#39ff14', weight: 3, fillColor: '#22c55e', fillOpacity: 0.1 } 
                             : { color: '#3b82f6', weight: 2, fillOpacity: 0.2 },
@@ -464,44 +475,69 @@
             document.getElementById('user-count').innerText = `${users.length}명`;
         }
 
+        // [중복 방지 & 스마트 토글]
         async function analyzeFeature(feature) {
-            // [중복 방지 & 스마트 토글]
-            const featureId = feature.id || JSON.stringify(feature.geometry.coordinates);
+            const featureId = feature.properties.pnu || feature.id || JSON.stringify(feature.geometry.coordinates);
             
             // 1. 이미 선택된 경우 (해제 로직)
-            if (selectedFeatureIds.has(featureId)) {
-                // 이미 그려진 패널(레이어) 찾아서 제거해야 함 (단순화: 전체 리셋 후 다시 그리기 등은 복잡하므로 여기선 알림만)
-                // 만약 개별 제거를 원하면 panelGroup에서 해당 featureId와 매핑된 레이어를 찾아야 함.
-                // 여기서는 사용자 요청대로 '선택 해제' 개념을 적용하기 위해 토글 방식을 사용.
-                // 하지만 Leaflet 레이어 관리가 복잡해지므로, 누적 모드가 아닐 땐 리셋, 맞을 땐 중복 알림으로 처리.
-                if (isMultiSelectMode) {
-                     return showToast("이미 선택된 영역입니다 (해제 기능 미구현)"); 
-                } else {
-                    clearResults();
-                    return;
-                }
+            if (selectedFeatures.has(featureId)) {
+                const stored = selectedFeatures.get(featureId);
+                panelGroup.removeLayer(stored.layer);
+                selectedFeatures.delete(featureId);
+                
+                // 합산 다시 계산
+                let totalPanels = 0;
+                selectedFeatures.forEach(v => totalPanels += v.count);
+                accumulatedPanelsCount = totalPanels;
+                calculateFinance(totalPanels);
+                
+                showToast("선택이 해제되었습니다.");
+                return;
             }
 
             // 2. 단일 모드일 경우 기존 선택 초기화
             if (!isMultiSelectMode) {
-                clearResults(); 
+                clearResults(); // 초기화 (selectedFeatures도 비워짐)
             }
-            selectedFeatureIds.add(featureId);
 
+            // 3. 신규 선택 (분석 시작)
             switchTab('analysis'); 
             document.getElementById('resultCard').classList.remove('hidden');
-            const addr = feature.properties.road_nm_ad || feature.properties.jibun || feature.properties.addr || "주소 미상";
+            
+            // 상세 주소 확보 (jibun_addr 등 활용)
+            const props = feature.properties;
+            const addr = props.road_nm_ad || props.jibun_addr || props.addr || `PNU: ${props.pnu}` || "주소 미상";
             document.getElementById('analysisAddress').innerText = addr;
             
+            // 패널 그리기 (결과 리턴받음)
+            const drawResult = drawPanels(feature.geometry); 
+            
+            if (drawResult) {
+                // 맵에 저장
+                selectedFeatures.set(featureId, {
+                    layer: drawResult.layer,
+                    count: drawResult.count,
+                    address: addr
+                });
+                
+                // 합산 업데이트
+                let totalPanels = 0;
+                selectedFeatures.forEach(v => totalPanels += v.count);
+                accumulatedPanelsCount = totalPanels;
+                calculateFinance(totalPanels);
+            }
+
             currentAnalysisData = { address: addr, date: new Date().toLocaleDateString() };
             currentAnalysisFeature = feature;
-            
-            drawPanels(feature.geometry); 
 
+            // AI 데이터 가져오기
             const center = turf.center(feature);
             const lng = center.geometry.coordinates[0];
             const lat = center.geometry.coordinates[1];
+            fetchAIData(lat, lng, addr);
+        }
 
+        async function fetchAIData(lat, lng, addr) {
             const loadingEl = document.getElementById('legalLoading');
             const contentEl = document.getElementById('legalContent');
             const placeholderEl = document.getElementById('legalPlaceholder');
@@ -518,16 +554,11 @@
                 if(contentEl) contentEl.classList.remove('hidden');
 
                 if(data.status === 'OK') {
-                     // 만약 주소가 '주소 미상'이었는데 백엔드에서 찾아줬다면 업데이트
-                     if (addr === "주소 미상" && data.address) {
-                         document.getElementById('analysisAddress').innerText = data.address;
-                         currentAnalysisData.address = data.address;
-                     }
-                
                      currentAnalysisData.ai_analysis = data;
-
+                     // 결과 표시 (기존 코드 유지)
                      const resultContainer = document.getElementById('aiAnalysisResult');
                      if(resultContainer) {
+                         // ... (카드 생성 코드 유지)
                          const items = [
                             {icon: 'ph-buildings', title: '용도지역', val: data.zoning, link: data.links.eum},
                             {icon: 'ph-plant', title: '생태등급', val: data.eco_grade, link: data.links.heritage},
@@ -552,7 +583,6 @@
                             </div>
                          `).join('');
                      }
-                     
                      if (data.kepco_capacity) {
                         const kepcoEl = document.getElementById('kepcoCapacity');
                         if(kepcoEl) kepcoEl.innerText = data.kepco_capacity;
@@ -564,14 +594,6 @@
             }
         }
         
-        // [수정] 모드 변경 시 리셋 및 토스트 메시지
-        function toggleTarget() { 
-            const els=document.getElementsByName('scanTarget'); 
-            els.forEach(e=>{if(e.checked) scanTarget=e.value;}); 
-            clearResults(); 
-            showToast(`모드 변경: ${scanTarget === 'land' ? '토지' : '지붕'}`); 
-        }
-
         function reCalculate() { if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry); }
         
         function calculateFinance(count) { 
@@ -583,7 +605,7 @@
             const capEl = document.getElementById('analysisCapacity');
             if(capEl) capEl.innerText = `${capKw.toFixed(1)} kW`;
 
-            // PF 계산 (ROI 공식 수정됨)
+            // PF 계산 (나머지 로직 동일)
             const smp = parseFloat(document.getElementById('smp').value);
             const rec = parseFloat(document.getElementById('rec').value);
             const costPerKw = parseFloat(document.getElementById('costPerKw').value) * 10000;
@@ -621,8 +643,11 @@
             currentAnalysisData.capacity = `${capKw.toFixed(1)} kW`;
         }
         
+        // [수정] 패널 그리기 (레이어 리턴하도록 변경)
         function drawPanels(geo) { 
-            if(!isMultiSelectMode) { panelGroup.clearLayers(); accumulatedPanelsCount=0; } 
+            // 단일 모드일 때만 여기서 초기화 (멀티 모드는 analyzeFeature에서 제어)
+            // if(!isMultiSelectMode) { panelGroup.clearLayers(); accumulatedPanelsCount=0; } 
+            
             try { 
                 let poly = turf.feature(geo);
                 if (currentGeoState.x !== 0 || currentGeoState.y !== 0 || currentGeoState.rot !== 0) {
@@ -638,7 +663,6 @@
                 const projectedH_m = modH_m * Math.cos(angle * Math.PI / 180);
                 const ONE_LAT_M = 111000;
                 const ONE_LNG_M = 88800;
-                
                 const dLng = (modW_m + 0.1) / ONE_LNG_M; 
                 const dLat = (projectedH_m + 0.1) / ONE_LAT_M;
                 
@@ -661,22 +685,29 @@
                     if(loopGuard > 15000) break;
                 }
                 
+                let newLayer;
                 if(tempPanels.length > 0) {
-                    L.geoJSON({type:"FeatureCollection", features: tempPanels}, {
-                        style: { color: '#1e40af', weight: 1, fillColor: '#3b82f6', fillOpacity: 0.7 }
-                    }).addTo(panelGroup);
+                    newLayer = L.geoJSON({type:"FeatureCollection", features: tempPanels}, {
+                        style: scanTarget === 'land' 
+                            ? { color: '#14532d', weight: 1, fillColor: '#16a34a', fillOpacity: 0.8 } // 토지: 진한 초록 패널
+                            : { color: '#1e40af', weight: 1, fillColor: '#3b82f6', fillOpacity: 0.7 } // 지붕: 파란 패널
+                    });
                 } else {
                     const center = turf.center(poly);
                     const [cx, cy] = center.geometry.coordinates;
                     const fallback = turf.bboxPolygon([cx, cy, cx+dLng, cy+dLat]);
-                    L.geoJSON(fallback, { style: { color: 'red', fillColor: '#ef4444' } }).addTo(panelGroup);
+                    newLayer = L.geoJSON(fallback, { style: { color: 'red', fillColor: '#ef4444' } });
                     count = 1;
                     showToast("건물이 작아 패널 1개를 임시 배치했습니다.");
                 }
                 
-                accumulatedPanelsCount += count;
-                calculateFinance(accumulatedPanelsCount);
-            } catch(e) { console.error("Panel Draw Error:", e); } 
+                // 레이어를 그룹에 추가
+                newLayer.addTo(panelGroup);
+                
+                // 결과 반환 (analyzeFeature에서 사용)
+                return { layer: newLayer, count: count };
+                
+            } catch(e) { console.error("Panel Draw Error:", e); return null; } 
         }
 
         function openFullReport() {
@@ -736,6 +767,7 @@
             if(timerEl) timerEl.innerText = `약 ${Math.floor((delay * 20) / 1000 / 60).toString().padStart(2, '0')}:${Math.floor((delay * 20) / 1000 % 60).toString().padStart(2, '0')} 소요`;
         }
 
+        // [수정] 리셋 버튼: 마커와 중복 선택 목록까지 초기화 (핀포인트 제거)
         function clearResults() { 
             panelGroup.clearLayers(); 
             selectableGroup.clearLayers(); 
@@ -769,6 +801,36 @@
         function toggleTarget() { const els=document.getElementsByName('scanTarget'); els.forEach(e=>{if(e.checked) scanTarget=e.value;}); toggleMultiSelect(); showToast(`모드: ${scanTarget}`); }
         function toggleMultiSelect() { isMultiSelectMode=document.getElementById('multiSelectToggle').checked; clearResults(); }
         function toggleAutoScan() { autoScanMode=document.getElementById('autoScanToggle').checked; if(autoScanMode) onMapMoveEnd(); }
+        
+        let missionInterval;
+        async function startMission() {
+            if(missionInterval) return;
+            const bounds = map.getBounds();
+            const latStep = (bounds.getNorth() - bounds.getSouth()) / 4;
+            const lngStep = (bounds.getEast() - bounds.getWest()) / 5;
+            let count = 0;
+            const delay = parseInt(document.getElementById('scanDelay').value) || 1000;
+            
+            showToast("자동 스캔 시작");
+            document.getElementById('foundCount').innerText = "검색 중..."; // [추가] 초기 텍스트
+
+            missionInterval = setInterval(() => {
+                if(count >= 20) { clearInterval(missionInterval); missionInterval=null; showToast("스캔 완료"); return; }
+                const r = Math.floor(count / 5);
+                const c = count % 5;
+                const lat = bounds.getSouth() + latStep * (r + 0.5);
+                const lng = bounds.getWest() + lngStep * (c + 0.5);
+                scanBuildings(lat, lng);
+                
+                // [추가] 찾은 개수 업데이트 (selectableGroup 레이어 수 카운트)
+                const found = selectableGroup.getLayers().length;
+                document.getElementById('foundCount').innerText = `검색된 구역: ${found}개`;
+
+                count++;
+                document.getElementById('progressCount').innerText = `${count} / 20`;
+                document.getElementById('totalProgressBar').style.width = `${(count/20)*100}%`;
+            }, delay);
+        }
     </script>
 </body>
 </html>
