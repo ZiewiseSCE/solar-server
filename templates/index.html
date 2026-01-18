@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- 보안 업그레이드 -->
+    <!-- 보안 및 외부 라이브러리 -->
     <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests"> 
     <title>SCEnergy 태양광 채굴기</title>
     
@@ -13,7 +13,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
-    <!-- 차트 라이브러리 -->
+    <!-- 차트 라이브러리 (매력도 표시용) -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
     <!-- Firebase -->
@@ -26,11 +26,11 @@
         #map { width: 100%; height: 100%; z-index: 1; background: #1a1a1a; }
         #login-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.95); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); z-index: 9999; display: flex; align-items: center; justify-content: center; transition: opacity 0.5s ease-out; }
         #login-overlay.hidden-overlay { opacity: 0; pointer-events: none; }
-        html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
         .sidebar { z-index: 2000; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
         .sidebar.collapsed { transform: translateX(-100%); }
         #sidebar-toggle-btn { left: 420px; transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1); z-index: 2001; }
         #sidebar-toggle-btn.collapsed { left: 0; }
+        .tab-btn { transition: all 0.2s; border-bottom: 2px solid transparent; }
         .tab-btn.active { border-bottom-color: #06b6d4; color: #06b6d4; font-weight: bold; background-color: #f8fafc; }
         .result-card { background: rgba(15, 23, 42, 0.95); border-left: 4px solid #06b6d4; backdrop-filter: blur(4px); }
         .spinner { border: 3px solid rgba(255,255,255,0.1); border-radius: 50%; border-top: 3px solid #06b6d4; width: 24px; height: 24px; animation: spin 1s linear infinite; }
@@ -38,8 +38,6 @@
         .d-pad-btn { width: 36px; height: 36px; background: #334155; border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.1s; color: white; font-size: 16px; font-weight: bold; box-shadow: 0 2px 0 #0f172a; }
         .d-pad-btn:hover { background: #475569; transform: translateY(-1px); }
         .d-pad-btn:active { background: #1e293b; transform: translateY(2px); box-shadow: none; }
-        .plant-marker { background: #fbbf24; border: 2px solid white; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
-        .substation-marker { background: #ef4444; border: 2px solid white; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.5); color: white; display: flex; align-items: center; justify-content: center; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
@@ -51,19 +49,16 @@
         <input type="hidden" name="date" id="form_date">
         <input type="hidden" name="finance" id="form_finance">
         <input type="hidden" name="ai_analysis" id="form_ai">
-        <!-- [추가] AI 점수 및 가격 정보 -->
         <input type="hidden" name="ai_score" id="form_score">
         <input type="hidden" name="land_price" id="form_price">
     </form>
 
     <div id="login-overlay">
-        <!-- 로그인 화면 -->
         <div class="bg-slate-900 p-8 rounded-2xl shadow-2xl border border-slate-700 w-[400px] text-center relative overflow-hidden" id="login-box">
             <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500"></div>
             <div class="mb-6 relative">
                 <div class="mx-auto w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mb-4 border border-slate-700 shadow-lg"><i class="ph ph-solar-panel text-3xl text-cyan-400"></i></div>
                 <h1 class="text-2xl font-bold text-white tracking-tight">SCEnergy 태양광 채굴기</h1>
-                <p class="text-slate-400 text-sm mt-2">태양광 발전 분석 클라우드 (Enterprise)</p>
                 <button onclick="exitAdminMode()" id="exit-admin-btn" aria-label="닫기" class="hidden absolute top-0 right-0 text-slate-500 hover:text-white"><i class="ph ph-x"></i></button>
             </div>
             <div id="step-user-login" class="space-y-4">
@@ -94,7 +89,6 @@
         </div>
     </div>
 
-    <!-- 사이드바 -->
     <div id="sidebar" class="sidebar absolute top-0 left-0 h-full w-[420px] bg-white shadow-2xl flex flex-col border-r border-gray-200">
         <div class="p-4 bg-slate-900 text-white shadow-lg shrink-0">
             <h1 class="text-lg font-bold flex items-center gap-2"><i class="ph ph-solar-panel text-yellow-400"></i> SCEnergy 태양광 채굴기</h1>
@@ -105,99 +99,70 @@
                 <div class="bg-slate-900 rounded p-1 border border-slate-700 text-[8px]"><div class="text-slate-500">AI Analysis</div><div id="cnt-ai" class="font-mono font-bold text-purple-400">OK</div></div>
             </div>
         </div>
-        <!-- 탭 메뉴 -->
         <div class="flex border-b border-gray-200 shrink-0 bg-white shadow-sm">
             <button onclick="switchTab('scan')" id="tab-scan" class="tab-btn active flex-1 py-3 text-xs text-center"><i class="ph ph-radar text-lg"></i>전수 스캔</button>
             <button onclick="switchTab('analysis')" id="tab-analysis" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-magnifying-glass-plus text-lg"></i>정밀 분석</button>
-            <button onclick="switchTab('legal')" id="tab-legal" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-sparkle text-lg"></i>종합 리포트</button>
+            <button onclick="switchTab('legal')" id="tab-legal" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-sparkle text-lg text-purple-600"></i>종합 리포트</button>
             <button onclick="switchTab('history')" id="tab-history" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-clock-counter-clockwise text-lg"></i>기록</button>
         </div>
 
-        <!-- 설정 패널 -->
         <div class="flex-1 overflow-y-auto bg-slate-50">
             <div class="p-4 pb-0">
                 <details class="bg-white rounded-lg border border-slate-200 shadow-sm group mb-4" open>
                     <summary class="p-3 text-xs font-bold text-slate-600 cursor-pointer flex items-center justify-between hover:bg-slate-50 bg-slate-100 rounded-t-lg"><span class="flex items-center gap-1"><i class="ph ph-sliders-horizontal"></i> 분석 파라미터</span><i class="ph ph-caret-down group-open:rotate-180 transition"></i></summary>
-                    <div class="p-3 space-y-3 border-t border-gray-200">
-                        <div class="bg-indigo-50 p-2 rounded border border-indigo-100 text-xs">
-                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="modWidth" class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 가로(m)</label><input type="number" id="modWidth" value="1.13" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="modHeight" class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 세로(m)</label><input type="number" id="modHeight" value="2.4" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
-                             <!-- 텍스트 수정: 설치 최대높이 -->
-                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="installHeight" class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 최대높이(m)</label><input type="number" id="installHeight" value="0.5" step="0.1" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="installAngle" class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 각도(°)</label><input type="number" id="installAngle" value="20" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
-                             <div class="grid grid-cols-2 gap-2"><div><label for="modPower" class="block mb-0.5 text-[10px] text-slate-500">모듈 출력(W)</label><input type="number" id="modPower" value="640" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="rowSpacing" class="block mb-0.5 text-[10px] text-slate-500">이격(m)</label><input type="number" id="rowSpacing" value="1.2" step="0.1" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
+                    <div class="p-3 space-y-3 border-t border-gray-200 text-xs">
+                        <div class="bg-indigo-50 p-2 rounded border border-indigo-100">
+                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 가로(m)</label><input type="number" id="modWidth" value="1.13" step="0.01" class="w-full border p-1 rounded text-center" onchange="reCalculate()"></div><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 세로(m)</label><input type="number" id="modHeight" value="2.4" step="0.01" class="w-full border p-1 rounded text-center" onchange="reCalculate()"></div></div>
+                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 최대높이(m)</label><input type="number" id="installHeight" value="0.5" step="0.1" class="w-full border p-1 rounded text-center" onchange="reCalculate()"></div><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 각도(°)</label><input type="number" id="installAngle" value="20" class="w-full border p-1 rounded text-center" onchange="reCalculate()"></div></div>
+                             <div class="grid grid-cols-2 gap-2"><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 출력(W)</label><input type="number" id="modPower" value="640" class="w-full border p-1 rounded text-center" onchange="reCalculate()"></div><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">이격(m)</label><input type="number" id="rowSpacing" value="1.2" step="0.1" class="w-full border p-1 rounded text-center" onchange="reCalculate()"></div></div>
                         </div>
-                        <div class="bg-green-50 p-2 rounded border border-green-200 text-xs">
-                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="modPrice" class="block mb-0.5 text-[10px] text-emerald-700 font-bold">모듈단가</label><input type="number" id="modPrice" value="350" class="w-full border p-1 rounded text-center font-bold text-emerald-700 bg-white" onchange="reCalculate()"></div><div><label for="costPerKw" class="block mb-0.5 text-[10px]">시공(만)</label><input type="number" id="costPerKw" value="90" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
-                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="smp" class="block mb-0.5 text-[10px]">SMP</label><input type="number" id="smp" value="140" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="rec" class="block mb-0.5 text-[10px]">REC</label><input type="number" id="rec" value="70" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
-                             <div class="grid grid-cols-2 gap-2 border-t border-green-200 pt-2"><div><label for="pfLoanRatio" class="block mb-0.5 text-[10px] text-blue-600 font-bold">PF 대출(%)</label><input type="number" id="pfLoanRatio" value="90" class="w-full border p-1 rounded text-center text-blue-600 font-bold bg-white" onchange="reCalculate()"></div><div><label for="pfInterestRate" class="block mb-0.5 text-[10px] text-red-600 font-bold">PF 금리(%)</label><input type="number" id="pfInterestRate" value="5.5" step="0.1" class="w-full border p-1 rounded text-center text-red-600 font-bold bg-white" onchange="reCalculate()"></div></div>
+                        <div class="bg-green-50 p-2 rounded border border-green-200">
+                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label class="block mb-0.5 text-[10px] text-emerald-700 font-bold">모듈단가</label><input type="number" id="modPrice" value="350" class="w-full border p-1 rounded text-center font-bold text-emerald-700" onchange="reCalculate()"></div><div><label class="block mb-0.5 text-[10px]">시공(만)</label><input type="number" id="costPerKw" value="90" class="w-full border p-1 rounded text-center" onchange="reCalculate()"></div></div>
+                             <div class="grid grid-cols-2 gap-2 border-t border-green-200 pt-2"><div><label class="block mb-0.5 text-[10px] text-blue-600 font-bold">PF 대출(%)</label><input type="number" id="pfLoanRatio" value="90" class="w-full border p-1 rounded text-center text-blue-600 font-bold" onchange="reCalculate()"></div><div><label class="block mb-0.5 text-[10px] text-red-600 font-bold">PF 금리(%)</label><input type="number" id="pfInterestRate" value="5.5" step="0.1" class="w-full border p-1 rounded text-center text-red-600 font-bold" onchange="reCalculate()"></div></div>
                         </div>
                     </div>
                 </details>
                 <div class="flex gap-2 text-xs mb-4">
-                    <label class="flex-1 cursor-pointer"><input type="radio" name="scanTarget" value="land" class="peer hidden" onchange="toggleTarget()" aria-label="토지"><div class="text-center py-2 border rounded bg-white peer-checked:bg-green-50 peer-checked:border-green-500 peer-checked:text-green-700 hover:bg-gray-50 transition shadow-sm"><i class="ph ph-tree"></i> 토지 (Land)</div></label>
+                    <label class="flex-1 cursor-pointer"><input type="radio" name="scanTarget" value="land" class="peer hidden" onchange="toggleTarget()" aria-label="토지"><div class="text-center py-2 border rounded bg-white peer-checked:bg-amber-900 peer-checked:text-white hover:bg-gray-50 transition shadow-sm"><i class="ph ph-tree"></i> 토지 (Land)</div></label>
                     <label class="flex-1 cursor-pointer"><input type="radio" name="scanTarget" value="building" class="peer hidden" onchange="toggleTarget()" checked aria-label="지붕"><div class="text-center py-2 border rounded bg-white peer-checked:bg-pink-50 peer-checked:border-pink-500 peer-checked:text-pink-700 hover:bg-gray-50 transition shadow-sm"><i class="ph ph-factory"></i> 지붕 (Roof)</div></label>
                 </div>
             </div>
 
             <div class="px-4 pb-4">
-                <!-- 1. 스캔 패널 -->
                 <div id="panel-scan" class="space-y-4">
                     <div class="bg-white p-3 rounded border border-gray-200 shadow-sm">
                         <label for="regionSelect" class="text-xs font-bold text-gray-700 mb-2 block">📍 지역 선택</label>
                         <select id="regionSelect" onchange="setRegion()" class="w-full text-sm border rounded p-2 bg-gray-50 font-bold outline-none">
                             <option value="">-- 지역을 선택하세요 --</option>
-                            <optgroup label="🏭 수도권/경기 주요 산단">
-                                <option value="ansan_ind">안산 반월/시화 산단</option>
-                                <option value="incheon_ind">인천 남동공단</option>
-                                <option value="hwaseong_ind">화성 일반산업단지</option>
-                                <option value="pyeongtaek_ind">평택 포승공단</option>
+                            <optgroup label="🏭 경기/수도권">
+                                <option value="ansan_ind">안산 반월/시화</option>
+                                <option value="hwaseong_ind">화성 산단</option>
                             </optgroup>
-                            <optgroup label="🏭 충청권 주요 산단">
-                                <option value="cheonan_ind">천안 일반산업단지</option>
-                                <option value="osan_ind">오창 과학산업단지</option>
-                                <option value="daejeon_ind">대전 대덕테크노밸리</option>
+                            <optgroup label="🏭 충청권">
+                                <option value="cheonan_ind">천안 산단</option>
+                                <option value="osan_ind">오창 과학산단</option>
                             </optgroup>
-                            <optgroup label="🏭 영남권 주요 산단">
-                                <option value="gumi_ind">구미 국가산업단지</option>
-                                <option value="changwon_ind">창원 국가산업단지</option>
-                                <option value="ulsan_ind">울산 미포/온산 산단</option>
-                                <option value="daegu_ind">대구 성서공단</option>
-                                <option value="pohang_ind">포항 철강산업단지</option>
-                            </optgroup>
-                            <optgroup label="🏭 호남권 주요 산단">
-                                <option value="gwangju_ind">광주 하남/첨단 산단</option>
-                                <option value="yeosu_ind">여수 국가산업단지</option>
-                                <option value="daebul_ind">영암 대불산단</option>
-                                <option value="gunsan_ind">군산 국가산업단지</option>
-                            </optgroup>
-                            <optgroup label="🌲 대한민국 광역 지자체">
-                                <option value="seoul">서울특별시</option>
-                                <option value="gyeonggi">경기도</option>
-                                <option value="incheon">인천광역시</option>
-                                <option value="jeonnam">전라남도</option>
-                                <option value="jeonbuk">전북특별자치도</option>
-                                <option value="gyeongnam">경상남도</option>
-                                <option value="gyeongbuk">경상북도</option>
-                                <option value="chungnam">충청남도</option>
-                                <option value="chungbuk">충청북도</option>
-                                <option value="gangwon">강원특별자치도</option>
-                                <option value="jeju">제주특별자치도</option>
+                            <optgroup label="🏭 영남/호남">
+                                <option value="gumi_ind">구미 산단</option>
+                                <option value="gwangju_ind">광주 하남산단</option>
                             </optgroup>
                         </select>
                     </div>
                     <div class="bg-slate-800 p-4 rounded-lg text-white space-y-3 relative overflow-hidden shadow-xl border-b-4 border-cyan-500">
                         <div class="flex justify-between items-center bg-slate-700/50 p-1.5 rounded border border-slate-600 mb-1">
-                            <label for="scanDelay" class="text-[9px] font-bold text-cyan-300">API 안전 딜레이</label>
-                            <select id="scanDelay" class="bg-slate-900 text-[10px] font-mono border-none outline-none text-yellow-400" onchange="updateEstimatedTime()"><option value="1000">1초</option><option value="3000">3초</option><option value="5000">5초</option></select>
+                            <label class="text-[9px] font-bold text-cyan-300">안전 지연 시간</label>
+                            <select id="scanDelay" class="bg-slate-900 text-[10px] font-mono border-none outline-none text-yellow-400">
+                                <option value="6000" selected>6초 (안정 모드)</option>
+                                <option value="10000">10초 (저속 모드)</option>
+                            </select>
                         </div>
                         <div class="flex justify-between items-end"><div id="timerRemaining" class="text-xl font-mono font-bold text-yellow-400">00:00:00</div><div id="progressCount" class="text-[10px] text-gray-500 font-mono">0 / 20</div></div>
                         <div class="w-full bg-slate-700 rounded-full h-1.5 overflow-hidden"><div id="totalProgressBar" class="bg-cyan-500 h-full transition-all duration-500" style="width: 0%"></div></div>
-                        <!-- 스캔된 구역 수 표시 -->
                         <div class="flex justify-between items-end mt-1 px-1"><div class="text-[9px] text-cyan-400 font-bold" id="foundCount">검색된 구역: 0개</div></div>
                         <div class="grid grid-cols-2 gap-2 pt-1"><button onclick="startMission()" id="startBtn" class="bg-indigo-600 hover:bg-indigo-700 py-2 rounded font-bold text-xs transition">▶ 스캔 시작</button><button onclick="clearResults()" class="bg-slate-700 hover:bg-slate-600 py-2 rounded font-bold text-xs transition">🔄 초기화</button></div>
                     </div>
                 </div>
 
-                <!-- 2. 정밀 분석 패널 -->
                 <div id="panel-analysis" class="hidden space-y-4">
                     <div class="bg-slate-800 p-2 rounded-lg border border-indigo-500/50 shadow-lg mb-2">
                         <div class="flex justify-between items-center mb-2 border-b border-slate-700 pb-1"><span class="text-[11px] font-bold text-indigo-300 flex items-center gap-1"><i class="ph ph-crosshair"></i> 패널 조정 (D-Pad)</span><button onclick="resetCalibration()" class="text-[9px] bg-slate-700 hover:bg-slate-600 px-1.5 py-0.5 rounded text-white border border-slate-600">초기화</button></div>
@@ -222,46 +187,25 @@
                             <div class="flex justify-between"><span class="text-slate-400">주소:</span><span id="analysisAddress" class="text-right">-</span></div>
                             <div class="flex justify-between"><span class="text-slate-400">수량:</span><span id="analysisCount">0 장</span></div>
                             <div class="flex justify-between"><span class="text-slate-400">용량:</span><span id="analysisCapacity" class="text-cyan-400 font-bold">0 kW</span></div>
-                            <div class="flex justify-between items-center border-t border-slate-700 pt-2"><span class="text-slate-400">⚡ 한전 선로용량:</span><span id="kepcoCapacity" class="font-bold text-yellow-400 font-mono">-</span></div>
                         </div>
-                        <div class="bg-slate-700/50 p-2 rounded space-y-1 mt-2 border border-slate-600">
-                            <div class="flex justify-between text-xs"><span class="text-slate-400">💸 총 사업비:</span><span id="resTotalCost" class="text-green-400 font-bold">0 원</span></div>
-                            <div class="flex justify-between text-xs"><span class="text-slate-400">💰 연 총수익:</span><span id="resAnnualRev" class="text-yellow-400 font-bold">0 원</span></div>
+                        <div class="bg-slate-700/50 p-2 rounded space-y-1 mt-2 border border-slate-600 text-xs">
+                            <div class="flex justify-between"><span>💸 총 사업비:</span><span id="resTotalCost" class="text-green-400 font-bold">0 원</span></div>
+                            <div class="flex justify-between"><span>💰 연 총수익:</span><span id="resAnnualRev" class="text-yellow-400 font-bold">0 원</span></div>
                         </div>
-                        <div class="bg-indigo-900/40 p-2 rounded space-y-1 border border-indigo-500/30 text-[10px]">
-                            <div class="flex justify-between text-indigo-300 font-bold border-b border-indigo-500/30 pb-1 mb-1"><span>🏦 PF 금융구조 (<span id="pfRatioDisplay">90</span>%)</span></div>
-                            <div class="flex justify-between"><span class="text-slate-400">대출금:</span><span id="resLoanAmount" class="text-white">0 원</span></div>
-                            <div class="flex justify-between"><span class="text-slate-400">자기자본:</span><span id="resEquityAmount" class="text-white">0 원</span></div>
-                            <div class="flex justify-between"><span class="text-slate-400">연 이자:</span><span id="resInterest" class="text-red-300">0 원</span></div>
+                        <div class="bg-indigo-900/40 p-2 rounded border border-indigo-500/30 text-[10px]">
                             <div class="flex justify-between pt-1 border-t border-indigo-500/30 mt-1"><span class="text-indigo-200 font-bold">🚀 자본회수기간:</span><span id="resPfPayback" class="text-cyan-300 font-bold text-xs">0.0 년</span></div>
                         </div>
-                        
                         <div class="flex gap-2 mt-2">
-                             <button onclick="saveResult()" class="flex-1 bg-slate-700 hover:bg-slate-600 py-2 rounded text-xs font-bold border border-slate-600 transition flex items-center justify-center gap-1"><i class="ph ph-floppy-disk"></i> 저장</button>
-                             <button onclick="openFullReport()" class="flex-1 bg-blue-600 hover:bg-blue-500 py-2 rounded text-xs font-bold border border-blue-500 transition flex items-center justify-center gap-1"><i class="ph ph-file-text"></i> 상세 리포트</button>
+                             <button onclick="saveResult()" class="flex-1 bg-slate-700 hover:bg-slate-600 py-2 rounded text-xs font-bold border border-slate-600 transition">저장</button>
+                             <button onclick="openFullReport()" class="flex-1 bg-blue-600 hover:bg-blue-500 py-2 rounded text-xs font-bold border border-blue-500 transition">상세 리포트</button>
                         </div>
                     </div>
                 </div>
 
-                <!-- 3. 기록 패널 -->
-                <div id="panel-history" class="hidden space-y-4">
-                    <div class="bg-white p-3 rounded border border-gray-200 shadow-sm">
-                        <div class="flex justify-between items-center mb-2 border-b pb-1">
-                            <h3 class="text-xs font-bold text-gray-700">📂 분석 기록</h3>
-                            <button onclick="clearHistory()" class="text-[10px] text-red-500 hover:underline">전체 삭제</button>
-                        </div>
-                        <div id="historyList" class="space-y-2 max-h-80 overflow-y-auto">
-                            <p class="text-xs text-slate-400 text-center py-4">저장된 기록이 없습니다.</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 4. 종합 리포트 패널 -->
                 <div id="panel-legal" class="hidden space-y-4">
                     <div class="bg-slate-800 p-4 rounded-lg shadow-lg text-white min-h-[300px]">
                         <h3 class="text-sm font-bold border-b border-slate-700 pb-2 flex items-center gap-2"><i class="ph ph-files"></i> AI 인허가 분석 대시보드</h3>
                         
-                        <!-- AI 분석 결과 상단: 점수와 가격 (추가됨) -->
                         <div id="aiScorePanel" class="hidden mb-4 bg-slate-900/50 p-3 rounded border border-slate-600">
                              <div class="flex items-center justify-between mb-2">
                                  <span class="text-xs text-slate-300 font-bold">땅 구매 매력도 (AI Score)</span>
@@ -277,13 +221,12 @@
                         </div>
 
                         <div id="legalPlaceholder" class="text-center py-10 text-slate-400 text-xs">
-                            <i class="ph ph-brain text-2xl mb-2 text-purple-300"></i><br>
-                            건물을 선택하면 SolarAI가<br>종합 입지 분석(용도, 생태, 한전 등)을 시작합니다.
+                            <i class="ph ph-brain text-2xl mb-2 text-purple-300"></i><br>건물을 선택하면 SolarAI 분석이 시작됩니다.
                         </div>
 
                         <div id="legalLoading" class="hidden text-center py-10">
                             <div class="spinner mx-auto mb-2 !border-t-purple-500"></div>
-                            <p class="text-xs text-purple-300 animate-pulse">데이터를 수집 및 분석 중입니다...</p>
+                            <p class="text-xs text-purple-300 animate-pulse">상세 데이터 분석 중...</p>
                         </div>
 
                         <div id="legalContent" class="hidden space-y-4 mt-2">
@@ -292,12 +235,24 @@
                                 <div id="aiCommentBox" class="whitespace-pre-wrap leading-relaxed">분석 결과 대기 중...</div>
                             </div>
                             <div id="aiAnalysisResult" class="grid grid-cols-1 gap-2"></div>
-                            <div class="text-[10px] text-slate-500 text-right mt-2">* 데이터 출처: V-World, 공공데이터포털, Open-Meteo</div>
                         </div>
                     </div>
                 </div>
+
+                <div id="panel-history" class="hidden space-y-4">
+                    <div class="bg-white p-3 rounded border border-gray-200 shadow-sm">
+                        <div class="flex justify-between items-center mb-2 border-b pb-1">
+                            <h3 class="text-xs font-bold text-gray-700">📂 분석 기록</h3>
+                            <div class="flex gap-2">
+                                <button onclick="downloadCSV()" class="text-[10px] text-blue-600 font-bold flex items-center gap-1"><i class="ph ph-file-csv"></i> CSV 다운</button>
+                                <button onclick="clearHistory()" class="text-[10px] text-red-500 hover:underline">삭제</button>
+                            </div>
+                        </div>
+                        <div id="historyList" class="space-y-2 max-h-80 overflow-y-auto"></div>
+                    </div>
+                </div>
                 
-                <div id="loading" class="hidden flex flex-col items-center justify-center py-4"><div class="spinner mb-2"></div><p class="text-xs text-slate-500">데이터 처리중...</p></div>
+                <div id="loading" class="hidden flex flex-col items-center justify-center py-4"><div class="spinner mb-2"></div><p class="text-xs text-slate-500">처리 중...</p></div>
             </div>
         </div>
         
@@ -305,79 +260,79 @@
     </div>
     
     <div id="sidebar-toggle-btn" onclick="toggleSidebar()" class="absolute top-1/2 transform -translate-y-1/2 bg-white w-6 h-12 rounded-r-lg shadow-md cursor-pointer flex items-center justify-center border border-l-0 border-gray-300 text-gray-400 hover:text-cyan-600"><i class="ph ph-caret-left font-bold transition-transform"></i></div>
+    
     <div class="absolute top-5 left-1/2 transform -translate-x-1/2 z-[1000] flex flex-col items-center gap-2">
         <div class="bg-white p-1 rounded-lg shadow-xl border border-slate-200 flex items-center">
-            <label for="addrInput" class="sr-only">주소 검색</label>
-            <input type="text" id="addrInput" placeholder="주소 검색 (예: 강남대로 123)" 
-                   class="w-64 px-3 py-2 text-sm outline-none text-slate-700 font-medium"
-                   onkeypress="if(event.key==='Enter') searchAddress()">
-            <button onclick="searchAddress()" class="bg-cyan-600 hover:bg-cyan-700 text-white p-2 rounded-md transition shadow-md" aria-label="검색"><i class="ph ph-magnifying-glass font-bold"></i></button>
+            <input type="text" id="addrInput" placeholder="주소 검색 (예: 강남대로 123)" class="w-64 px-3 py-2 text-sm outline-none text-slate-700 font-medium" onkeypress="if(event.key==='Enter') searchAddress()">
+            <button onclick="searchAddress()" class="bg-cyan-600 hover:bg-cyan-700 text-white p-2 rounded-md transition shadow-md"><i class="ph ph-magnifying-glass font-bold"></i></button>
         </div>
     </div>
     
     <div class="absolute top-5 right-5 z-[1000] bg-white p-2 rounded-lg shadow-lg border border-gray-200 text-xs w-44">
         <div class="font-bold text-slate-600 mb-2 border-b pb-1 flex items-center gap-1"><i class="ph ph-stack"></i> 지도 설정</div>
-        <label class="flex items-center gap-2 cursor-pointer p-1.5 mb-2 bg-indigo-50 hover:bg-indigo-100 rounded text-indigo-700 font-bold border border-indigo-200"><input type="checkbox" id="multiSelectToggle" onchange="toggleMultiSelect()" aria-label="누적모드"><span class="flex items-center gap-1"><i class="ph ph-plus-circle"></i> 결과 누적 모드</span></label>
-        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="autoScanToggle" onchange="toggleAutoScan()" aria-label="자동스캔"><span class="flex items-center gap-1"><i class="ph ph-radar"></i> 자동 스캔</span></label>
-        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="existingPlantToggle" onchange="toggleLayer('existing')" checked aria-label="기설치"><span class="flex items-center gap-1"><i class="ph ph-lightning"></i> 기설치 발전소</span></label>
-        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="substationToggle" onchange="toggleLayer('substation')" checked aria-label="변전소"><span class="flex items-center gap-1"><i class="ph ph-circuitry"></i> 변전소/선로</span></label>
-        <label class="flex items-center gap-2 cursor-pointer p-1.5 mt-1 bg-red-50 hover:bg-red-100 rounded text-red-600 font-bold border border-red-100"><input type="checkbox" id="cadastralToggle" onchange="toggleLayer('cadastral')" checked aria-label="지적도"><span class="flex items-center gap-1"><i class="ph ph-map-trifold"></i> 지적도 (ON)</span></label>
+        <label class="flex items-center gap-2 cursor-pointer p-1.5 mb-2 bg-indigo-50 rounded text-indigo-700 font-bold border border-indigo-200"><input type="checkbox" id="multiSelectToggle" onchange="toggleMultiSelect()"><span class="flex items-center gap-1"><i class="ph ph-plus-circle"></i> 결과 누적 모드</span></label>
+        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="autoScanToggle" onchange="toggleAutoScan()"><span class="flex items-center gap-1"><i class="ph ph-radar"></i> 자동 스캔</span></label>
         <hr class="my-2 border-gray-200">
-        <div class="space-y-1">
-            <label class="flex items-center gap-2 cursor-pointer p-1 hover:bg-slate-50 rounded"><input type="radio" name="mapL" value="sat" checked onchange="setMap('sat')" aria-label="위성지도"> <span>🛰️ 위성 지도</span></label>
-            <label class="flex items-center gap-2 cursor-pointer p-1 hover:bg-slate-50 rounded"><input type="radio" name="mapL" value="base" onchange="setMap('base')" aria-label="일반지도"> <span>🗺️ 일반 지도</span></label>
+        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="cadastralToggle" onchange="toggleLayer('cadastral')" checked><span>지적도 (ON)</span></label>
+        <div class="space-y-1 mt-2">
+            <label class="flex items-center gap-2 cursor-pointer p-1 hover:bg-slate-50 rounded"><input type="radio" name="mapL" value="sat" checked onchange="setMap('sat')"> <span>🛰️ 위성 지도</span></label>
+            <label class="flex items-center gap-2 cursor-pointer p-1 hover:bg-slate-50 rounded"><input type="radio" name="mapL" value="base" onchange="setMap('base')"> <span>🗺️ 일반 지도</span></label>
         </div>
     </div>
 
-    <div id="toastMsg" class="absolute bottom-10 left-1/2 transform -translate-x-1/2 z-[3000] bg-slate-800 text-white px-6 py-3 rounded-full shadow-2xl hidden flex items-center gap-2 border border-cyan-500"><i class="ph ph-info text-cyan-400"></i><span class="font-bold text-sm" id="toastText">메시지</span></div>
+    <div id="toastMsg" class="absolute bottom-10 left-1/2 transform -translate-x-1/2 z-[3000] bg-slate-800 text-white px-6 py-3 rounded-full shadow-2xl hidden items-center gap-2 border border-cyan-500"><i class="ph ph-info text-cyan-400"></i><span class="font-bold text-sm" id="toastText"></span></div>
     <div id="map"></div>
 
     <script>
         const VWORLD_TILE_KEY = "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F"; 
         const BACKEND_URL = "https://port-0-solar-server-mkiol9jsc308f567.sel3.cloudtype.app";
         const ENCODED_ADMIN_PW = "Wmlld2lzZTEyMyE=";
+
         let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, analysisMarkerGroup, existingGroup, substationGroup;
         let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
-        let apiCounts = { vworld: 0, public: 0, ai: 0 };
-        // [중복 방지 Map]
         let selectedFeatures = new Map();
         let currentAnalysisData = {}; 
-        
-        function trackApi(type) { if(apiCounts[type]!==undefined) { apiCounts[type]++; const el=document.getElementById(`cnt-${type}`); if(el) el.innerText=apiCounts[type]; } }
-        function showToast(m) { const t=document.getElementById('toastMsg'); t.classList.remove('hidden','flex'); t.classList.add('flex'); document.getElementById('toastText').innerText=m; setTimeout(()=>t.classList.add('hidden'),3000); }
-        function logSystem(msg) { const w=document.getElementById('logWindow'); if(w) { const p=document.createElement('div'); p.innerText=`> ${msg}`; w.appendChild(p); w.scrollTop=w.scrollHeight; } }
+        let stopScan = false;
+
+        // 전역 함수 정의
+        function trackApi(type) { const el = document.getElementById(`cnt-${type}`); if(el) el.innerText = parseInt(el.innerText || "0")+1; }
+        function showToast(m) { const t = document.getElementById('toastMsg'); t.classList.remove('hidden'); t.classList.add('flex'); document.getElementById('toastText').innerText = m; setTimeout(() => t.classList.add('hidden'), 3000); }
+        function logSystem(msg) { const w = document.getElementById('logWindow'); if(w) { const p = document.createElement('div'); p.innerText = `> ${msg}`; w.appendChild(p); w.scrollTop = w.scrollHeight; } }
+
+        function initMap() {
+            map = L.map('map', { zoomControl: false }).setView([36.5, 127.5], 7);
+            L.control.zoom({ position: 'bottomright' }).addTo(map);
+            layers = { 
+                base: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Base/{z}/{y}/{x}.png`), 
+                sat: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Satellite/{z}/{y}/{x}.jpeg`),
+                hybrid: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Hybrid/{z}/{y}/{x}.png`) 
+            };
+            layers.sat.addTo(map);
+            
+            selectableGroup = L.layerGroup().addTo(map); 
+            panelGroup = L.layerGroup().addTo(map); 
+            analysisMarkerGroup = L.layerGroup().addTo(map);
+            existingGroup = L.layerGroup().addTo(map); 
+            substationGroup = L.layerGroup().addTo(map);
+            
+            cadastralLayer = L.tileLayer.wms('https://api.vworld.kr/req/wms/1.0.0', { layers: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', styles: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', format: 'image/png', transparent: true, opacity: 0.7, key: VWORLD_TILE_KEY });
+            map.addLayer(cadastralLayer);
+            map.on('click', (e) => scanBuildings(e.latlng.lat, e.latlng.lng));
+            map.on('moveend', () => { if(autoScanMode && isLoggedIn) { const c = map.getCenter(); scanBuildings(c.lat, c.lng); } });
+        }
 
         function toggleLayer(type) {
             if(!map) return;
-            const center = map.getCenter();
-            if(type === 'existing') {
-                if(document.getElementById('existingPlantToggle').checked) { createMockMarkers(center, 'plant'); map.addLayer(existingGroup); }
-                else { existingGroup.clearLayers(); map.removeLayer(existingGroup); }
-            } else if(type === 'substation') {
-                 if(document.getElementById('substationToggle').checked) { createMockMarkers(center, 'substation'); map.addLayer(substationGroup); }
-                 else { substationGroup.clearLayers(); map.removeLayer(substationGroup); }
-            } else if(type === 'cadastral') {
-                 if(document.getElementById('cadastralToggle').checked) { if(!cadastralLayer._map) map.addLayer(cadastralLayer); }
-                 else { if(cadastralLayer._map) map.removeLayer(cadastralLayer); }
+            if(type === 'cadastral') {
+                if(document.getElementById('cadastralToggle').checked) map.addLayer(cadastralLayer);
+                else map.removeLayer(cadastralLayer);
             }
         }
-        function createMockMarkers(center, type) {
-            const group = type === 'plant' ? existingGroup : substationGroup;
-            group.clearLayers();
-            for(let i=0; i<3; i++) {
-                const lat = center.lat + (Math.random() * 0.01 - 0.005);
-                const lng = center.lng + (Math.random() * 0.01 - 0.005);
-                const iconHtml = type === 'plant' ? `<div class="plant-marker w-6 h-6"><i class="ph ph-lightning text-white text-[10px]"></i></div>` : `<div class="substation-marker w-8 h-8"><i class="ph ph-circuitry text-white"></i></div>`;
-                const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [24, 24] });
-                L.marker([lat, lng], { icon: icon, title: type }).bindPopup(type === 'plant' ? "기설치 태양광" : "변전소").addTo(group);
-            }
-        }
-        function onMapMoveEnd() { if(!autoScanMode || !isLoggedIn) return; scanBuildings(map.getCenter().lat, map.getCenter().lng); }
 
         function jsonpRequest(url) {
             return new Promise((resolve, reject) => {
                 const callbackName = 'jsonp_callback_' + Math.round(100000 * Math.random());
-                window[callbackName] = function(data) { delete window[callbackName]; document.body.removeChild(script); resolve(data); };
+                window[callbackName] = (data) => { delete window[callbackName]; document.body.removeChild(script); resolve(data); };
                 const script = document.createElement('script');
                 script.src = `${url}&format=json&callback=${callbackName}&domain=${window.location.hostname}`;
                 script.onerror = () => { delete window[callbackName]; document.body.removeChild(script); reject(new Error('JSONP failed')); };
@@ -389,38 +344,22 @@
             trackApi('vworld');
             const query = document.getElementById('addrInput').value;
             if(!query) return showToast("주소를 입력하세요.");
-            const loading = document.getElementById('loading');
-            if(loading) { loading.classList.remove('hidden'); loading.querySelector('p').innerText="주소 확인 중..."; }
-            
             try {
                 const url = `https://api.vworld.kr/req/address?service=address&request=getcoord&version=2.0&crs=epsg:4326&address=${encodeURIComponent(query)}&refine=true&simple=false&type=road&key=${VWORLD_TILE_KEY}`;
                 const data = await jsonpRequest(url);
-                if(data.response && data.response.status === 'OK') {
+                if(data.response?.status === 'OK') {
                     const { x, y } = data.response.result.point;
                     map.setView([parseFloat(y), parseFloat(x)], 18);
-                    showToast("이동 완료.");
                     setTimeout(() => scanBuildings(parseFloat(y), parseFloat(x)), 800);
-                } else { showToast("주소를 찾을 수 없습니다."); }
-            } catch(e) { 
-                try {
-                     const res = await fetch(`${BACKEND_URL}/api/vworld/address?address=${encodeURIComponent(query)}`);
-                     const data = await res.json();
-                     if(data.response?.status === 'OK') {
-                        const { x, y } = data.response.result.point;
-                        map.setView([parseFloat(y), parseFloat(x)], 18);
-                     }
-                } catch(err) { showToast("검색 실패"); }
-            } finally { if(loading) loading.classList.add('hidden'); }
+                } else showToast("주소를 찾을 수 없습니다.");
+            } catch(e) { console.error(e); }
         }
 
         async function scanBuildings(lat, lng) {
             trackApi('vworld');
-            if(!isMultiSelectMode) selectableGroup.clearLayers();
-            const loading = document.getElementById('loading');
-            if(loading) { loading.classList.remove('hidden'); loading.querySelector('p').innerText="데이터 분석 중..."; }
-
-            if(analysisMarker && !isMultiSelectMode) map.removeLayer(analysisMarker);
-            analysisMarker = L.marker([lat, lng]).addTo(map);
+            if(!isMultiSelectMode) clearResults();
+            if(analysisMarkerGroup) analysisMarkerGroup.clearLayers();
+            L.marker([lat, lng]).addTo(analysisMarkerGroup);
 
             const box = `${lng - 0.001},${lat - 0.001},${lng + 0.001},${lat + 0.001}`;
             try {
@@ -430,99 +369,48 @@
                 if(data.response?.status === 'OK') {
                     L.geoJSON(data.response.result.featureCollection.features, {
                         style: scanTarget === 'land' 
-                            ? { color: '#39ff14', weight: 3, fillColor: '#22c55e', fillOpacity: 0.1 } 
+                            ? { color: '#5d4037', weight: 3, fillColor: '#3e2723', fillOpacity: 0.1 } 
                             : { color: '#3b82f6', weight: 2, fillOpacity: 0.2 },
                         onEachFeature: (feature, layer) => { layer.on('click', () => analyzeFeature(feature)); }
                     }).addTo(selectableGroup);
                 }
-            } catch(e) { console.error(e); } finally { if(loading) loading.classList.add('hidden'); }
-        }
-
-        function initMap() {
-            map = L.map('map', { zoomControl: false }).setView([36.5, 127.5], 7);
-            L.control.zoom({ position: 'bottomright' }).addTo(map);
-            layers = { 
-                base: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Base/{z}/{y}/{x}.png`), 
-                sat: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Satellite/{z}/{y}/{x}.jpeg`),
-                hybrid: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Hybrid/{z}/{y}/{x}.png`) 
-            };
-            layers.sat.addTo(map);
-            selectableGroup = L.layerGroup().addTo(map); panelGroup = L.layerGroup().addTo(map); existingGroup = L.layerGroup().addTo(map); substationGroup = L.layerGroup().addTo(map);
-            analysisMarkerGroup = L.layerGroup().addTo(map);
-            cadastralLayer = L.tileLayer.wms('https://api.vworld.kr/req/wms/1.0.0', { layers: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', styles: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', format: 'image/png', transparent: true, opacity: 0.7, key: VWORLD_TILE_KEY });
-            map.addLayer(cadastralLayer);
-            map.on('click', (e) => scanBuildings(e.latlng.lat, e.latlng.lng));
-            map.on('moveend', onMapMoveEnd); 
-            if(document.getElementById('existingPlantToggle').checked) toggleLayer('existing');
-            if(document.getElementById('substationToggle').checked) toggleLayer('substation');
-            updateHistoryList();
-            updateEstimatedTime(); 
-            logSystem("Map Initialized.");
-        }
-
-        function attemptLogin() {
-            const id = document.getElementById('userId').value.trim(), pw = document.getElementById('userPw').value.trim();
-            let users = JSON.parse(localStorage.getItem('scenergy_users'));
-            if (!users || users.length === 0) { users = [{id:"admin", pw:"1234"}]; localStorage.setItem('scenergy_users', JSON.stringify(users)); }
-            const user = users.find(u => u.id === id && u.pw === pw);
-            if(user) loginSuccess(user.id); else alert("정보 불일치");
-        }
-        function loginSuccess(u) { isLoggedIn = true; currentUser = u; document.getElementById('login-overlay').classList.add('hidden-overlay'); setTimeout(() => document.getElementById('login-overlay').style.display='none', 500); initMap(); }
-        function logout() { location.reload(); }
-        function showAdminLogin() { document.getElementById('step-user-login').classList.add('hidden'); document.getElementById('step-admin-login').classList.remove('hidden'); }
-        function verifyAdmin() { if(btoa(document.getElementById('adminPw').value) === ENCODED_ADMIN_PW) enterAdmin(); else alert("비번 오류"); }
-        function enterAdmin() { document.getElementById('step-admin-login').classList.add('hidden'); document.getElementById('step-admin-dashboard').classList.remove('hidden'); renderUsers(); }
-        function exitAdminMode() { document.getElementById('step-admin-login').classList.add('hidden'); document.getElementById('step-admin-dashboard').classList.add('hidden'); document.getElementById('step-user-login').classList.remove('hidden'); }
-        function addUser() {
-            const id = document.getElementById('newUserId').value, pw = document.getElementById('newUserPw').value;
-            if(!id || !pw) return;
-            let users = JSON.parse(localStorage.getItem('scenergy_users') || "[]");
-            users.push({id, pw}); localStorage.setItem('scenergy_users', JSON.stringify(users));
-            renderUsers();
-        }
-        function renderUsers() {
-            const users = JSON.parse(localStorage.getItem('scenergy_users') || "[]");
-            document.getElementById('user-list-container').innerHTML = users.map(u => `<div class="flex justify-between bg-slate-800 p-1 rounded text-xs text-cyan-300"><span>${u.id}</span></div>`).join('');
-            document.getElementById('user-count').innerText = `${users.length}명`;
+            } catch(e) { console.error(e); }
         }
 
         async function analyzeFeature(feature) {
-            const featureId = feature.id || JSON.stringify(feature.geometry.coordinates);
-            if (isMultiSelectMode && selectedFeatures.has(featureId)) {
+            const featureId = feature.properties.pnu || feature.id || JSON.stringify(feature.geometry.coordinates);
+            
+            if (selectedFeatures.has(featureId)) {
                 const stored = selectedFeatures.get(featureId);
                 panelGroup.removeLayer(stored.layer);
                 selectedFeatures.delete(featureId);
-                selectedFeatureIds.delete(featureId); 
-                let totalPanels = 0;
-                selectedFeatures.forEach(v => totalPanels += v.count);
-                accumulatedPanelsCount = totalPanels;
-                if (totalPanels === 0) clearResults(); else calculateFinance(totalPanels);
-                return showToast("선택이 해제되었습니다.");
+                let total = 0; selectedFeatures.forEach(v => total += v.count);
+                accumulatedPanelsCount = total;
+                if (total === 0) clearResults(); else calculateFinance(total);
+                showToast("선택 해제");
+                return;
             }
-            if (!isMultiSelectMode) clearResults();
-            selectedFeatureIds.add(featureId);
 
-            switchTab('analysis'); 
-            document.getElementById('resultCard').classList.remove('hidden');
-            const addr = feature.properties.road_nm_ad || feature.properties.jibun_addr || feature.properties.addr || `PNU: ${feature.properties.pnu}` || "주소 미상";
+            if (!isMultiSelectMode) clearResults();
+
+            switchTab('analysis');
+            const props = feature.properties;
+            const addr = props.road_nm_ad || props.jibun_addr || props.addr || `PNU:${props.pnu}` || "주소 미상";
             document.getElementById('analysisAddress').innerText = addr;
-            
-            currentAnalysisData = { address: addr, date: new Date().toLocaleDateString() };
-            currentAnalysisFeature = feature;
             
             const drawResult = drawPanels(feature.geometry); 
             if (drawResult) {
                 selectedFeatures.set(featureId, { layer: drawResult.layer, count: drawResult.count, address: addr });
-                let totalPanels = 0;
-                selectedFeatures.forEach(v => totalPanels += v.count);
-                accumulatedPanelsCount = totalPanels;
-                calculateFinance(totalPanels);
+                let total = 0; selectedFeatures.forEach(v => total += v.count);
+                accumulatedPanelsCount = total;
+                calculateFinance(total);
             }
 
+            currentAnalysisData = { address: addr, date: new Date().toLocaleDateString() };
+            currentAnalysisFeature = feature;
+            
             const center = turf.center(feature);
-            const lng = center.geometry.coordinates[0];
-            const lat = center.geometry.coordinates[1];
-            fetchAIData(lat, lng, addr);
+            fetchAIData(center.geometry.coordinates[1], center.geometry.coordinates[0], addr);
         }
 
         async function fetchAIData(lat, lng, addr) {
@@ -546,316 +434,243 @@
                 if(data.status === 'OK') {
                      currentAnalysisData.ai_analysis = data;
                      if(data.sun_hours) calculateFinance(accumulatedPanelsCount, data.sun_hours);
-                     const commentBox = document.getElementById('aiCommentBox');
-                     if(commentBox) commentBox.innerText = data.ai_comment || "분석 완료";
+                     document.getElementById('aiCommentBox').innerText = data.ai_comment || "분석 완료";
 
-                     let score = 50; 
+                     let score = 55;
                      if (data.zoning.includes("계획관리")) score += 25;
-                     else if (data.zoning.includes("생산관리")) score += 15;
-                     else if (data.zoning.includes("보전")) score -= 30;
-                     else if (data.zoning.includes("농림")) score -= 25;
-                     
-                     if (data.eco_grade.includes("1")) score -= 50; 
-                     else if (data.eco_grade.includes("2")) score -= 10;
-                     else score += 10;
-                     
-                     if (data.sun_hours > 3.8) score += 15;
-                     else if (data.sun_hours < 3.5) score -= 20;
-
+                     if (data.eco_grade.includes("1")) score -= 55;
+                     if (data.sun_hours < 3.4) score -= 25;
                      score = Math.max(10, Math.min(99, score));
+
+                     scorePanel.classList.remove('hidden');
+                     document.getElementById('scoreValue').innerText = score + "점";
+                     document.getElementById('scoreBar').style.width = score + "%";
                      
-                     if(scorePanel) {
-                         scorePanel.classList.remove('hidden');
-                         document.getElementById('scoreValue').innerText = score + "점";
-                         document.getElementById('scoreBar').style.width = score + "%";
-                         
-                         let regionPrice = 10; 
-                         if (addr.includes("경기")) regionPrice = 80;
-                         else if (addr.includes("충청")) regionPrice = 40;
-                         else if (addr.includes("강원")) regionPrice = 30;
-                         else if (addr.includes("전라") || addr.includes("경상")) regionPrice = 25;
-                         
-                         const minP = Math.floor(regionPrice * 0.7); const maxP = Math.floor(regionPrice * 1.3);
-                         document.getElementById('priceValue').innerText = `약 ${minP}~${maxP}만원/평 (지역 평균)`;
-                         currentAnalysisData.ai_analysis.score = score;
-                         currentAnalysisData.ai_analysis.price = `약 ${minP}~${maxP}만원/평`;
-                     }
+                     let regPrice = addr.includes("경기") ? 85 : addr.includes("충청") ? 45 : 30;
+                     const priceMsg = `약 ${Math.floor(regPrice*0.7)}~${Math.floor(regPrice*1.4)}만원/평 (추정 시세)`;
+                     document.getElementById('priceValue').innerText = priceMsg;
+                     currentAnalysisData.ai_analysis.score = score;
+                     currentAnalysisData.ai_analysis.price = priceMsg;
 
                      const resultContainer = document.getElementById('aiAnalysisResult');
-                     if(resultContainer) {
-                         const items = [
-                            {icon: 'ph-buildings', title: '용도지역', val: data.zoning, link: data.links.eum},
-                            {icon: 'ph-map-trifold', title: '지목', val: data.jimok || '미확인', link: data.links.eum}, 
-                            {icon: 'ph-plant', title: '생태등급', val: data.eco_grade, link: data.links.heritage},
-                            {icon: 'ph-gavel', title: '자치조례', val: '확인필요', link: data.links.elis},
-                            {icon: 'ph-lightning', title: '한전용량', val: data.kepco_capacity, link: data.links.kepco},
-                            {icon: 'ph-warning', title: '환경영향평가', val: data.env_assessment, link: '#'},
-                            {icon: 'ph-mountains', title: '경사도', val: '확인필요', link: data.links.neins},
-                            {icon: 'ph-sun', title: '일사량', val: `${data.sun_hours}시간/일`, link: '#'}
-                         ];
-                         
-                         resultContainer.innerHTML = items.map(item => `
-                            <div class="bg-slate-700/50 p-2 rounded border border-slate-600 flex justify-between items-center">
-                                <div class="flex items-center gap-2">
-                                    <div class="w-6 h-6 rounded bg-slate-600 flex items-center justify-center text-cyan-400"><i class="ph ${item.icon}"></i></div>
-                                    <div>
-                                        <div class="text-[9px] text-slate-400 font-bold">${item.title}</div>
-                                        <div class="text-[10px] text-white truncate w-24" title="${item.val}">${item.val}</div>
-                                    </div>
-                                </div>
-                                <a href="${item.link}" target="_blank" class="text-[9px] bg-slate-600 hover:bg-slate-500 px-1.5 py-0.5 rounded text-white transition">이동</a>
-                            </div>
-                         `).join('');
-                     }
-                     if (data.kepco_capacity) {
-                        const kepcoEl = document.getElementById('kepcoCapacity');
-                        if(kepcoEl) kepcoEl.innerText = data.kepco_capacity;
-                     }
+                     const items = [
+                        {icon: 'ph-buildings', title: '용도지역', val: data.zoning, link: data.links.eum},
+                        {icon: 'ph-map-trifold', title: '지목', val: data.jimok || '미확인', link: data.links.eum},
+                        {icon: 'ph-plant', title: '생태등급', val: data.eco_grade, link: data.links.heritage},
+                        {icon: 'ph-lightning', title: '한전용량', val: data.kepco_capacity, link: data.links.kepco},
+                        {icon: 'ph-sun', title: '일사량', val: `${data.sun_hours}시간/일`, link: '#'}
+                     ];
+                     resultContainer.innerHTML = items.map(item => `
+                        <div class="bg-slate-700/50 p-2 rounded border border-slate-600 flex justify-between items-center text-[10px]">
+                            <div class="flex items-center gap-2"><div class="text-cyan-400"><i class="ph ${item.icon}"></i></div><div><div class="text-slate-400 font-bold">${item.title}</div><div class="text-white truncate w-32">${item.val}</div></div></div>
+                            <a href="${item.link}" target="_blank" class="bg-slate-600 px-1.5 py-0.5 rounded transition hover:bg-slate-500">이동</a>
+                        </div>
+                     `).join('');
                 }
-            } catch(e) {
-                if(loadingEl) loadingEl.classList.add('hidden');
-                if(contentEl) contentEl.classList.remove('hidden');
-            }
-        }
-        
-        function toggleTarget() { 
-            const els=document.getElementsByName('scanTarget'); 
-            els.forEach(e=>{if(e.checked) scanTarget=e.value;}); 
-            clearResults(); 
-            showToast(`모드 변경: ${scanTarget === 'land' ? '토지' : '지붕'}`); 
+                return data;
+            } catch(e) { console.error(e); return null; }
         }
 
-        function reCalculate() { if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry); }
-        
         function calculateFinance(count, sunHoursOverride) { 
             const countEl = document.getElementById('analysisCount');
             if(countEl) countEl.innerText = `${count} 장`; 
-            
-            const modPower = parseFloat(document.getElementById('modPower').value) || 0;
+            const modPower = parseFloat(document.getElementById('modPower').value) || 640;
             const capKw = (count * modPower) / 1000;
             const capEl = document.getElementById('analysisCapacity');
             if(capEl) capEl.innerText = `${capKw.toFixed(1)} kW`;
 
-            const smp = parseFloat(document.getElementById('smp').value);
-            const rec = parseFloat(document.getElementById('rec').value);
-            const costPerKw = parseFloat(document.getElementById('costPerKw').value) * 10000;
-            const modPrice = parseFloat(document.getElementById('modPrice').value);
-            const pfRatio = parseFloat(document.getElementById('pfLoanRatio').value);
-            const pfRate = parseFloat(document.getElementById('pfInterestRate').value);
+            const costKw = parseFloat(document.getElementById('costPerKw').value || "90") * 10000;
+            const modPrice = parseFloat(document.getElementById('modPrice').value || "350");
+            const pfRatio = parseFloat(document.getElementById('pfLoanRatio').value || "90");
+            const pfRate = parseFloat(document.getElementById('pfInterestRate').value || "5.5");
             
             const sunHours = sunHoursOverride || 3.6;
-            const annualRev = capKw * sunHours * 365 * (smp + rec);
-            
-            const constructionCost = (capKw * costPerKw);
-            const moduleCost = (count * modPower) * modPrice;
-            const totalCost = constructionCost + moduleCost;
-            const loanAmount = totalCost * (pfRatio / 100);
-            const equityAmount = totalCost - loanAmount;
-            const annualInterest = loanAmount * (pfRate / 100);
+            const annualRev = capKw * sunHours * 365 * 210; // SMP+REC 가중치 합산 210원 가정
+            const totalCost = (capKw * costKw) + (count * modPower * modPrice);
+            const loan = totalCost * (pfRatio / 100);
+            const annualInterest = loan * (pfRate / 100);
             const netIncome = annualRev - annualInterest;
-            const pfPayback = netIncome > 0 ? (totalCost / netIncome).toFixed(1) : 99; 
+            const payback = netIncome > 0 ? (totalCost / netIncome).toFixed(1) : 99;
 
             document.getElementById('resTotalCost').innerText = `${Math.round(totalCost).toLocaleString()} 원`;
             document.getElementById('resAnnualRev').innerText = `${Math.round(annualRev).toLocaleString()} 원`;
-            document.getElementById('resLoanAmount').innerText = `${Math.round(loanAmount).toLocaleString()} 원`;
-            document.getElementById('resEquityAmount').innerText = `${Math.round(equityAmount).toLocaleString()} 원`;
-            document.getElementById('resInterest').innerText = `${Math.round(annualInterest).toLocaleString()} 원`;
-            document.getElementById('resPfPayback').innerText = `${pfPayback} 년`;
+            document.getElementById('resPfPayback').innerText = `${payback} 년`;
 
             currentAnalysisData.finance = {
-                capacity: `${capKw.toFixed(1)} kW`,
-                totalCost: `${Math.round(totalCost).toLocaleString()} 원`,
-                annualRev: `${Math.round(annualRev).toLocaleString()} 원`,
-                loan: `${Math.round(loanAmount).toLocaleString()} 원`,
-                equity: `${Math.round(equityAmount).toLocaleString()} 원`,
-                interest: `${Math.round(annualInterest).toLocaleString()} 원`,
-                netIncome: `${Math.round(netIncome).toLocaleString()} 원`,
-                payback: `${pfPayback} 년`
+                capacity: `${capKw.toFixed(1)} kW`, totalCost: `${Math.round(totalCost).toLocaleString()} 원`,
+                annualRev: `${Math.round(annualRev).toLocaleString()} 원`, payback: `${payback} 년`
             };
-            currentAnalysisData.capacity = `${capKw.toFixed(1)} kW`;
         }
-        
+
         function drawPanels(geo) { 
             try { 
                 let poly = turf.feature(geo);
                 if (currentGeoState.x !== 0 || currentGeoState.y !== 0 || currentGeoState.rot !== 0) {
-                      poly = turf.transformRotate(poly, currentGeoState.rot);
-                      if(currentGeoState.x !== 0) poly = turf.transformTranslate(poly, currentGeoState.x / 5000, 90);
-                      if(currentGeoState.y !== 0) poly = turf.transformTranslate(poly, currentGeoState.y / 5000, 0);
+                    poly = turf.transformRotate(poly, currentGeoState.rot);
+                    poly = turf.transformTranslate(poly, currentGeoState.x / 5000, 90);
+                    poly = turf.transformTranslate(poly, currentGeoState.y / 5000, 0);
                 }
-
-                const modW_m = parseFloat(document.getElementById('modWidth').value) || 1.13;
-                const modH_m = parseFloat(document.getElementById('modHeight').value) || 2.4;
-                const angle = parseFloat(document.getElementById('installAngle').value) || 20;
-                
-                const projectedH_m = modH_m * Math.cos(angle * Math.PI / 180);
-                const ONE_LAT_M = 111000;
-                const ONE_LNG_M = 88800;
-                const dLng = (modW_m + 0.1) / ONE_LNG_M; 
-                const dLat = (projectedH_m + 0.1) / ONE_LAT_M;
+                const modW = parseFloat(document.getElementById('modWidth').value);
+                const modH = parseFloat(document.getElementById('modHeight').value);
+                const angle = parseFloat(document.getElementById('installAngle').value);
+                const projectedH = modH * Math.cos(angle * Math.PI / 180);
+                const dLng = (modW + 0.1) / 88800; const dLat = (projectedH + 0.1) / 111000;
                 
                 const bbox = turf.bbox(poly);
-                let tempPanels = [];
-                let count = 0;
-                let loopGuard = 0;
-
+                let tempPanels = [], count = 0, loopGuard = 0;
                 for(let x = bbox[0]; x < bbox[2]; x += dLng) {
                     for(let y = bbox[1]; y < bbox[3]; y += dLat) {
-                        loopGuard++;
-                        if(loopGuard > 15000) break; 
-                        const centerPt = turf.point([x + dLng/2, y + dLat/2]);
-                        if(turf.booleanPointInPolygon(centerPt, poly)) {
-                            const cell = turf.bboxPolygon([x, y, x + dLng*0.9, y + dLat*0.9]);
-                            tempPanels.push(cell);
+                        if(loopGuard++ > 15000) break; 
+                        if(turf.booleanPointInPolygon(turf.point([x + dLng/2, y + dLat/2]), poly)) {
+                            tempPanels.push(turf.bboxPolygon([x, y, x + dLng*0.9, y + dLat*0.9]));
                             count++;
                         }
                     }
-                    if(loopGuard > 15000) break;
                 }
-                
-                let newLayer;
-                if(tempPanels.length > 0) {
-                    newLayer = L.geoJSON({type:"FeatureCollection", features: tempPanels}, {
-                        style: scanTarget === 'land' 
-                            ? { color: '#39ff14', weight: 3, fillColor: '#22c55e', fillOpacity: 0.1 } 
-                            : { color: '#3b82f6', weight: 2, fillOpacity: 0.2 },
-                        onEachFeature: (feature, layer) => { layer.on('click', () => analyzeFeature(feature)); }
-                    });
-                } else {
-                    const center = turf.center(poly);
-                    const [cx, cy] = center.geometry.coordinates;
-                    const fallback = turf.bboxPolygon([cx, cy, cx+dLng, cy+dLat]);
-                    newLayer = L.geoJSON(fallback, { style: { color: 'red', fillColor: '#ef4444' } });
-                    count = 1;
-                    showToast("건물이 작아 패널 1개를 임시 배치했습니다.");
-                }
-                
-                newLayer.addTo(panelGroup);
+                let newLayer = L.geoJSON({type:"FeatureCollection", features: tempPanels}, {
+                    style: scanTarget === 'land' ? { color: '#5d4037', weight: 1, fillColor: '#795548', fillOpacity: 0.8 } : { color: '#1e40af', weight: 1, fillColor: '#3b82f6', fillOpacity: 0.7 }
+                }).addTo(panelGroup);
                 return { layer: newLayer, count: count };
-                
-            } catch(e) { console.error("Panel Draw Error:", e); return null; } 
-        }
-
-        function openFullReport() {
-            if (!currentAnalysisData.finance) return showToast("먼저 분석을 수행해주세요.");
-            document.getElementById('form_address').value = currentAnalysisData.address;
-            document.getElementById('form_capacity').value = currentAnalysisData.capacity;
-            document.getElementById('form_kepco').value = document.getElementById('kepcoCapacity').innerText;
-            document.getElementById('form_date').value = currentAnalysisData.date;
-            document.getElementById('form_finance').value = JSON.stringify(currentAnalysisData.finance);
-            document.getElementById('form_ai').value = JSON.stringify(currentAnalysisData.ai_analysis || {});
-            
-            document.getElementById('reportForm').action = BACKEND_URL + "/report";
-            document.getElementById('reportForm').submit();
+            } catch(e) { return null; } 
         }
 
         function saveResult() {
             const addr = document.getElementById('analysisAddress').innerText;
-            const cap = document.getElementById('analysisCapacity').innerText;
-            const rev = document.getElementById('resAnnualRev').innerText;
             if(addr === '-' || addr === '주소 미상') return showToast("저장할 데이터가 없습니다.");
-
+            const ai = currentAnalysisData.ai_analysis || {};
+            const fn = currentAnalysisData.finance || {};
             let history = JSON.parse(localStorage.getItem('scenergy_history') || "[]");
-            history.push({ date: new Date().toLocaleDateString(), address: addr, capacity: cap, revenue: rev });
+            history.push({ 
+                date: new Date().toLocaleString(), address: addr, capacity: fn.capacity, revenue: fn.annualRev,
+                zoning: ai.zoning, jimok: ai.jimok, eco: ai.eco_grade, kepco: ai.kepco_capacity, sun: ai.sun_hours, score: ai.score, price: ai.price
+            });
             localStorage.setItem('scenergy_history', JSON.stringify(history));
-            updateHistoryList();
-            showToast("분석 결과가 저장되었습니다.");
+            updateHistoryList(); showToast("상세 정보 저장 완료");
+        }
+
+        function downloadCSV() {
+            const history = JSON.parse(localStorage.getItem('scenergy_history') || "[]");
+            if(history.length === 0) return showToast("데이터가 없습니다.");
+            const headers = ["날짜", "주소", "용량", "연수익", "용도지역", "지목", "생태등급", "한전용량", "일사량", "AI점수", "추정땅값"];
+            const csvRows = [headers.join(",")];
+            history.forEach(h => {
+                csvRows.push([h.date, `"${h.address}"`, h.capacity, `"${h.revenue}"`, `"${h.zoning}"`, h.jimok, h.eco, `"${h.kepco}"`, h.sun, h.score, `"${h.price}"`].join(","));
+            });
+            const blob = new Blob(["\ufeff" + csvRows.join("\n")], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            link.download = `SCEnergy_Scan_${new Date().getTime()}.csv`; link.click();
         }
 
         function updateHistoryList() {
             const listEl = document.getElementById('historyList');
             if(!listEl) return;
             const history = JSON.parse(localStorage.getItem('scenergy_history') || "[]");
-            if(history.length === 0) {
-                listEl.innerHTML = '<p class="text-xs text-slate-400 text-center py-4">저장된 기록이 없습니다.</p>';
-                return;
-            }
-            listEl.innerHTML = history.map((h, i) => `
+            if(history.length === 0) { listEl.innerHTML = '<p class="text-center py-4">기록 없음</p>'; return; }
+            listEl.innerHTML = history.slice().reverse().map(h => `
                 <div class="bg-slate-50 p-2 rounded border border-slate-200 text-xs mb-1">
-                    <div class="font-bold text-slate-700">${h.address}</div>
-                    <div class="flex justify-between text-[10px] text-slate-500 mt-1">
-                        <span>${h.capacity}</span><span>${h.revenue}</span>
-                    </div>
+                    <div class="font-bold truncate">${h.address}</div>
+                    <div class="flex justify-between mt-1"><span class="text-blue-600 font-bold">${h.score}점</span><span>${h.capacity}</span></div>
                 </div>
             `).join('');
         }
 
-        function clearHistory() {
-            if(confirm("모든 기록을 삭제하시겠습니까?")) {
-                localStorage.removeItem('scenergy_history');
-                updateHistoryList();
-            }
-        }
-
-        function updateEstimatedTime() {
-            const delay = parseInt(document.getElementById('scanDelay').value) || 1000;
-            const timerEl = document.getElementById('timerRemaining');
-            if(timerEl) timerEl.innerText = `약 ${Math.floor((delay * 20) / 1000 / 60).toString().padStart(2, '0')}:${Math.floor((delay * 20) / 1000 % 60).toString().padStart(2, '0')} 소요`;
-        }
-
+        function clearHistory() { if(confirm("전체 삭제?")) { localStorage.removeItem('scenergy_history'); updateHistoryList(); } }
+        
         function clearResults() { 
-            panelGroup.clearLayers(); 
-            selectableGroup.clearLayers(); 
-            accumulatedPanelsCount=0; 
-            selectedFeatureIds.clear(); 
-            selectedFeatures.clear(); 
+            if(panelGroup) panelGroup.clearLayers(); 
+            if(selectableGroup) selectableGroup.clearLayers(); 
             if(analysisMarkerGroup) analysisMarkerGroup.clearLayers();
-            document.getElementById('resultCard').classList.add('hidden'); 
+            selectedFeatures.clear(); 
+            accumulatedPanelsCount=0; 
+            const rc = document.getElementById('resultCard');
+            if(rc) rc.classList.add('hidden'); 
             currentAnalysisData = {};
         }
-        function resetCalibration() { currentGeoState={x:0,y:0,rot:0}; if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry); }
-        function applyCalibration(dx, dy, drot=0) { currentGeoState.x += dx * 5; currentGeoState.y += dy * 5; currentGeoState.rot += drot; if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry); }
-        function applySliderCalibration(val, type) { const v=parseFloat(val); if(type==='x') currentGeoState.x=v*10; if(type==='y') currentGeoState.y=v*10; if(type==='rot') currentGeoState.rot=v; if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry); }
+
+        function attemptLogin() {
+            const id = document.getElementById('userId').value.trim();
+            const pw = document.getElementById('userPw').value.trim();
+            if(id === "admin" && pw === "1234") {
+                isLoggedIn = true; currentUser = id;
+                document.getElementById('login-overlay').classList.add('hidden-overlay');
+                document.getElementById('currentUserDisplay').innerText = id;
+                initMap();
+                updateHistoryList();
+            } else { showToast("ID/PW를 확인하세요."); }
+        }
+
+        function logout() { location.reload(); }
+        function showAdminLogin() { document.getElementById('step-user-login').classList.add('hidden'); document.getElementById('step-admin-login').classList.remove('hidden'); }
+        function verifyAdmin() { if(btoa(document.getElementById('adminPw').value) === ENCODED_ADMIN_PW) { document.getElementById('step-admin-login').classList.add('hidden'); document.getElementById('step-admin-dashboard').classList.remove('hidden'); } }
+        function exitAdminMode() { document.getElementById('step-admin-login').classList.add('hidden'); document.getElementById('step-admin-dashboard').classList.add('hidden'); document.getElementById('step-user-login').classList.remove('hidden'); }
+        function addUser() { showToast("기능 준비중"); }
+        function resetCalibration() { currentGeoState={x:0,y:0,rot:0}; if(currentAnalysisFeature) { panelGroup.clearLayers(); drawPanels(currentAnalysisFeature.geometry); } }
+        function applyCalibration(dx, dy, drot=0) { currentGeoState.x += dx * 5; currentGeoState.y += dy * 5; currentGeoState.rot += drot; if(currentAnalysisFeature) { panelGroup.clearLayers(); drawPanels(currentAnalysisFeature.geometry); } }
+        function toggleMultiSelect() { isMultiSelectMode=document.getElementById('multiSelectToggle').checked; clearResults(); }
+        function toggleAutoScan() { autoScanMode=document.getElementById('autoScanToggle').checked; }
+        
+        function switchTab(m) { 
+            const tabs = ['scan','analysis','legal','history'];
+            tabs.forEach(t => {
+                const btn = document.getElementById(`tab-${t}`);
+                const panel = document.getElementById(`panel-${t}`);
+                if(btn) btn.classList.remove('active');
+                if(panel) panel.classList.add('hidden');
+            });
+            const activeBtn = document.getElementById(`tab-${m}`);
+            const activePanel = document.getElementById(`panel-${m}`);
+            if(activeBtn) activeBtn.classList.add('active');
+            if(activePanel) activePanel.classList.remove('hidden');
+        }
+
+        function toggleTarget() { 
+            const els=document.getElementsByName('scanTarget'); 
+            els.forEach(e=>{if(e.checked) scanTarget=e.value;}); 
+            clearResults(); 
+        }
+
+        function updateEstimatedTime() { 
+            const d = parseInt(document.getElementById('scanDelay').value || "6000"); 
+            const tr = document.getElementById('timerRemaining');
+            if(tr) tr.innerText = `약 ${Math.floor(d*20/1000/60)}분 ${Math.floor(d*20/1000%60)}초`; 
+        }
+
+        async function startMission() {
+            const bounds = map.getBounds(); const latStep = (bounds.getNorth()-bounds.getSouth())/4, lngStep = (bounds.getEast()-bounds.getWest())/5;
+            const delay = parseInt(document.getElementById('scanDelay').value || "6000");
+            showToast("순차적 스캔 시작");
+            for (let i = 0; i < 20; i++) {
+                const r = Math.floor(i/5), c = i%5;
+                await scanBuildings(bounds.getSouth() + latStep*(r+0.5), bounds.getWest() + lngStep*(c+0.5));
+                const fc = document.getElementById('foundCount');
+                if(fc) fc.innerText = `검색된 구역: ${selectableGroup.getLayers().length}개`;
+                const pc = document.getElementById('progressCount');
+                if(pc) pc.innerText = `${i+1} / 20`;
+                const pb = document.getElementById('totalProgressBar');
+                if(pb) pb.style.width = `${((i+1)/20)*100}%`;
+                await new Promise(r => setTimeout(r, delay));
+            }
+            showToast("스캔 미션 완료");
+        }
+
         function setRegion() { 
             const val=document.getElementById('regionSelect').value; 
             const REGIONS={
-                'ansan_ind': [[37.31, 126.78], [37.31, 126.78]], 'incheon_ind': [[37.40, 126.70], [37.40, 126.70]], 'hwaseong_ind': [[37.20, 126.77], [37.20, 126.77]], 'pyeongtaek_ind': [[36.98, 126.85], [36.98, 126.85]],
-                'cheonan_ind': [[36.85, 127.12], [36.85, 127.12]], 'osan_ind': [[36.72, 127.44], [36.72, 127.44]], 'daejeon_ind': [[36.43, 127.39], [36.43, 127.39]],
-                'gumi_ind': [[36.11, 128.39], [36.11, 128.39]], 'changwon_ind': [[35.21, 128.65], [35.21, 128.65]], 'ulsan_ind': [[35.50, 129.37], [35.50, 129.37]], 'daegu_ind': [[35.85, 128.50], [35.85, 128.50]], 'pohang_ind': [[36.00, 129.37], [36.00, 129.37]],
-                'gwangju_ind': [[35.20, 126.80], [35.20, 126.80]], 'yeosu_ind': [[34.85, 127.70], [34.85, 127.70]], 'daebul_ind': [[34.77, 126.45], [34.77, 126.45]], 'gunsan_ind': [[35.97, 126.60], [35.97, 126.60]],
-                'seoul': [[37.5665, 126.9780], [37.5665, 126.9780]], 'gyeonggi': [[37.2752, 127.0097], [37.2752, 127.0097]], 'incheon': [[37.4563, 126.7052], [37.4563, 126.7052]],
-                'jeonnam': [[34.8163, 126.4629], [34.8163, 126.4629]], 'jeonbuk': [[35.8203, 127.1087], [35.8203, 127.1087]], 'gyeongnam': [[35.2383, 128.6924], [35.2383, 128.6924]], 'gyeongbuk': [[36.5741, 128.5093], [36.5741, 128.5093]],
-                'chungnam': [[36.6588, 126.6728], [36.6588, 126.6728]], 'chungbuk': [[36.6356, 127.4913], [36.6356, 127.4913]], 'gangwon': [[37.8854, 127.7298], [37.8854, 127.7298]], 'jeju': [[33.4996, 126.5312], [33.4996, 126.5312]]
+                'ansan_ind': [[37.31, 126.78], [37.31, 126.78]], 
+                'hwaseong_ind': [[37.20, 126.77], [37.20, 126.77]],
+                'cheonan_ind': [[36.85, 127.12], [36.85, 127.12]],
+                'gumi_ind': [[36.11, 128.39], [36.11, 128.39]]
             };
-
-            const bounds=REGIONS[val]; 
-            if(bounds) { if(bounds[0][0]===bounds[1][0]) { map.setView(bounds[0], 13); scanBuildings(bounds[0][0], bounds[0][1]); } else map.fitBounds(bounds); showToast("지역 이동"); }
+            const bounds=REGIONS[val]; if(bounds) { map.setView(bounds[0], 15); scanBuildings(bounds[0][0], bounds[0][1]); showToast("지역 이동"); }
         }
-        function setMap(t) { if(t==='base') { map.addLayer(layers.base); map.removeLayer(layers.sat); } else { map.addLayer(layers.sat); map.removeLayer(layers.base); } layers.hybrid.bringToFront(); }
+        function setMap(t) { if(t==='base') { map.addLayer(layers.base); map.removeLayer(layers.sat); } else { map.addLayer(layers.sat); map.removeLayer(layers.base); } }
         function toggleSidebar() { document.getElementById('sidebar').classList.toggle('collapsed'); document.getElementById('sidebar-toggle-btn').classList.toggle('collapsed'); }
-        function switchTab(m) { ['scan','analysis','legal','history'].forEach(t=>document.getElementById(`tab-${t}`).classList.remove('active')||document.getElementById(`panel-${t}`).classList.add('hidden')); document.getElementById(`tab-${m}`).classList.add('active'); document.getElementById(`panel-${m}`).classList.remove('hidden'); }
-        function toggleTarget() { const els=document.getElementsByName('scanTarget'); els.forEach(e=>{if(e.checked) scanTarget=e.value;}); toggleMultiSelect(); showToast(`모드: ${scanTarget}`); }
-        function toggleMultiSelect() { isMultiSelectMode=document.getElementById('multiSelectToggle').checked; clearResults(); }
-        function toggleAutoScan() { autoScanMode=document.getElementById('autoScanToggle').checked; if(autoScanMode) onMapMoveEnd(); }
-        
-        let missionInterval;
-        async function startMission() {
-            if(missionInterval) return;
-            const bounds = map.getBounds();
-            const latStep = (bounds.getNorth() - bounds.getSouth()) / 4;
-            const lngStep = (bounds.getEast() - bounds.getWest()) / 5;
-            let count = 0;
-            const delay = parseInt(document.getElementById('scanDelay').value) || 1000;
-            
-            showToast("자동 스캔 시작");
-            document.getElementById('foundCount').innerText = "검색 중..."; 
 
-            missionInterval = setInterval(() => {
-                if(count >= 20) { clearInterval(missionInterval); missionInterval=null; showToast("스캔 완료"); return; }
-                const r = Math.floor(count / 5);
-                const c = count % 5;
-                const lat = bounds.getSouth() + latStep * (r + 0.5);
-                const lng = bounds.getWest() + lngStep * (c + 0.5);
-                scanBuildings(lat, lng);
-                
-                const found = selectableGroup.getLayers().length;
-                document.getElementById('foundCount').innerText = `검색된 구역: ${found}개`;
-
-                count++;
-                document.getElementById('progressCount').innerText = `${count} / 20`;
-                document.getElementById('totalProgressBar').style.width = `${(count/20)*100}%`;
-            }, delay);
-        }
+        // 초기화 코드 (Window.onload가 initMap보다 늦게 실행되도록 보장)
+        window.onload = () => { 
+            updateEstimatedTime(); 
+        };
     </script>
 </body>
 </html>
