@@ -324,8 +324,6 @@
         let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
         let selectedFeatures = new Map();
         let currentAnalysisData = {};
-            _basePanelsFC = null;
-            _currentPanelsLayer = null;
         // ✅ 패널 교정(캘리브레이션)용: 최초 계산된 패널(기준) 피처컬렉션 저장
         let _basePanelsFC = null;
         let _currentPanelsLayer = null;
@@ -766,7 +764,6 @@ catch(e) { console.warn("Storage restricted"); }
                 payback: paybackText,
                 assumptions: { PR, YEARS, DEGR, OPEX_PER_KW_Y, LOAN_YEARS, pricePerKwh }
             };
-        };
 
         };
 
@@ -846,17 +843,10 @@ catch(e) { console.warn("Storage restricted"); }
                 // 2) 즉시 렌더(기준 상태)
                 if (_currentPanelsLayer) {
                     panelGroup.removeLayer(_currentPanelsLayer);
-                    _currentPanelsLayer = null;
                 }
                 _currentPanelsLayer = _renderPanels(_basePanelsFC);
 
                 return { layer: _currentPanelsLayer, count: built.count, fc: _basePanelsFC };
-            } catch(e) {
-                console.error("Panel Draw Error:", e);
-                return null;
-            }
-        };
-
             } catch(e) { console.error("Panel Draw Error:", e); return null; } 
         };
 
@@ -923,8 +913,6 @@ catch(e) { console.warn("Storage restricted"); }
             document.getElementById('legalPlaceholder').classList.remove('hidden');
 
             currentAnalysisData = {};
-            _basePanelsFC = null;
-            _currentPanelsLayer = null;
         };
 
         window.resetCalibration = function() { 
