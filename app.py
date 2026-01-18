@@ -170,6 +170,11 @@ def report_page():
             data["finance"] = json.loads(data["finance"])
         if "ai_analysis" in data:
             data["ai_analysis"] = json.loads(data["ai_analysis"])
+        if "ai_score" in data:
+            try:
+                data["ai_score"] = json.loads(data["ai_score"])
+            except Exception:
+                pass
     except Exception as e:
         logger.warning(f"report parse err: {e}")
     return render_template("report.html", data=data)
