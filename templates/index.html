@@ -59,13 +59,13 @@
                     <div><label for="userId" class="text-xs font-bold text-slate-400 ml-1">아이디</label><input type="text" id="userId" placeholder="User ID" class="login-input w-full rounded px-4 py-3 text-sm mt-1"></div>
                     <div><label for="userPw" class="text-xs font-bold text-slate-400 ml-1">비밀번호</label><input type="password" id="userPw" placeholder="••••••" class="login-input w-full rounded px-4 py-3 text-sm mt-1" onkeypress="if(event.key==='Enter') window.attemptLogin()"></div>
                 </div>
-                <button onclick="window.attemptLogin()" class="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 rounded-lg transition mt-2">접속하기</button>
-                <div class="flex justify-between items-center mt-4 pt-4 border-t border-slate-700/50"><button onclick="window.showAdminLogin()" class="text-[10px] text-slate-500 hover:text-cyan-400 transition font-bold flex items-center gap-1"><i class="ph ph-lock-key"></i> 관리자 로그인</button></div>
+                <button type="button" onclick="window.attemptLogin()" class="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 rounded-lg transition mt-2">접속하기</button>
+                <div class="flex justify-between items-center mt-4 pt-4 border-t border-slate-700/50"><button type="button" onclick="window.showAdminLogin()" class="text-[10px] text-slate-500 hover:text-cyan-400 transition font-bold flex items-center gap-1"><i class="ph ph-lock-key"></i> 관리자 로그인</button></div>
             </div>
             <div id="step-admin-login" class="hidden space-y-4">
                 <div class="text-left"><label for="adminPw" class="text-xs font-bold text-red-400 ml-1">관리자 비밀번호</label><input type="password" id="adminPw" class="login-input w-full rounded px-4 py-3 text-sm font-mono mt-1" placeholder="Admin Password" onkeypress="if(event.key==='Enter') window.verifyAdmin()"></div>
-                <button onclick="window.verifyAdmin()" class="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-lg transition">관리자 접속</button>
-                <button onclick="window.exitAdminMode()" class="text-xs text-slate-400 hover:text-white">돌아가기</button>
+                <button type="button" onclick="window.verifyAdmin()" class="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-lg transition">관리자 접속</button>
+                <button type="button" onclick="window.exitAdminMode()" class="text-xs text-slate-400 hover:text-white">돌아가기</button>
             </div>
             <div id="step-admin-dashboard" class="hidden space-y-4">
                 <div class="bg-slate-800/50 rounded-lg p-3 text-left border border-slate-700">
@@ -74,10 +74,10 @@
                         <div><label for="newUserId" class="sr-only">ID</label><input type="text" id="newUserId" placeholder="아이디" class="login-input rounded px-2 py-1.5 text-xs w-full"></div>
                         <div><label for="newUserPw" class="sr-only">PW</label><input type="text" id="newUserPw" placeholder="비밀번호" class="login-input rounded px-2 py-1.5 text-xs w-full"></div>
                     </div>
-                    <button onclick="window.addUser()" class="w-full bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-bold">유저 추가</button>
+                    <button type="button" onclick="window.addUser()" class="w-full bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-bold">유저 추가</button>
                 </div>
                 <div class="text-left"><label class="text-[10px] font-bold text-slate-400 block mb-1 flex justify-between"><span>등록된 유저 목록</span><span id="user-count" class="text-cyan-500">0명</span></label><div class="bg-slate-800 rounded border border-slate-700 h-32 overflow-y-auto p-2 space-y-1" id="user-list-container"></div></div>
-                <div class="flex gap-2 pt-2"><button onclick="window.exitAdminMode()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 rounded text-xs">나가기</button></div>
+                <div class="flex gap-2 pt-2"><button type="button" onclick="window.exitAdminMode()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 rounded text-xs">나가기</button></div>
             </div>
         </div>
     </div>
@@ -86,7 +86,7 @@
     <div id="sidebar" class="sidebar absolute top-0 left-0 h-full w-[420px] bg-white shadow-2xl flex flex-col border-r border-gray-200">
         <div class="p-4 bg-slate-900 text-white shadow-lg shrink-0">
             <h1 class="text-lg font-bold flex items-center gap-2"><i class="ph ph-solar-panel text-yellow-400"></i> SCEnergy 태양광 채굴기</h1>
-            <div class="flex justify-between items-center text-[10px] text-slate-400 mt-2 border-t border-slate-700 pt-2"><span id="currentUserDisplay">Not Logged In</span><button onclick="window.logout()" class="text-red-400 hover:text-red-300 underline">로그아웃</button></div>
+            <div class="flex justify-between items-center text-[10px] text-slate-400 mt-2 border-t border-slate-700 pt-2"><span id="currentUserDisplay">Not Logged In</span><button type="button" onclick="window.logout()" class="text-red-400 hover:text-red-300 underline">로그아웃</button></div>
             <div class="grid grid-cols-3 gap-1 mt-3 text-center">
                 <div class="bg-slate-900 rounded p-1 border border-slate-700 text-[8px]"><div class="text-slate-500">Backend</div><div id="cnt-vworld" class="font-mono font-bold text-cyan-400">0</div></div>
                 <div class="bg-slate-900 rounded p-1 border border-slate-700 text-[8px]"><div class="text-slate-500">DB Sync</div><div id="cnt-public" class="font-mono font-bold text-yellow-400">0</div></div>
@@ -94,10 +94,10 @@
             </div>
         </div>
         <div class="flex border-b border-gray-200 shrink-0 bg-white shadow-sm">
-            <button onclick="window.switchTab('scan')" id="tab-scan" class="tab-btn active flex-1 py-3 text-xs text-center"><i class="ph ph-radar text-lg"></i>전수 스캔</button>
-            <button onclick="window.switchTab('analysis')" id="tab-analysis" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-magnifying-glass-plus text-lg"></i>정밀 분석</button>
-            <button onclick="window.switchTab('legal')" id="tab-legal" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-sparkle text-lg"></i>종합 리포트</button>
-            <button onclick="window.switchTab('history')" id="tab-history" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-clock-counter-clockwise text-lg"></i>기록</button>
+            <button type="button" onclick="window.switchTab('scan')" id="tab-scan" class="tab-btn active flex-1 py-3 text-xs text-center"><i class="ph ph-radar text-lg"></i>전수 스캔</button>
+            <button type="button" onclick="window.switchTab('analysis')" id="tab-analysis" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-magnifying-glass-plus text-lg"></i>정밀 분석</button>
+            <button type="button" onclick="window.switchTab('legal')" id="tab-legal" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-sparkle text-lg"></i>종합 리포트</button>
+            <button type="button" onclick="window.switchTab('history')" id="tab-history" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-clock-counter-clockwise text-lg"></i>기록</button>
         </div>
 
         <div class="flex-1 overflow-y-auto bg-slate-50">
@@ -185,25 +185,25 @@
                              <input type="checkbox" id="autoFollow" class="w-4 h-4 rounded border-gray-600 text-indigo-600 focus:ring-indigo-500 bg-gray-700" checked>
                              <label for="autoFollow" class="text-[10px] text-slate-300 cursor-pointer select-none">지도 자동 따라가기</label>
                         </div>
-                        <div class="grid grid-cols-2 gap-2 pt-1"><button onclick="window.startMission()" id="startBtn" class="bg-indigo-600 hover:bg-indigo-700 py-2 rounded font-bold text-xs transition">▶ 스캔 시작</button><button onclick="window.clearResults()" class="bg-slate-700 hover:bg-slate-600 py-2 rounded font-bold text-xs transition">🔄 초기화</button></div>
+                        <div class="grid grid-cols-2 gap-2 pt-1"><button type="button" onclick="window.startMission()" id="startBtn" class="bg-indigo-600 hover:bg-indigo-700 py-2 rounded font-bold text-xs transition">▶ 스캔 시작</button><button type="button" onclick="window.clearResults()" class="bg-slate-700 hover:bg-slate-600 py-2 rounded font-bold text-xs transition">🔄 초기화</button></div>
                     </div>
                 </div>
 
                 <!-- 2. 정밀 분석 패널 -->
                 <div id="panel-analysis" class="hidden space-y-4">
                     <div class="bg-slate-800 p-2 rounded-lg border border-indigo-500/50 shadow-lg mb-2">
-                        <div class="flex justify-between items-center mb-2 border-b border-slate-700 pb-1"><span class="text-[11px] font-bold text-indigo-300 flex items-center gap-1"><i class="ph ph-crosshair"></i> 패널 조정 (D-Pad)</span><button onclick="window.resetCalibration()" class="text-[9px] bg-slate-700 hover:bg-slate-600 px-1.5 py-0.5 rounded text-white border border-slate-600">초기화</button></div>
+                        <div class="flex justify-between items-center mb-2 border-b border-slate-700 pb-1"><span class="text-[11px] font-bold text-indigo-300 flex items-center gap-1"><i class="ph ph-crosshair"></i> 패널 조정 (D-Pad)</span><button type="button" onclick="window.resetCalibration()" class="text-[9px] bg-slate-700 hover:bg-slate-600 px-1.5 py-0.5 rounded text-white border border-slate-600">초기화</button></div>
                         <div class="flex flex-col items-center justify-center gap-2 pt-2 pb-1">
                              <div class="grid grid-cols-3 gap-2">
-                                <div></div><button class="d-pad-btn" onclick="window.applyCalibration(0, 0.5)">▲</button><div></div>
-                                <button class="d-pad-btn" onclick="window.applyCalibration(-0.5, 0)">◀</button>
+                                <div></div><button type="button" class="d-pad-btn" onclick="window.applyCalibration(0, 0.5)">▲</button><div></div>
+                                <button type="button" class="d-pad-btn" onclick="window.applyCalibration(-0.5, 0)">◀</button>
                                 <div class="w-8 h-8 flex items-center justify-center text-[9px] font-mono text-slate-400 border border-slate-600 rounded">Mov</div>
-                                <button class="d-pad-btn" onclick="window.applyCalibration(0.5, 0)">▶</button>
-                                <div></div><button class="d-pad-btn" onclick="window.applyCalibration(0, -0.5)">▼</button><div></div>
+                                <button type="button" class="d-pad-btn" onclick="window.applyCalibration(0.5, 0)">▶</button>
+                                <div></div><button type="button" class="d-pad-btn" onclick="window.applyCalibration(0, -0.5)">▼</button><div></div>
                              </div>
                              <div class="flex gap-2 w-full px-4 border-t border-slate-700 pt-2 mt-1">
-                                <button class="d-pad-btn flex-1 text-[10px]" onclick="window.applyCalibration(0, 0, -5)">↺ 회전</button>
-                                <button class="d-pad-btn flex-1 text-[10px]" onclick="window.applyCalibration(0, 0, 5)">↻ 회전</button>
+                                <button type="button" class="d-pad-btn flex-1 text-[10px]" onclick="window.applyCalibration(0, 0, -5)">↺ 회전</button>
+                                <button type="button" class="d-pad-btn flex-1 text-[10px]" onclick="window.applyCalibration(0, 0, 5)">↻ 회전</button>
                             </div>
                         </div>
                     </div>
@@ -224,8 +224,8 @@
                             <div class="flex justify-between pt-1 border-t border-indigo-500/30 mt-1"><span class="text-indigo-200 font-bold">🚀 자본회수기간:</span><span id="resPfPayback" class="text-cyan-300 font-bold text-xs">0.0 년</span></div>
                         </div>
                         <div class="flex gap-2 mt-2">
-                             <button onclick="window.saveResult()" class="flex-1 bg-slate-700 hover:bg-slate-600 py-2 rounded text-xs font-bold border border-slate-600 transition">저장</button>
-                             <button onclick="window.openFullReport()" class="flex-1 bg-blue-600 hover:bg-blue-500 py-2 rounded text-xs font-bold border border-blue-500 transition">상세 리포트</button>
+                             <button type="button" onclick="window.saveResult()" class="flex-1 bg-slate-700 hover:bg-slate-600 py-2 rounded text-xs font-bold border border-slate-600 transition">저장</button>
+                             <button type="button" onclick="window.openFullReport()" class="flex-1 bg-blue-600 hover:bg-blue-500 py-2 rounded text-xs font-bold border border-blue-500 transition">상세 리포트</button>
                         </div>
                     </div>
                 </div>
@@ -273,8 +273,8 @@
                         <div class="flex justify-between items-center mb-2 border-b pb-1">
                             <h3 class="text-xs font-bold text-gray-700">📂 분석 기록</h3>
                             <div class="flex gap-2">
-                                <button onclick="window.downloadCSV()" class="text-[10px] text-blue-600 font-bold flex items-center gap-1"><i class="ph ph-file-csv"></i> CSV 다운</button>
-                                <button onclick="window.clearHistory()" class="text-[10px] text-red-500 hover:underline">삭제</button>
+                                <button type="button" onclick="window.downloadCSV()" class="text-[10px] text-blue-600 font-bold flex items-center gap-1"><i class="ph ph-file-csv"></i> CSV 다운</button>
+                                <button type="button" onclick="window.clearHistory()" class="text-[10px] text-red-500 hover:underline">삭제</button>
                             </div>
                         </div>
                         <div id="historyList" class="space-y-2 max-h-80 overflow-y-auto"></div>
@@ -293,7 +293,7 @@
     <div class="absolute top-5 left-1/2 transform -translate-x-1/2 z-[1000] flex flex-col items-center gap-2">
         <div class="bg-white p-1 rounded-lg shadow-xl border border-slate-200 flex items-center">
             <input type="text" id="addrInput" placeholder="주소 검색 (예: 강남대로 123)" class="w-64 px-3 py-2 text-sm outline-none text-slate-700 font-medium" onkeypress="if(event.key==='Enter') window.searchAddress()">
-            <button onclick="window.searchAddress()" class="bg-cyan-600 hover:bg-cyan-700 text-white p-2 rounded-md transition shadow-md"><i class="ph ph-magnifying-glass font-bold"></i></button>
+            <button type="button" onclick="window.searchAddress()" class="bg-cyan-600 hover:bg-cyan-700 text-white p-2 rounded-md transition shadow-md"><i class="ph ph-magnifying-glass font-bold"></i></button>
         </div>
     </div>
     
@@ -533,8 +533,13 @@
                         style: scanTarget === 'land' 
                             ? { color: '#8d6e63', weight: 3, fillColor: '#8d6e63', fillOpacity: 0.4 } 
                             : { color: '#3b82f6', weight: 2, fillOpacity: 0.2 },
-                        onEachFeature: (feature, layer) => { layer.on('click', () => window.analyzeFeature(feature)); }
-                    }).addTo(selectableGroup);
+                        onEachFeature: (feature, layer) => {
+                        layer.on('click', (e) => {
+                            // 중요: 폴리곤 클릭 시 지도 클릭 이벤트로 전파되면 scanBuildings가 다시 실행되며 패널이 즉시 지워질 수 있음
+                            if (e && e.originalEvent) L.DomEvent.stopPropagation(e);
+                            window.analyzeFeature(feature);
+                        });
+                    }}).addTo(selectableGroup);
                 }
             } catch(e) { console.error(e); }
             finally { setTimeout(() => { scanLock = false; }, 800); }
@@ -933,6 +938,191 @@
             } catch(e){}
             window.logSystem("System Ready.");
         };
-    </script>
+    
+
+/* =========================
+   SCEnergy Front Patch Pack
+   - login/admin functions
+   - openFullReport
+   - reCalculate (finance refresh)
+   - user list render
+   ========================= */
+
+window._sc_patch_loaded = true;
+
+// Storage helpers fallback (in case removed)
+window.safeGetItem = window.safeGetItem || function(key){ try { return localStorage.getItem(key); } catch(e){ return null; } };
+window.safeSetItem = window.safeSetItem || function(key,val){ try { localStorage.setItem(key,val); } catch(e){ console.warn("Storage restricted"); } };
+
+// --- Login / Logout ---
+window.attemptLogin = function() {
+  const id = (document.getElementById('userId')?.value || '').trim();
+  const pw = (document.getElementById('userPw')?.value || '').trim();
+  if (!id || !pw) return window.showToast?.("아이디/비밀번호를 입력하세요.");
+
+  // ensure default user exists
+  try {
+    const stored = window.safeGetItem('scenergy_users');
+    if (!stored) window.safeSetItem('scenergy_users', JSON.stringify([{id:"admin", pw:"1234"}]));
+  } catch(e){}
+
+  let users = [];
+  try { users = JSON.parse(window.safeGetItem('scenergy_users') || "[]"); } catch(e) { users = []; }
+  if (!users || users.length === 0) users = [{id:"admin", pw:"1234"}];
+
+  const user = users.find(u => u.id === id && u.pw === pw);
+  if (!user) return window.showToast?.("ID/PW가 일치하지 않습니다.");
+
+  window.isLoggedIn = true;
+  window.currentUser = id;
+
+  document.getElementById('login-overlay')?.classList.add('hidden-overlay');
+  const userDisp = document.getElementById('currentUserDisplay');
+  if (userDisp) userDisp.innerText = id;
+
+  // init map after login
+  if (typeof window.initMap === 'function') window.initMap();
+  if (typeof window.updateHistoryList === 'function') window.updateHistoryList();
+
+  window.showToast?.("로그인 성공");
+};
+
+window.logout = function() {
+  location.reload();
+};
+
+// --- Admin UI flow ---
+window.showAdminLogin = function() {
+  document.getElementById('step-user-login')?.classList.add('hidden');
+  document.getElementById('step-admin-login')?.classList.remove('hidden');
+};
+
+window.exitAdminMode = function() {
+  document.getElementById('step-admin-login')?.classList.add('hidden');
+  document.getElementById('step-admin-dashboard')?.classList.add('hidden');
+  document.getElementById('step-user-login')?.classList.remove('hidden');
+};
+
+window.verifyAdmin = function() {
+  const pw = document.getElementById('adminPw')?.value || '';
+  if (typeof window.ENCODED_ADMIN_PW === 'undefined') {
+    window.showToast?.("관리자 설정값이 없습니다.");
+    return;
+  }
+  if (btoa(pw) === window.ENCODED_ADMIN_PW) {
+    document.getElementById('step-admin-login')?.classList.add('hidden');
+    document.getElementById('step-admin-dashboard')?.classList.remove('hidden');
+    window.renderUserList?.();
+    window.showToast?.("관리자 모드 접속");
+  } else {
+    window.showToast?.("관리자 비밀번호가 틀렸습니다.");
+  }
+};
+
+// --- Users CRUD (localStorage) ---
+window.renderUserList = function() {
+  const box = document.getElementById('user-list-container');
+  const countEl = document.getElementById('user-count');
+  if (!box) return;
+
+  let users = [];
+  try { users = JSON.parse(window.safeGetItem('scenergy_users') || "[]"); } catch(e) {}
+  if (!users || users.length === 0) users = [{id:"admin", pw:"1234"}];
+
+  if (countEl) countEl.innerText = `${users.length}명`;
+
+  box.innerHTML = users.map(u => {
+    const safeId = String(u.id).replace(/'/g, "\\'");
+    const delBtn = (u.id === 'admin')
+      ? `<span class="text-[10px] text-slate-500">고정</span>`
+      : `<button type="button" class="text-[10px] text-red-300 hover:text-red-200"
+                 onclick="window.removeUser('${safeId}')">삭제</button>`;
+    return `
+      <div class="flex justify-between items-center bg-slate-900/40 border border-slate-700 rounded px-2 py-1">
+        <div class="text-[10px] text-white font-mono truncate">${u.id}</div>
+        ${delBtn}
+      </div>
+    `;
+  }).join('');
+};
+
+window.addUser = function() {
+  const id = (document.getElementById('newUserId')?.value || '').trim();
+  const pw = (document.getElementById('newUserPw')?.value || '').trim();
+  if (!id || !pw) return window.showToast?.("ID/PW를 입력하세요.");
+
+  let users = [];
+  try { users = JSON.parse(window.safeGetItem('scenergy_users') || "[]"); } catch(e) { users = []; }
+  if (!users || users.length === 0) users = [{id:"admin", pw:"1234"}];
+
+  if (users.some(u => u.id === id)) return window.showToast?.("이미 존재하는 ID입니다.");
+
+  users.push({id, pw});
+  window.safeSetItem('scenergy_users', JSON.stringify(users));
+
+  const idEl = document.getElementById('newUserId'); if (idEl) idEl.value = '';
+  const pwEl = document.getElementById('newUserPw'); if (pwEl) pwEl.value = '';
+
+  window.renderUserList?.();
+  window.showToast?.("유저 추가 완료");
+};
+
+window.removeUser = function(id) {
+  if (id === 'admin') return window.showToast?.("admin은 삭제할 수 없습니다.");
+  let users = [];
+  try { users = JSON.parse(window.safeGetItem('scenergy_users') || "[]"); } catch(e) { users = []; }
+  users = (users || []).filter(u => u.id !== id);
+  if (users.length === 0) users = [{id:"admin", pw:"1234"}];
+  window.safeSetItem('scenergy_users', JSON.stringify(users));
+  window.renderUserList?.();
+  window.showToast?.("삭제 완료");
+};
+
+// --- Finance re-calc hook (parameter changes) ---
+window.reCalculate = function() {
+  try {
+    // If we have an accumulated count, re-run finance
+    const cnt = window.accumulatedPanelsCount || 0;
+    if (cnt > 0 && typeof window.calculateFinance === 'function') {
+      const sun = window.currentAnalysisData?.ai_analysis?.sun_hours;
+      window.calculateFinance(cnt, sun);
+      window.showToast?.("재계산 완료");
+    }
+  } catch(e) {
+    console.warn("reCalculate failed", e);
+  }
+};
+
+// --- Full report submit ---
+window.openFullReport = function() {
+  if (!window.currentAnalysisData?.finance) return window.showToast?.("먼저 분석을 수행해주세요.");
+
+  const form = document.getElementById('reportForm');
+  if (!form) return window.showToast?.("리포트 폼이 없습니다.");
+
+  document.getElementById('form_address').value = window.currentAnalysisData.address || '';
+  document.getElementById('form_capacity').value = window.currentAnalysisData.finance.capacity || '';
+  document.getElementById('form_kepco').value = window.currentAnalysisData?.ai_analysis?.kepco_capacity || '정보 없음';
+  document.getElementById('form_date').value = window.currentAnalysisData.date || new Date().toLocaleDateString();
+  document.getElementById('form_finance').value = JSON.stringify(window.currentAnalysisData.finance || {});
+  document.getElementById('form_ai').value = JSON.stringify(window.currentAnalysisData.ai_analysis || {});
+
+  // BACKEND_URL should exist
+  if (typeof window.BACKEND_URL !== 'undefined') {
+    form.action = window.BACKEND_URL + "/report";
+  }
+  form.submit();
+};
+
+// Ensure admin list shows when dashboard opens (if user navigates directly)
+document.addEventListener('click', function(e){
+  const target = e.target;
+  if (!target) return;
+  if (target.closest && target.closest('#step-admin-dashboard')) {
+    if (typeof window.renderUserList === 'function') window.renderUserList();
+  }
+});
+
+</script>
 </body>
 </html>
