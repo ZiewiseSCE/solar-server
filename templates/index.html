@@ -29,6 +29,7 @@
         .sidebar.collapsed { transform: translateX(-100%); }
         #sidebar-toggle-btn { left: 420px; transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1); z-index: 2001; }
         #sidebar-toggle-btn.collapsed { left: 0; }
+        .tab-btn { transition: all 0.2s; border-bottom: 2px solid transparent; }
         .tab-btn.active { border-bottom-color: #06b6d4; color: #06b6d4; font-weight: bold; background-color: #f8fafc; }
         .result-card { background: rgba(15, 23, 42, 0.95); border-left: 4px solid #06b6d4; backdrop-filter: blur(4px); }
         .spinner { border: 3px solid rgba(255,255,255,0.1); border-radius: 50%; border-top: 3px solid #06b6d4; width: 24px; height: 24px; animation: spin 1s linear infinite; }
@@ -52,7 +53,7 @@
     </form>
 
     <div id="login-overlay">
-        <!-- 로그인 화면 -->
+        <!-- 로그인 UI -->
         <div class="bg-slate-900 p-8 rounded-2xl shadow-2xl border border-slate-700 w-[400px] text-center relative overflow-hidden" id="login-box">
             <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500"></div>
             <div class="mb-6 relative">
@@ -185,6 +186,7 @@
                         </div>
                         <div class="flex justify-between items-end"><div id="timerRemaining" class="text-xl font-mono font-bold text-yellow-400">00:00:00</div><div id="progressCount" class="text-[10px] text-gray-500 font-mono">0 / 20</div></div>
                         <div class="w-full bg-slate-700 rounded-full h-1.5 overflow-hidden"><div id="totalProgressBar" class="bg-cyan-500 h-full transition-all duration-500" style="width: 0%"></div></div>
+                        <!-- [추가] 스캔된 구역 수 표시 -->
                         <div class="flex justify-between items-end mt-1 px-1"><div class="text-[9px] text-cyan-400 font-bold" id="foundCount">검색된 구역: 0개</div></div>
                         <div class="grid grid-cols-2 gap-2 pt-1"><button onclick="startMission()" id="startBtn" class="bg-indigo-600 hover:bg-indigo-700 py-2 rounded font-bold text-xs transition">▶ 스캔 시작</button><button onclick="clearResults()" class="bg-slate-700 hover:bg-slate-600 py-2 rounded font-bold text-xs transition">🔄 초기화</button></div>
                     </div>
@@ -208,6 +210,7 @@
                             </div>
                         </div>
                     </div>
+
                     <div id="resultCard" class="hidden result-card p-4 rounded-lg shadow-lg text-white space-y-3">
                         <h3 class="text-sm font-bold flex items-center gap-1 border-b border-slate-700 pb-2">📊 통합 분석 결과</h3>
                         <div class="space-y-2 text-xs">
@@ -248,18 +251,21 @@
                     </div>
                 </div>
 
-                <!-- 4. 종합 리포트 패널 -->
+                <!-- 4. 종합 리포트 패널 (AI 분석 대시보드) -->
                 <div id="panel-legal" class="hidden space-y-4">
                     <div class="bg-slate-800 p-4 rounded-lg shadow-lg text-white min-h-[300px]">
                         <h3 class="text-sm font-bold border-b border-slate-700 pb-2 flex items-center gap-2"><i class="ph ph-files"></i> AI 인허가 분석 대시보드</h3>
+                        
                         <div id="legalPlaceholder" class="text-center py-10 text-slate-400 text-xs">
                             <i class="ph ph-brain text-2xl mb-2 text-purple-300"></i><br>
                             건물을 선택하면 SolarAI가<br>종합 입지 분석(용도, 생태, 한전 등)을 시작합니다.
                         </div>
+
                         <div id="legalLoading" class="hidden text-center py-10">
                             <div class="spinner mx-auto mb-2 !border-t-purple-500"></div>
                             <p class="text-xs text-purple-300 animate-pulse">데이터를 수집 및 분석 중입니다...</p>
                         </div>
+
                         <div id="legalContent" class="hidden space-y-4 mt-2">
                              <div class="bg-purple-900/30 p-2 rounded border border-purple-500/30 text-xs text-purple-200 mb-2">
                                 🤖 <span class="font-bold">SolarAI Analysis Result</span>
@@ -312,7 +318,6 @@
         let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, analysisMarkerGroup, existingGroup, substationGroup;
         let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
         let apiCounts = { vworld: 0, public: 0, ai: 0 };
-        // [중복 방지 Set]
         let selectedFeatureIds = new Set();
         let currentAnalysisData = {}; 
         
@@ -397,13 +402,11 @@
 
             const box = `${lng - 0.001},${lat - 0.001},${lng + 0.001},${lat + 0.001}`;
             try {
-                // [수정] 모드에 따른 레이어 선택
                 const layerName = scanTarget === 'land' ? 'LP_PA_CBND_BUBUN' : 'LT_C_SPBD';
                 const url = `https://api.vworld.kr/req/data?service=data&request=GetFeature&data=${layerName}&key=${VWORLD_TILE_KEY}&geomFilter=BOX(${box})&size=1000`;
                 const data = await jsonpRequest(url);
                 if(data.response?.status === 'OK') {
                     L.geoJSON(data.response.result.featureCollection.features, {
-                        // [수정] 토지 모드 스타일: 형광 녹색 테두리 + 투명도 0.1
                         style: scanTarget === 'land' 
                             ? { color: '#39ff14', weight: 3, fillColor: '#22c55e', fillOpacity: 0.1 } 
                             : { color: '#3b82f6', weight: 2, fillOpacity: 0.2 },
@@ -422,16 +425,10 @@
                 hybrid: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Hybrid/{z}/{y}/{x}.png`) 
             };
             layers.sat.addTo(map);
-            
-            selectableGroup = L.layerGroup().addTo(map); 
-            panelGroup = L.layerGroup().addTo(map); 
-            existingGroup = L.layerGroup().addTo(map); 
-            substationGroup = L.layerGroup().addTo(map);
+            selectableGroup = L.layerGroup().addTo(map); panelGroup = L.layerGroup().addTo(map); existingGroup = L.layerGroup().addTo(map); substationGroup = L.layerGroup().addTo(map);
             analysisMarkerGroup = L.layerGroup().addTo(map);
-            
             cadastralLayer = L.tileLayer.wms('https://api.vworld.kr/req/wms/1.0.0', { layers: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', styles: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', format: 'image/png', transparent: true, opacity: 0.7, key: VWORLD_TILE_KEY });
             map.addLayer(cadastralLayer);
-
             map.on('click', (e) => scanBuildings(e.latlng.lat, e.latlng.lng));
             map.on('moveend', onMapMoveEnd); 
             if(document.getElementById('existingPlantToggle').checked) toggleLayer('existing');
@@ -468,10 +465,27 @@
         }
 
         async function analyzeFeature(feature) {
-            // [중복 방지]
+            // [중복 방지 & 스마트 토글]
             const featureId = feature.id || JSON.stringify(feature.geometry.coordinates);
-            if (isMultiSelectMode && selectedFeatureIds.has(featureId)) { return showToast("이미 선택된 영역입니다."); }
-            if (!isMultiSelectMode) { selectedFeatureIds.clear(); }
+            
+            // 1. 이미 선택된 경우 (해제 로직)
+            if (selectedFeatureIds.has(featureId)) {
+                // 이미 그려진 패널(레이어) 찾아서 제거해야 함 (단순화: 전체 리셋 후 다시 그리기 등은 복잡하므로 여기선 알림만)
+                // 만약 개별 제거를 원하면 panelGroup에서 해당 featureId와 매핑된 레이어를 찾아야 함.
+                // 여기서는 사용자 요청대로 '선택 해제' 개념을 적용하기 위해 토글 방식을 사용.
+                // 하지만 Leaflet 레이어 관리가 복잡해지므로, 누적 모드가 아닐 땐 리셋, 맞을 땐 중복 알림으로 처리.
+                if (isMultiSelectMode) {
+                     return showToast("이미 선택된 영역입니다 (해제 기능 미구현)"); 
+                } else {
+                    clearResults();
+                    return;
+                }
+            }
+
+            // 2. 단일 모드일 경우 기존 선택 초기화
+            if (!isMultiSelectMode) {
+                clearResults(); 
+            }
             selectedFeatureIds.add(featureId);
 
             switchTab('analysis'); 
@@ -479,11 +493,8 @@
             const addr = feature.properties.road_nm_ad || feature.properties.jibun || feature.properties.addr || "주소 미상";
             document.getElementById('analysisAddress').innerText = addr;
             
-            // 데이터 저장용 객체 초기화
             currentAnalysisData = { address: addr, date: new Date().toLocaleDateString() };
             currentAnalysisFeature = feature;
-            
-            // [중요] 주소가 '주소 미상'이면 좌표로 역지오코딩 시도 (여기서는 생략하고 좌표 전달)
             
             drawPanels(feature.geometry); 
 
@@ -500,7 +511,6 @@
             if(contentEl) contentEl.classList.add('hidden');
 
             try {
-                // 백엔드 종합 분석 호출
                 const res = await fetch(`${BACKEND_URL}/api/analyze/comprehensive?lat=${lat}&lng=${lng}&address=${encodeURIComponent(addr)}`);
                 const data = await res.json();
                 
@@ -573,7 +583,7 @@
             const capEl = document.getElementById('analysisCapacity');
             if(capEl) capEl.innerText = `${capKw.toFixed(1)} kW`;
 
-            // [수정] PF 계산식 개선 (ROI 5.8년 목표)
+            // PF 계산 (ROI 공식 수정됨)
             const smp = parseFloat(document.getElementById('smp').value);
             const rec = parseFloat(document.getElementById('rec').value);
             const costPerKw = parseFloat(document.getElementById('costPerKw').value) * 10000;
@@ -731,7 +741,7 @@
             selectableGroup.clearLayers(); 
             accumulatedPanelsCount=0; 
             selectedFeatureIds.clear(); 
-            if(analysisMarkerGroup) analysisMarkerGroup.clearLayers();
+            if(analysisMarkerGroup) analysisMarkerGroup.clearLayers(); // [수정] 마커 그룹으로 제거
             document.getElementById('resultCard').classList.add('hidden'); 
             currentAnalysisData = {};
         }
