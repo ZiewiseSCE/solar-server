@@ -1,85 +1,97 @@
 # -*- coding: utf-8 -*-
-import os
-import json
-import datetime
-import logging
-import sqlite3
-import requests
-import urllib3
+"""
+SCEnergy Backend (Cloudtype friendly)
+- Session 기반 인증 (localStorage에 유저/비번 저장하지 않음)
+- Admin: 유저 등록/목록/삭제
+- Analyze: 종합 분석 API (로그인 필요)
+- CORS + 쿠키(세션) 크로스 도메인 전송 설정
+"""
+import os, json, datetime, logging
+from pathlib import Path
 
-from flask import Flask, render_template, request, jsonify, session
+import requests
+from flask import Flask, request, jsonify, session, render_template
 from flask_cors import CORS
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from werkzeug.security import generate_password_hash, check_password_hash
+import urllib3
+from werkzeug.security import check_password_hash
 
-# Optional (AI)
-try:
-    import google.generativeai as genai
-except Exception:
-    genai = None
-
-# Optional rate limit
+# optional (설치되어 있으면 rate limit 적용)
 try:
     from flask_limiter import Limiter
     from flask_limiter.util import get_remote_address
-except Exception:
+except Exception:  # pragma: no cover
     Limiter = None
     get_remote_address = None
 
+# optional Gemini
+try:
+    import google.generativeai as genai
+except Exception:  # pragma: no cover
+    genai = None
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ---------------------------------------------------------
-# Logging
-# ---------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("scenergy")
 
-# ---------------------------------------------------------
-# App
-# ---------------------------------------------------------
 app = Flask(__name__)
 
-# ✅ 세션 비밀키 (Cloudtype ENV로 반드시 설정 권장)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
+# -----------------------------------------------------------------------------
+# Environment variables (Cloudtype "Environment variables"에 넣으세요)
+# -----------------------------------------------------------------------------
+VWORLD_KEY = os.getenv("VWORLD_KEY", "")
+KEPCO_KEY = os.getenv("KEPCO_KEY", "")
+LAW_API_ID = os.getenv("LAW_API_ID", "")
 
-# 세션 쿠키 옵션 (프론트/백 분리 운영 시 중요)
-app.config.update(
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE=os.environ.get("SESSION_COOKIE_SAMESITE", "Lax"),
-    SESSION_COOKIE_SECURE=(os.environ.get("SESSION_COOKIE_SECURE", "true").lower() == "true"),
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+# 관리자 계정(아이디/비번은 서버에만 존재)
+ADMIN_ID = os.getenv("ADMIN_ID", "admin")
+ADMIN_PW_HASH = os.getenv("ADMIN_PW_HASH", "")  # werkzeug generate_password_hash 결과 전체 문자열
+
+# 세션 키(반드시 랜덤 긴 값)
+FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "")
+if not FLASK_SECRET_KEY:
+    # 개발 편의용(운영에서는 반드시 환경변수로 넣으세요)
+    FLASK_SECRET_KEY = "DEV-ONLY-CHANGE-ME-VERY-LONG"
+    logger.warning("FLASK_SECRET_KEY is not set. Using DEV fallback (NOT recommended).")
+app.secret_key = FLASK_SECRET_KEY
+
+# 프론트 도메인(여러개 가능, 콤마로 구분)
+# 예: https://your-frontend.cloudtype.app,https://another-domain.com
+FRONTEND_ORIGINS = [o.strip() for o in os.getenv("FRONTEND_ORIGINS", "").split(",") if o.strip()]
+# 비어있으면 CORS가 애매해지므로, 개발 편의로 * 허용하되 credentials는 false 처리될 수 있음
+if not FRONTEND_ORIGINS:
+    logger.warning("FRONTEND_ORIGINS is empty. CORS will allow any origin (dev).")
+    FRONTEND_ORIGINS = ["*"]
+
+# -----------------------------------------------------------------------------
+# CORS (쿠키 기반 세션을 쓰려면 supports_credentials=True + origin을 * 로 두면 안됨)
+# -----------------------------------------------------------------------------
+supports_credentials = FRONTEND_ORIGINS != ["*"]
+CORS(
+    app,
+    resources={r"/api/*": {"origins": FRONTEND_ORIGINS}},
+    supports_credentials=supports_credentials,
 )
 
-# ---------------------------------------------------------
-# ENV
-# ---------------------------------------------------------
-VWORLD_KEY = os.environ.get("VWORLD_KEY", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-MY_DOMAIN_URL = os.environ.get("MY_DOMAIN_URL", "")  # 백엔드 도메인(Referer/Origin 헤더용)
+# -----------------------------------------------------------------------------
+# Cookie / Session settings
+# - 프론트/백엔드가 서로 다른 도메인이면 SameSite=None + Secure=True 필요(HTTPS 필수)
+# -----------------------------------------------------------------------------
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+# Cloudtype는 https 제공 → Secure True 권장
+app.config["SESSION_COOKIE_SECURE"] = True
+# 크로스 도메인 쿠키 전송 위해 None
+app.config["SESSION_COOKIE_SAMESITE"] = "None"
+# 세션 쿠키 경로
+app.config["SESSION_COOKIE_PATH"] = "/"
 
-# ✅ 관리자 계정 (프론트에서 관리자 로그인 시 id=admin, pw=입력값으로 백엔드 로그인)
-ADMIN_ID = os.environ.get("ADMIN_ID", "admin")
-ADMIN_PW_HASH = os.environ.get("ADMIN_PW_HASH", "")
-
-# ✅ 사용자 DB (SQLite)
-USER_DB_PATH = os.environ.get("USER_DB_PATH", "users.db")
-
-# CORS (세션 쿠키 사용하려면 supports_credentials=True 필수)
-allowed_origins_raw = os.environ.get("ALLOWED_ORIGINS", "")
-allowed_origins = [o.strip() for o in allowed_origins_raw.split(",") if o.strip()]
-if not allowed_origins:
-    # 안전장치: 최소한 동일 도메인은 허용
-    allowed_origins = [MY_DOMAIN_URL] if MY_DOMAIN_URL else ["http://localhost:5000"]
-
-CORS(app, resources={r"/api/*": {"origins": allowed_origins}}, supports_credentials=True)
-
-# Rate Limiter (선택)
-if Limiter and get_remote_address:
-    limiter = Limiter(get_remote_address, app=app, default_limits=["2000 per day", "200 per hour"], storage_uri="memory://")
-else:
-    limiter = None
-
-# HTTP Session with Retry
+# -----------------------------------------------------------------------------
+# HTTP session with retry
+# -----------------------------------------------------------------------------
 session_http = requests.Session()
 retry = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
 adapter = HTTPAdapter(max_retries=retry)
@@ -87,209 +99,172 @@ session_http.mount("https://", adapter)
 session_http.mount("http://", adapter)
 
 COMMON_HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "Referer": MY_DOMAIN_URL or "https://localhost/",
-    "Origin": MY_DOMAIN_URL or "https://localhost/",
+    "User-Agent": "Mozilla/5.0 (SCEnergy Backend)",
 }
 
-# Gemini init
-if genai and GEMINI_API_KEY:
+# Gemini
+if GEMINI_API_KEY and genai:
+    genai.configure(api_key=GEMINI_API_KEY)
+else:
+    if not GEMINI_API_KEY:
+        logger.info("GEMINI_API_KEY not set. Gemini comment disabled.")
+    if not genai:
+        logger.info("google-generativeai not installed. Gemini comment disabled.")
+
+# -----------------------------------------------------------------------------
+# Simple user storage (Cloudtype 무료 플랜: DB 없이 /tmp에 json 저장)
+# -----------------------------------------------------------------------------
+USERS_PATH = Path(os.getenv("USERS_PATH", "/tmp/scenergy_users.json"))
+
+def _load_users():
+    if USERS_PATH.exists():
+        try:
+            return json.loads(USERS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+    return []
+
+def _save_users(users):
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
+        USERS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        USERS_PATH.write_text(json.dumps(users, ensure_ascii=False), encoding="utf-8")
     except Exception as e:
-        logger.warning(f"Gemini init failed: {e}")
+        logger.error(f"Failed to save users: {e}")
 
-# ---------------------------------------------------------
-# SQLite helpers
-# ---------------------------------------------------------
-def _db():
-    conn = sqlite3.connect(USER_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_user_db():
-    conn = _db()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            pw_hash TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'user',
-            created_at TEXT NOT NULL
-        )
-    """)
-    conn.commit()
-
-    # ensure admin exists (in DB)
-    if ADMIN_PW_HASH:
-        cur.execute("SELECT id FROM users WHERE id=?", (ADMIN_ID,))
-        if not cur.fetchone():
-            cur.execute(
-                "INSERT INTO users (id, pw_hash, role, created_at) VALUES (?, ?, 'admin', ?)",
-                (ADMIN_ID, ADMIN_PW_HASH, datetime.datetime.utcnow().isoformat()),
-            )
-            conn.commit()
-            logger.info("Admin user inserted into DB.")
-    else:
-        logger.warning("ADMIN_PW_HASH is not set. Admin login will fail.")
-    conn.close()
-
-init_user_db()
-
-# ---------------------------------------------------------
-# Auth helpers
-# ---------------------------------------------------------
-def require_login():
-    if not session.get("user_id"):
-        return jsonify({"status": "ERROR", "msg": "Not logged in"}), 401
+def _find_user(uid):
+    users = _load_users()
+    for u in users:
+        if u.get("id") == uid:
+            return u
     return None
 
-def require_admin():
-    if not session.get("user_id"):
-        return jsonify({"status": "ERROR", "msg": "Not logged in"}), 401
-    if session.get("role") != "admin":
-        return jsonify({"status": "FORBIDDEN", "msg": "Admin only"}), 403
-    return None
+def _require_login():
+    return bool(session.get("uid"))
 
-# ---------------------------------------------------------
-# Routes (pages)
-# ---------------------------------------------------------
+def _require_admin():
+    return bool(session.get("is_admin") is True)
+
+# -----------------------------------------------------------------------------
+# Rate limiter (optional)
+# -----------------------------------------------------------------------------
+if Limiter and get_remote_address:
+    limiter = Limiter(get_remote_address, app=app, default_limits=["600 per hour"], storage_uri="memory://")
+else:
+    limiter = None
+
+# -----------------------------------------------------------------------------
+# Views
+# -----------------------------------------------------------------------------
 @app.route("/")
 def index():
-    return render_template("index.html")
+    # 백엔드에서 프론트를 함께 서빙할 때 사용(선택)
+    # templates/index.html 이 없으면 404가 날 수 있음
+    try:
+        return render_template("index.html")
+    except Exception:
+        return "SCEnergy Backend Running", 200
 
 @app.route("/health")
-def health_check():
+def health():
     return "OK", 200
 
-@app.route("/report", methods=["POST"])
-def report_page():
-    data = request.form.to_dict()
-    try:
-        if "finance" in data:
-            data["finance"] = json.loads(data["finance"])
-        if "ai_analysis" in data:
-            data["ai_analysis"] = json.loads(data["ai_analysis"])
-    except Exception as e:
-        logger.warning(f"report parse err: {e}")
-    return render_template("report.html", data=data)
-
-# ---------------------------------------------------------
-# Auth API
-# ---------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Auth APIs
+# -----------------------------------------------------------------------------
 @app.route("/api/auth/login", methods=["POST"])
 def api_login():
-    payload = request.get_json(silent=True) or {}
-    user_id = (payload.get("id") or "").strip()
-    pw = (payload.get("pw") or "").strip()
-    if not user_id or not pw:
-        return jsonify({"status": "ERROR", "msg": "Missing id/pw"}), 400
+    data = request.get_json(silent=True) or {}
+    uid = (data.get("id") or "").strip()
+    pw = (data.get("pw") or "").strip()
+    if not uid or not pw:
+        return jsonify({"status": "ERROR", "msg": "missing id/pw"}), 400
 
-    conn = _db()
-    cur = conn.cursor()
-    cur.execute("SELECT id, pw_hash, role FROM users WHERE id=?", (user_id,))
-    row = cur.fetchone()
-    conn.close()
+    user = _find_user(uid)
+    # 저장은 평문 pw (간단 버전). 원하면 해시로 개선 가능.
+    if not user or user.get("pw") != pw:
+        return jsonify({"status": "ERROR", "msg": "invalid credentials"}), 401
 
-    if not row:
-        return jsonify({"status": "ERROR", "msg": "Invalid credentials"}), 401
-
-    if not check_password_hash(row["pw_hash"], pw):
-        return jsonify({"status": "ERROR", "msg": "Invalid credentials"}), 401
-
-    session["user_id"] = row["id"]
-    session["role"] = row["role"]
-
-    return jsonify({"status": "OK", "user": row["id"], "role": row["role"]})
+    session["uid"] = uid
+    session["is_admin"] = False
+    return jsonify({"status": "OK", "user": {"id": uid}}), 200
 
 @app.route("/api/auth/logout", methods=["POST"])
 def api_logout():
     session.clear()
-    return jsonify({"status": "OK"})
+    return jsonify({"status": "OK"}), 200
 
 @app.route("/api/auth/me", methods=["GET"])
 def api_me():
-    if not session.get("user_id"):
+    if not _require_login():
         return jsonify({"status": "NOAUTH"}), 200
-    return jsonify({"status": "OK", "user": session.get("user_id"), "role": session.get("role", "user")})
+    return jsonify({"status": "OK", "user": {"id": session.get("uid"), "is_admin": bool(session.get("is_admin"))}}), 200
 
-# ---------------------------------------------------------
-# Admin Users API (backend-based user management)
-# ---------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Admin APIs
+# -----------------------------------------------------------------------------
+@app.route("/api/admin/login", methods=["POST"])
+def admin_login():
+    if not ADMIN_PW_HASH:
+        return jsonify({"status": "ERROR", "msg": "ADMIN_PW_HASH not set"}), 500
+
+    data = request.get_json(silent=True) or {}
+    admin_id = (data.get("id") or ADMIN_ID).strip()
+    pw = (data.get("pw") or "").strip()
+
+    if admin_id != ADMIN_ID:
+        return jsonify({"status": "ERROR", "msg": "invalid admin id"}), 401
+    if not check_password_hash(ADMIN_PW_HASH, pw):
+        return jsonify({"status": "ERROR", "msg": "invalid admin password"}), 401
+
+    session["uid"] = ADMIN_ID
+    session["is_admin"] = True
+    return jsonify({"status": "OK", "admin": {"id": ADMIN_ID}}), 200
+
 @app.route("/api/admin/users", methods=["GET"])
-def admin_users_list():
-    guard = require_admin()
-    if guard: return guard
-
-    conn = _db()
-    cur = conn.cursor()
-    cur.execute("SELECT id, role, created_at FROM users ORDER BY created_at DESC")
-    rows = [dict(id=r["id"], role=r["role"], created_at=r["created_at"]) for r in cur.fetchall()]
-    conn.close()
-
-    # 프론트는 id만 보여주면 됨
-    users = [{"id": r["id"], "role": r["role"]} for r in rows if r["id"] != ADMIN_ID]  # admin 제외(원하면 포함 가능)
-    return jsonify({"status": "OK", "users": users})
+def admin_list_users():
+    if not _require_admin():
+        return jsonify({"status": "NOAUTH"}), 200
+    users = _load_users()
+    # pw는 내려주지 않음(프론트에서 목록만)
+    safe = [{"id": u.get("id", ""), "created_at": u.get("created_at")} for u in users]
+    return jsonify({"status": "OK", "users": safe, "count": len(safe)}), 200
 
 @app.route("/api/admin/users", methods=["POST"])
-def admin_users_create():
-    guard = require_admin()
-    if guard: return guard
+def admin_add_user():
+    if not _require_admin():
+        return jsonify({"status": "NOAUTH"}), 200
 
-    payload = request.get_json(silent=True) or {}
-    user_id = (payload.get("id") or "").strip()
-    pw = (payload.get("pw") or "").strip()
+    data = request.get_json(silent=True) or {}
+    uid = (data.get("id") or "").strip()
+    pw = (data.get("pw") or "").strip()
+    if not uid or not pw:
+        return jsonify({"status": "ERROR", "msg": "missing id/pw"}), 400
+    if uid == ADMIN_ID:
+        return jsonify({"status": "ERROR", "msg": "reserved id"}), 400
 
-    if not user_id or not pw:
-        return jsonify({"status": "ERROR", "msg": "Missing id/pw"}), 400
-    if user_id.lower() == ADMIN_ID.lower():
-        return jsonify({"status": "ERROR", "msg": "Cannot create admin here"}), 400
+    users = _load_users()
+    if any(u.get("id") == uid for u in users):
+        return jsonify({"status": "ERROR", "msg": "already exists"}), 409
 
-    pw_hash = generate_password_hash(pw)
+    users.append({"id": uid, "pw": pw, "created_at": datetime.datetime.utcnow().isoformat()})
+    _save_users(users)
+    return jsonify({"status": "OK"}), 200
 
-    try:
-        conn = _db()
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO users (id, pw_hash, role, created_at) VALUES (?, ?, 'user', ?)",
-            (user_id, pw_hash, datetime.datetime.utcnow().isoformat()),
-        )
-        conn.commit()
-        conn.close()
-        return jsonify({"status": "OK"})
-    except sqlite3.IntegrityError:
-        return jsonify({"status": "ERROR", "msg": "User already exists"}), 409
-    except Exception as e:
-        logger.error(f"create user error: {e}")
-        return jsonify({"status": "ERROR", "msg": "Server error"}), 500
+@app.route("/api/admin/users/<uid>", methods=["DELETE"])
+def admin_delete_user(uid):
+    if not _require_admin():
+        return jsonify({"status": "NOAUTH"}), 200
+    uid = (uid or "").strip()
+    users = _load_users()
+    new_users = [u for u in users if u.get("id") != uid]
+    _save_users(new_users)
+    return jsonify({"status": "OK", "count": len(new_users)}), 200
 
-@app.route("/api/admin/users/<user_id>", methods=["DELETE"])
-def admin_users_delete(user_id):
-    guard = require_admin()
-    if guard: return guard
-
-    user_id = (user_id or "").strip()
-    if not user_id:
-        return jsonify({"status": "ERROR", "msg": "Missing user id"}), 400
-    if user_id.lower() == ADMIN_ID.lower():
-        return jsonify({"status": "ERROR", "msg": "Cannot delete admin"}), 400
-
-    conn = _db()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM users WHERE id=? AND role!='admin'", (user_id,))
-    conn.commit()
-    deleted = cur.rowcount
-    conn.close()
-
-    if deleted == 0:
-        return jsonify({"status": "ERROR", "msg": "User not found"}), 404
-    return jsonify({"status": "OK"})
-
-# ---------------------------------------------------------
-# Analysis logic (same as before, POST)
-# ---------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Data collection helpers
+# -----------------------------------------------------------------------------
 def get_solar_irradiance(lat, lng):
-    """Open-Meteo: 일사량(시간/일로 쓰는 값) 근사"""
+    """Open-Meteo archive: 평균 일사량(시간/일) 추정"""
     try:
         url = "https://archive-api.open-meteo.com/v1/archive"
         end_date = datetime.date.today() - datetime.timedelta(days=7)
@@ -302,20 +277,20 @@ def get_solar_irradiance(lat, lng):
             "daily": "shortwave_radiation_sum",
             "timezone": "auto",
         }
-        resp = requests.get(url, params=params, timeout=6)
+        resp = requests.get(url, params=params, timeout=8)
         if resp.status_code == 200:
             data = resp.json()
             daily = data.get("daily", {}).get("shortwave_radiation_sum", [])
             valid = [x for x in daily if x is not None]
             if valid:
-                # kWh/m2/day 근사 -> '시간'처럼 쓰기 위해 스케일링(기존 로직 유지)
+                # kWh/m2/day -> peak-sun-hours(대략) 환산 계수
                 return round((sum(valid) / len(valid)) * 0.2778, 2)
     except Exception as e:
         logger.warning(f"Solar API error: {e}")
-    return 3.6
+    return None
 
 def fetch_vworld_info(layer, lat, lng):
-    """V-World API: 레이어 정보 조회"""
+    """VWorld GetFeature (bbox small)"""
     if not VWORLD_KEY:
         return None
     url = "https://api.vworld.kr/req/data"
@@ -328,32 +303,33 @@ def fetch_vworld_info(layer, lat, lng):
         "key": VWORLD_KEY,
         "geomFilter": f"BOX({bbox})",
         "size": "1",
-        "domain": MY_DOMAIN_URL,
         "format": "json",
     }
     try:
-        resp = session_http.get(url, params=params, headers=COMMON_HEADERS, timeout=6, verify=False)
+        resp = session_http.get(url, params=params, headers=COMMON_HEADERS, timeout=8, verify=False)
         data = resp.json()
         if data.get("response", {}).get("status") == "OK":
-            feats = data["response"]["result"]["featureCollection"]["features"]
-            if not feats:
+            features = data["response"]["result"]["featureCollection"]["features"]
+            if not features:
                 return None
-            props = feats[0].get("properties", {})
-            if layer == "LT_C_UQ111":
+            props = features[0].get("properties", {})
+            if layer == "LT_C_UQ111":  # 용도지역
                 return props.get("MNUM_NM")
-            if layer == "LT_C_WISNAT":
+            if layer == "LT_C_WISNAT":  # 생태
                 return props.get("GRD_NM")
-            if layer == "LP_PA_CBND_BUBUN":
+            if layer == "LP_PA_CBND_BUBUN":  # 지목
                 return props.get("JIMOK", "미확인")
-            return "정보 있음"
+            return "OK"
     except Exception as e:
-        logger.warning(f"VWorld Error({layer}): {e}")
+        logger.warning(f"VWorld error ({layer}): {e}")
     return None
 
 def calculate_ai_score(context):
+    """보수적 규제 중심 스코어 + 신뢰도(confidence)"""
     score = 50
     reasons, risks = [], []
 
+    # confidence
     required = ["zoning", "jimok", "eco", "sun"]
     valid_cnt = sum(1 for f in required if context.get(f) and context.get(f) not in ["확인불가", "미확인", "등급외", None])
     confidence = round((valid_cnt / len(required)) * 100)
@@ -370,21 +346,17 @@ def calculate_ai_score(context):
 
     jimok = context.get("jimok", "") or ""
     if "임" in jimok:
-        score -= 20; risks.append("산지전용 필요")
-    elif "전" in jimok or "답" in jimok:
-        score += 5; reasons.append("농지전용 가능")
-    elif "잡" in jimok or "대" in jimok:
-        score += 15; reasons.append("개발 용이")
+        score -= 20; risks.append("임야(산지전용)")
+    elif ("전" in jimok) or ("답" in jimok):
+        score += 5; reasons.append("농지(전/답)")
+    elif ("잡" in jimok) or ("대" in jimok):
+        score += 15; reasons.append("잡종지/대지")
 
     sun = context.get("sun") or 3.6
-    try:
-        sun = float(sun)
-    except Exception:
-        sun = 3.6
     if sun >= 4.0:
-        score += 15
+        score += 15; reasons.append(f"일사량 우수({sun}h)")
     elif sun < 3.2:
-        score -= 15; risks.append("일사량 부족")
+        score -= 15; risks.append(f"일사량 부족({sun}h)")
 
     eco = context.get("eco", "") or ""
     if "1등급" in eco:
@@ -405,6 +377,7 @@ def calculate_ai_score(context):
     return {"score": score, "grade": grade, "confidence": confidence, "reasons": reasons, "risk_flags": risks}
 
 def estimate_land_price(addr):
+    addr = addr or ""
     base_price = 30
     if "경기" in addr: base_price = 85
     elif "충청" in addr: base_price = 45
@@ -412,34 +385,42 @@ def estimate_land_price(addr):
     elif "전라" in addr or "경상" in addr: base_price = 28
     return f"약 {int(base_price*0.7)}~{int(base_price*1.3)}만원/평"
 
-def ask_gemini(context):
-    if not (genai and GEMINI_API_KEY):
-        return "AI 분석 키 미설정"
+def ask_gemini(address, zoning, jimok, eco, sun):
+    if not (GEMINI_API_KEY and genai):
+        return "AI 분석 비활성"
     try:
         model = genai.GenerativeModel("gemini-pro")
-        prompt = (
-            "태양광 부지 분석. 점수/등급 언급 없이 리스크/장점 3줄 요약.\n"
-            f"주소:{context.get('address')}\n"
-            f"용도:{context.get('zoning')}\n"
-            f"지목:{context.get('jimok')}\n"
-            f"생태:{context.get('eco')}\n"
-            f"일사량:{context.get('sun')}h\n"
-        )
-        resp = model.generate_content(prompt)
-        return getattr(resp, "text", "") or "분석 완료"
+        prompt = f"""
+태양광 발전 사업 부지 분석가로서 다음 토지의 장점과 리스크를 3줄로 요약해 주세요.
+점수나 등급을 언급하지 말고, 규제와 수익성 관점에서만 평가하세요.
+
+주소: {address}
+용도지역: {zoning}
+지목: {jimok}
+생태자연도: {eco}
+일사량: {sun} 시간/일
+"""
+        r = model.generate_content(prompt)
+        return getattr(r, "text", "") or "AI 응답 없음"
     except Exception as e:
         logger.error(f"Gemini error: {e}")
         return "AI 분석 지연"
 
+# -----------------------------------------------------------------------------
+# Analyze API (로그인 필요)
+# -----------------------------------------------------------------------------
 @app.route("/api/analyze/comprehensive", methods=["POST"])
-def analyze_site():
-    # 로그인 없이도 가능하게 유지(원하면 require_login 붙이면 됨)
-    payload = request.get_json(silent=True) or {}
-    lat = payload.get("lat")
-    lng = payload.get("lng")
-    addr = payload.get("address", "주소 미상") or "주소 미상"
+def analyze_comprehensive():
+    if not _require_login():
+        return jsonify({"status": "NOAUTH"}), 200
+
+    data = request.get_json(silent=True) or {}
+    lat = data.get("lat")
+    lng = data.get("lng")
+    addr = data.get("address", "주소 미상")
+
     if lat is None or lng is None:
-        return jsonify({"status": "ERROR", "msg": "Missing coordinates"}), 400
+        return jsonify({"status": "ERROR", "msg": "missing lat/lng"}), 400
 
     sun = get_solar_irradiance(lat, lng)
     zoning = fetch_vworld_info("LT_C_UQ111", lat, lng) or "확인불가"
@@ -448,13 +429,13 @@ def analyze_site():
 
     ai_score = calculate_ai_score({"zoning": zoning, "sun": sun, "eco": eco, "jimok": jimok})
     price = estimate_land_price(addr)
-    comment = ask_gemini({"address": addr, "zoning": zoning, "jimok": jimok, "eco": eco, "sun": sun})
+    comment = ask_gemini(addr, zoning, jimok, eco, sun or 3.6)
 
     env = "대상 아님"
     if "보전" in zoning or "농림" in zoning:
         env = "검토 필요"
-    kepco = "데이터 없음 (한전ON 확인)"
-    local = addr.split(" ")[1] if len(addr.split(" ")) > 1 else ""
+
+    local = addr.split(" ")[1] if isinstance(addr, str) and len(addr.split(" ")) > 1 else ""
 
     return jsonify({
         "status": "OK",
@@ -463,7 +444,7 @@ def analyze_site():
         "jimok": jimok,
         "eco_grade": eco,
         "env_assessment": env,
-        "kepco_capacity": kepco,
+        "kepco_capacity": "데이터 없음 (한전ON 확인)",
         "sun_hours": sun,
         "ai_comment": comment,
         "ai_score": ai_score,
@@ -475,11 +456,29 @@ def analyze_site():
             "neins": "https://webgis.neins.go.kr/map.do",
             "heritage": "https://www.nie-ecobank.kr/cmmn/Index.do?"
         }
-    })
+    }), 200
 
-# ---------------------------------------------------------
-# Run
-# ---------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Convenience: seed a default user (운영에서는 admin이 등록)
+# -----------------------------------------------------------------------------
+@app.route("/api/admin/seed_default_user", methods=["POST"])
+def seed_default_user():
+    """처음 세팅할 때만 쓰세요. admin 로그인 후 호출 권장."""
+    if not _require_admin():
+        return jsonify({"status": "NOAUTH"}), 200
+    data = request.get_json(silent=True) or {}
+    uid = (data.get("id") or "").strip()
+    pw = (data.get("pw") or "").strip()
+    if not uid or not pw:
+        return jsonify({"status": "ERROR", "msg": "missing id/pw"}), 400
+    users = _load_users()
+    if any(u.get("id") == uid for u in users):
+        return jsonify({"status": "OK", "msg": "already exists"}), 200
+    users.append({"id": uid, "pw": pw, "created_at": datetime.datetime.utcnow().isoformat()})
+    _save_users(users)
+    return jsonify({"status": "OK"}), 200
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.getenv("PORT", "5000"))
+    # Cloudtype에서 gunicorn으로 돌리면 여기 실행 안 됨
     app.run(host="0.0.0.0", port=port)
