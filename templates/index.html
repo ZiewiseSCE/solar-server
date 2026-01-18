@@ -323,7 +323,13 @@
         let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, analysisMarkerGroup, existingGroup, substationGroup;
         let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
         let selectedFeatures = new Map();
-        let currentAnalysisData = {}; 
+        let currentAnalysisData = {};
+            _basePanelsFC = null;
+            _currentPanelsLayer = null;
+        // ✅ 패널 교정(캘리브레이션)용: 최초 계산된 패널(기준) 피처컬렉션 저장
+        let _basePanelsFC = null;
+        let _currentPanelsLayer = null;
+ 
         let stopScan = false;
         let scanLock = false; 
         
@@ -653,100 +659,198 @@
             } catch(e) { console.error(e); }
         }
 
+        
         window.calculateFinance = function(count, sunHoursOverride) { 
             const countEl = document.getElementById('analysisCount');
             if(countEl) countEl.innerText = `${count} 장`; 
-            const modPower = parseFloat(document.getElementById('modPower').value) || 640;
-            const capKw = (count * modPower) / 1000;
+
+            const modPowerW = parseFloat(document.getElementById('modPower').value) || 640;
+            const dcKw = (count * modPowerW) / 1000;
+            const acKw = dcKw / 1.15; // 인버터/계통 기준 보정(간단)
             const capEl = document.getElementById('analysisCapacity');
-            if(capEl) capEl.innerText = `${capKw.toFixed(1)} kW`;
+            if(capEl) capEl.innerText = `${acKw.toFixed(1)} kW`;
 
-            const costKw = parseFloat(document.getElementById('costPerKw').value || "90") * 10000;
-            const modPrice = parseFloat(document.getElementById('modPrice').value || "350");
-            const pfRatio = parseFloat(document.getElementById('pfLoanRatio').value || "90");
-            const pfRate = parseFloat(document.getElementById('pfInterestRate').value || "5.5");
-            
-            // [수정] REC 가중치 및 발전 효율 반영 (실무형)
-            const sunHours = sunHoursOverride || 3.6;
-            const recWeight = scanTarget === 'land' ? 1.0 : 1.5; 
-            const smp = parseFloat(document.getElementById('smp').value);
-            const rec = parseFloat(document.getElementById('rec').value);
-            const pr = 0.8; // Performance Ratio
+            // ---- Inputs
+            const costPerKw = (parseFloat(document.getElementById('costPerKw').value) || 90) * 10000; // 원/kW
+            const modPrice = parseFloat(document.getElementById('modPrice').value) || 350;            // 원/W (가정)
+            const smp = parseFloat(document.getElementById('smp').value) || 140;                      // 원/kWh
+            const rec = parseFloat(document.getElementById('rec').value) || 70;                       // 원/kWh (단순)
+            const pfRatio = parseFloat(document.getElementById('pfLoanRatio').value) || 90;           // %
+            const pfRate = parseFloat(document.getElementById('pfInterestRate').value) || 5.5;        // %
+            const sunHours = (sunHoursOverride ?? null);
+            const sun = (typeof sunHours === 'number' && !isNaN(sunHours)) ? sunHours : 3.6;
 
-            const annualGen = capKw * sunHours * 365 * pr;
-            const annualRev = annualGen * (smp + rec * recWeight);
-            
-            const totalCost = (capKw * costKw) + (count * modPower * modPrice);
-            const loan = totalCost * (pfRatio / 100);
-            const annualInterest = loan * (pfRate / 100);
-            const netIncome = annualRev - annualInterest;
-            const payback = netIncome > 0 ? (totalCost / netIncome).toFixed(1) : 99;
+            // ---- 현실 보정 파라미터
+            const PR = 0.80;                // 성능비(손실 포함) 0.75~0.82
+            const YEARS = 25;               // 운영기간
+            const DEGR = 0.005;             // 연간 열화율 0.5%
+            const OPEX_PER_KW_Y = 20000;    // 연 OPEX(보험/정비 등) 2만원/kW·년 (가정)
+            const LOAN_YEARS = 10;          // PF 만기(가정)
 
-            document.getElementById('resTotalCost').innerText = `${Math.round(totalCost).toLocaleString()} 원`;
-            document.getElementById('resAnnualRev').innerText = `${Math.round(annualRev).toLocaleString()} 원`;
-            document.getElementById('resLoanAmount').innerText = `${Math.round(loan).toLocaleString()} 원`;
-            document.getElementById('resEquityAmount').innerText = `${Math.round(totalCost - loan).toLocaleString()} 원`;
-            document.getElementById('resInterest').innerText = `${Math.round(annualInterest).toLocaleString()} 원`;
-            document.getElementById('resPfPayback').innerText = `${payback} 년`;
+            // ---- 에너지/수익
+            const annualKwh = acKw * sun * 365 * PR; // kWh/yr
+            const pricePerKwh = smp + rec;           // 단순 합산(추후 REC 가중치 분리 가능)
+            const annualRev = annualKwh * pricePerKwh;
 
-            document.getElementById('resultCard').classList.remove('hidden');
+            // 25년 총매출(열화 반영)
+            let totalRev25 = 0;
+            for (let y=0; y<YEARS; y++) totalRev25 += annualRev * Math.pow(1 - DEGR, y);
 
+            // ---- CAPEX
+            // 모듈비 = (W) * (원/W)
+            const moduleCost = (count * modPowerW) * modPrice;
+            const bosCost = (acKw * costPerKw);
+            const totalCost = moduleCost + bosCost;
+
+            // ---- PF (원리금 균등, 간단)
+            const loan = totalCost * (pfRatio/100);
+            const equity = totalCost - loan;
+            const r = (pfRate/100);
+            const n = LOAN_YEARS;
+
+            let annualDebt = 0;
+            if (loan > 0 && r > 0) {
+              const rr = r;
+              const pow = Math.pow(1+rr, n);
+              annualDebt = loan * (rr * pow) / (pow - 1);
+            } else {
+              annualDebt = loan / n;
+            }
+
+            // ---- 순현금흐름(단순): 매출 - OPEX - (대출상환(만기기간만))
+            const annualOpex = acKw * OPEX_PER_KW_Y;
+            const annualNetYr1 = annualRev - annualOpex - annualDebt; // 1년차
+
+            // 회수기간(Equity 기준) : 25년까지만
+            let cum = -equity;
+            let payback = null;
+            for (let y=0; y<YEARS; y++) {
+              const revY = annualRev * Math.pow(1 - DEGR, y);
+              const debtY = (y < LOAN_YEARS) ? annualDebt : 0;
+              const netY = revY - annualOpex - debtY;
+              cum += netY;
+              if (cum >= 0 && payback === null) payback = (y+1);
+            }
+            const paybackText = (payback === null) ? `> ${YEARS} 년` : `${payback} 년`;
+
+            // ---- UI output
+            const tcEl = document.getElementById('resTotalCost');
+            if(tcEl) tcEl.innerText = `${Math.round(totalCost).toLocaleString()} 원`;
+            const arEl = document.getElementById('resAnnualRev');
+            if(arEl) arEl.innerText = `${Math.round(annualRev).toLocaleString()} 원/년`;
+            const pbEl = document.getElementById('resPfPayback');
+            if(pbEl) pbEl.innerText = paybackText;
+
+            document.getElementById('resultCard')?.classList.remove('hidden');
+
+            // ---- Store for report
             currentAnalysisData.finance = {
-                capacity: `${capKw.toFixed(1)} kW`, totalCost: `${Math.round(totalCost).toLocaleString()} 원`,
-                annualRev: `${Math.round(annualRev).toLocaleString()} 원`, payback: `${payback} 년`,
-                loan: `${Math.round(loan).toLocaleString()} 원`, equity: `${Math.round(totalCost - loan).toLocaleString()} 원`,
-                interest: `${Math.round(annualInterest).toLocaleString()} 원`, netIncome: `${Math.round(netIncome).toLocaleString()} 원`
+                acCapacity: `${acKw.toFixed(1)} kW`,
+                dcCapacity: `${dcKw.toFixed(1)} kW`,
+                annualKwh: `${Math.round(annualKwh).toLocaleString()} kWh`,
+                annualRev: `${Math.round(annualRev).toLocaleString()} 원`,
+                totalRev25: `${Math.round(totalRev25).toLocaleString()} 원`,
+                totalCost: `${Math.round(totalCost).toLocaleString()} 원`,
+                moduleCost: `${Math.round(moduleCost).toLocaleString()} 원`,
+                bosCost: `${Math.round(bosCost).toLocaleString()} 원`,
+                loan: `${Math.round(loan).toLocaleString()} 원`,
+                equity: `${Math.round(equity).toLocaleString()} 원`,
+                annualDebt: `${Math.round(annualDebt).toLocaleString()} 원`,
+                annualOpex: `${Math.round(annualOpex).toLocaleString()} 원`,
+                payback: paybackText,
+                assumptions: { PR, YEARS, DEGR, OPEX_PER_KW_Y, LOAN_YEARS, pricePerKwh }
             };
         };
 
-        window.drawPanels = function(geo) { 
-            try { 
-                let poly = turf.feature(geo);
-                if (currentGeoState.x !== 0 || currentGeoState.y !== 0 || currentGeoState.rot !== 0) {
-                    poly = turf.transformRotate(poly, currentGeoState.rot);
-                    poly = turf.transformTranslate(poly, currentGeoState.x / 1000, 90, {units: 'kilometers'});
-                    poly = turf.transformTranslate(poly, currentGeoState.y / 1000, 0, {units: 'kilometers'});
-                }
-                const modW = parseFloat(document.getElementById('modWidth').value);
-                const modH = parseFloat(document.getElementById('modHeight').value);
-                const angle = parseFloat(document.getElementById('installAngle').value);
-                const projectedH = modH * Math.cos(angle * Math.PI / 180);
-                
-                // [핵심] m 단위 변환 로직 (Turf.js distance 활용)
-                const bbox = turf.bbox(poly);
-                // 위도별 거리 보정 적용
-                const dLng = (modW + 0.1) / 88800; 
-                const dLat = (projectedH + 0.1) / 111000;
-                
-                let tempPanels = [], count = 0, loopGuard = 0;
-                const MAX_LOOP = 100000; // 상향
+        };
 
-                for(let x = bbox[0]; x < bbox[2]; x += dLng) {
-                    for(let y = bbox[1]; y < bbox[3]; y += dLat) {
-                        if(loopGuard++ > MAX_LOOP) break; 
-                        if(turf.booleanPointInPolygon(turf.point([x + dLng/2, y + dLat/2]), poly)) {
-                            tempPanels.push(turf.bboxPolygon([x, y, x + dLng*0.9, y + dLat*0.9]));
-                            count++;
-                        }
+        
+        // ✅ 패널 생성(그리드) / 렌더 / 교정용 변환을 분리해서 "실시간 이동" 체감 개선
+        function _buildPanelsGrid(geo) {
+            let poly = turf.feature(geo);
+
+            const modW = parseFloat(document.getElementById('modWidth').value) || 1.13;
+            const modH = parseFloat(document.getElementById('modHeight').value) || 2.4;
+            const angle = parseFloat(document.getElementById('installAngle').value) || 20;
+            const projectedH = modH * Math.cos(angle * Math.PI / 180);
+
+            // (간단) 패널 간 간격: rowSpacing 반영 (m)
+            const rowSpacing = parseFloat(document.getElementById('rowSpacing').value) || 1.2;
+
+            // 위/경도 환산(근사) — 이 값은 지역별로 오차가 있지만 UI 목적으론 충분
+            const dLng = (modW + 0.10) / 88800;
+            const dLat = (projectedH + rowSpacing) / 111000;
+
+            const bbox = turf.bbox(poly);
+            let tempPanels = [], count = 0, loopGuard = 0;
+            const MAX_LOOP = 50000;
+
+            for(let x = bbox[0]; x < bbox[2]; x += dLng) {
+                for(let y = bbox[1]; y < bbox[3]; y += dLat) {
+                    if(loopGuard++ > MAX_LOOP) break;
+                    if(turf.booleanPointInPolygon(turf.point([x + dLng/2, y + dLat/2]), poly)) {
+                        tempPanels.push(turf.bboxPolygon([x, y, x + dLng*0.9, y + dLat*0.9]));
+                        count++;
                     }
-                    if(loopGuard > MAX_LOOP) break;
                 }
-                
-                let newLayer;
-                if (tempPanels.length === 0) {
-                    const center = turf.center(poly);
-                    const [cx, cy] = center.geometry.coordinates;
-                    newLayer = L.geoJSON(turf.bboxPolygon([cx, cy, cx+dLng, cy+dLat]), { style: { color: 'red', fillColor: '#ef4444', fillOpacity: 0.5 } });
-                    count = 1;
-                    window.showToast("영역이 작아 최소 패널 1개를 배치했습니다.");
-                } else {
-                    newLayer = L.geoJSON({type:"FeatureCollection", features: tempPanels}, {
-                        style: scanTarget === 'land' ? { color: '#8d6e63', weight: 1, fillColor: '#8d6e63', fillOpacity: 0.4 } : { color: '#1e40af', weight: 1, fillColor: '#3b82f6', fillOpacity: 0.3 }
-                    });
+                if(loopGuard > MAX_LOOP) break;
+            }
+
+            if (tempPanels.length === 0) {
+                const center = turf.center(poly);
+                const [cx, cy] = center.geometry.coordinates;
+                tempPanels = [turf.bboxPolygon([cx, cy, cx+dLng, cy+dLat])];
+                count = 1;
+                window.showToast("영역이 작아 최소 패널 1개를 배치했습니다.");
+            }
+
+            return { fc: { type:"FeatureCollection", features: tempPanels }, count };
+        }
+
+        function _renderPanels(fc) {
+            const style = scanTarget === 'land'
+                ? { color: '#5d4037', weight: 1, fillColor: '#5d4037', fillOpacity: 0.12 }
+                : { color: '#1e40af', weight: 1, fillColor: '#3b82f6', fillOpacity: 0.30 };
+
+            const layer = L.geoJSON(fc, { style });
+            layer.addTo(panelGroup);
+            return layer;
+        }
+
+        function _applyCalibrationToFC(baseFC) {
+            // baseFC는 이미 "기준 그리드"이므로 여기서는 변환만 적용(빠름)
+            let fc = turf.clone(baseFC);
+
+            if (currentGeoState.x !== 0 || currentGeoState.y !== 0 || currentGeoState.rot !== 0) {
+                // turf.transformTranslate: 거리 단위는 기본 kilometers
+                // currentGeoState는 meter로 누적하므로 km로 변환
+                if (currentGeoState.rot) fc = turf.transformRotate(fc, currentGeoState.rot);
+                if (currentGeoState.x) fc = turf.transformTranslate(fc, currentGeoState.x / 1000, 90);
+                if (currentGeoState.y) fc = turf.transformTranslate(fc, currentGeoState.y / 1000, 0);
+            }
+            return fc;
+        }
+
+        window.drawPanels = function(geo) {
+            try {
+                // 1) 최초 클릭 시에는 그리드 계산
+                const built = _buildPanelsGrid(geo);
+                _basePanelsFC = built.fc;
+
+                // 2) 즉시 렌더(기준 상태)
+                if (_currentPanelsLayer) {
+                    panelGroup.removeLayer(_currentPanelsLayer);
+                    _currentPanelsLayer = null;
                 }
-                
-                newLayer.addTo(panelGroup);
-                return { layer: newLayer, count: count };
+                _currentPanelsLayer = _renderPanels(_basePanelsFC);
+
+                return { layer: _currentPanelsLayer, count: built.count, fc: _basePanelsFC };
+            } catch(e) {
+                console.error("Panel Draw Error:", e);
+                return null;
+            }
+        };
+
             } catch(e) { console.error("Panel Draw Error:", e); return null; } 
         };
 
@@ -813,42 +917,41 @@
             document.getElementById('legalPlaceholder').classList.remove('hidden');
 
             currentAnalysisData = {};
+            _basePanelsFC = null;
+            _currentPanelsLayer = null;
         };
 
         window.resetCalibration = function() { 
             currentGeoState = { x: 0, y: 0, rot: 0 }; 
-            if(!currentAnalysisFeature) return;
-            // ✅ 깜빡임 방지: 기존 패널을 먼저 지우지 않고, 새 패널 생성 후 교체
-            const oldLayers = panelGroup ? panelGroup.getLayers().slice() : [];
-            // (옵션) 계산 중에는 기존 패널을 살짝 흐리게 표시
-            oldLayers.forEach(l => { try { if(l.setStyle) l.setStyle({ fillOpacity: 0.12, opacity: 0.4 }); } catch(e){} });
-            const res = window.drawPanels(currentAnalysisFeature.geometry);
-            if(res && panelGroup) {
-                // 새 레이어를 제외한 이전 레이어 제거
-                oldLayers.forEach(l => { try { if(l !== res.layer) panelGroup.removeLayer(l); } catch(e){} });
-                // 새 레이어는 선명하게
-                try { if(res.layer.setStyle) res.layer.setStyle({ fillOpacity: (scanTarget==='land'?0.1:0.3), opacity: 1 }); } catch(e){}
-                if (!isMultiSelectMode) window.calculateFinance(res.count);
+            if(!currentAnalysisFeature || !_basePanelsFC) return;
+
+            // ✅ 기준 패널(_basePanelsFC)을 그대로 렌더 → 실시간 표시
+            if (_currentPanelsLayer) { try { panelGroup.removeLayer(_currentPanelsLayer); } catch(e){} }
+            _currentPanelsLayer = _renderPanels(_basePanelsFC);
+
+            // 단일 모드 실시간 재계산
+            if (!isMultiSelectMode && typeof window.calculateFinance === 'function') {
+                const cnt = (_basePanelsFC?.features?.length) || (window.accumulatedPanelsCount || 0);
+                window.calculateFinance(cnt, window.currentAnalysisData?.ai_analysis?.sun_hours);
             }
         };
         
         window.applyCalibration = function(dx, dy, drot = 0) { 
-            currentGeoState.x += dx * 5; // 미터 단위(내부에서 /1000 변환)
+            currentGeoState.x += dx * 5; // meter
             currentGeoState.y += dy * 5; 
             currentGeoState.rot += drot; 
-            if(!currentAnalysisFeature) return;
+            if(!currentAnalysisFeature || !_basePanelsFC) return;
 
-            // ✅ 깜빡임 방지: 기존 패널 유지 → 새 패널 생성 후 교체
-            const oldLayers = panelGroup ? panelGroup.getLayers().slice() : [];
-            oldLayers.forEach(l => { try { if(l.setStyle) l.setStyle({ fillOpacity: 0.12, opacity: 0.4 }); } catch(e){} });
+            // ✅ "그리드 재계산"이 아니라 "기존 패널(기준)을 변환"만 해서 즉시 반영
+            const movedFC = _applyCalibrationToFC(_basePanelsFC);
 
-            const res = window.drawPanels(currentAnalysisFeature.geometry);
+            if (_currentPanelsLayer) { try { panelGroup.removeLayer(_currentPanelsLayer); } catch(e){} }
+            _currentPanelsLayer = _renderPanels(movedFC);
 
-            if(res && panelGroup) {
-                oldLayers.forEach(l => { try { if(l !== res.layer) panelGroup.removeLayer(l); } catch(e){} });
-                try { if(res.layer.setStyle) res.layer.setStyle({ fillOpacity: (scanTarget==='land'?0.1:0.3), opacity: 1 }); } catch(e){}
-                // 단일 모드일 때만 실시간 재계산
-                if (!isMultiSelectMode) window.calculateFinance(res.count);
+            // 단일 모드일 때만 실시간 재계산
+            if (!isMultiSelectMode && typeof window.calculateFinance === 'function') {
+                const cnt = movedFC?.features?.length || 0;
+                window.calculateFinance(cnt, window.currentAnalysisData?.ai_analysis?.sun_hours);
             }
         };
 
