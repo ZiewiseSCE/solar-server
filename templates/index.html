@@ -1122,79 +1122,128 @@ window.exitAdminMode = function() {
   document.getElementById('step-user-login')?.classList.remove('hidden');
 };
 
-window.verifyAdmin = function() {
-  const pw = document.getElementById('adminPw')?.value || '';
-  if (typeof window.ENCODED_ADMIN_PW === 'undefined') {
-    window.showToast?.("관리자 설정값이 없습니다.");
-    return;
-  }
-  if (btoa(pw) === window.ENCODED_ADMIN_PW) {
-    document.getElementById('step-admin-login')?.classList.add('hidden');
-    document.getElementById('step-admin-dashboard')?.classList.remove('hidden');
+window.verifyAdmin = async function () {
+  const input = document.getElementById("adminPw");
+  const pw = (input?.value || "").trim();
+  if (!pw) return window.showToast?.("관리자 비밀번호를 입력하세요.");
+
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ id: "admin", pw })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.status !== "OK" || data.role !== "admin") {
+      window.showToast?.(data.msg || "관리자 인증 실패");
+      return;
+    }
+
+    // show dashboard
+    document.getElementById("step-admin-login")?.classList.add("hidden");
+    document.getElementById("step-admin-dashboard")?.classList.remove("hidden");
+
+    // also close overlay + init
+    document.getElementById("login-overlay")?.classList.add("hidden-overlay");
+    document.getElementById("currentUserDisplay").innerText = "admin (관리자)";
+    isLoggedIn = true;
+    currentUser = "admin";
+
+    window.initMap?.();
     window.renderUserList?.();
-    window.showToast?.("관리자 모드 접속");
-  } else {
-    window.showToast?.("관리자 비밀번호가 틀렸습니다.");
+  } catch (e) {
+    console.error(e);
+    window.showToast?.("관리자 인증 오류");
   }
 };
 
 // --- Users CRUD (localStorage) ---
-window.renderUserList = function() {
-  const box = document.getElementById('user-list-container');
-  const countEl = document.getElementById('user-count');
+window.renderUserList = async function () {
+  const box = document.getElementById("user-list-container");
+  const cnt = document.getElementById("user-count");
   if (!box) return;
 
-  let users = [];
-  try { users = JSON.parse(window.safeGetItem('scenergy_users') || "[]"); } catch(e) {}
-  if (!users || users.length === 0) users = [{id:"admin", pw:"1234"}];
+  box.innerHTML = `<div class="text-[10px] text-slate-400 text-center py-3">불러오는 중...</div>`;
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/admin/users`, { method: "GET", credentials: "include" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.status !== "OK") {
+      box.innerHTML = `<div class="text-[10px] text-red-300 text-center py-3">${data.msg || "목록 조회 실패"}</div>`;
+      if (cnt) cnt.innerText = `-`;
+      return;
+    }
 
-  if (countEl) countEl.innerText = `${users.length}명`;
+    const users = Array.isArray(data.users) ? data.users : [];
+    if (cnt) cnt.innerText = `${users.length}명`;
 
-  box.innerHTML = users.map(u => {
-    const safeId = String(u.id).replace(/'/g, "\\'");
-    const delBtn = (u.id === 'admin')
-      ? `<span class="text-[10px] text-slate-500">고정</span>`
-      : `<button type="button" class="text-[10px] text-red-300 hover:text-red-200"
-                 onclick="window.removeUser('${safeId}')">삭제</button>`;
-    return `
-      <div class="flex justify-between items-center bg-slate-900/40 border border-slate-700 rounded px-2 py-1">
-        <div class="text-[10px] text-white font-mono truncate">${u.id}</div>
-        ${delBtn}
+    if (users.length === 0) {
+      box.innerHTML = `<div class="text-[10px] text-slate-400 text-center py-3">등록된 유저 없음</div>`;
+      return;
+    }
+
+    box.innerHTML = users.map(u => `
+      <div class="flex items-center justify-between bg-slate-900/30 border border-slate-700 rounded px-2 py-1">
+        <div class="text-[10px] text-slate-200 font-mono truncate">${u.id}</div>
+        <button type="button" class="text-[10px] text-red-300 hover:text-red-200" onclick="window.removeUser('${String(u.id).replace(/'/g, "\'")}')">삭제</button>
       </div>
-    `;
-  }).join('');
+    `).join("");
+  } catch (e) {
+    console.error(e);
+    box.innerHTML = `<div class="text-[10px] text-red-300 text-center py-3">네트워크 오류</div>`;
+    if (cnt) cnt.innerText = `-`;
+  }
 };
 
-window.addUser = function() {
-  const id = (document.getElementById('newUserId')?.value || '').trim();
-  const pw = (document.getElementById('newUserPw')?.value || '').trim();
-  if (!id || !pw) return window.showToast?.("ID/PW를 입력하세요.");
+window.addUser = async function () {
+  const idEl = document.getElementById("newUserId");
+  const pwEl = document.getElementById("newUserPw");
+  const id = (idEl?.value || "").trim();
+  const pw = (pwEl?.value || "").trim();
+  if (!id || !pw) return window.showToast?.("아이디/비밀번호를 입력하세요.");
 
-  let users = [];
-  try { users = JSON.parse(window.safeGetItem('scenergy_users') || "[]"); } catch(e) { users = []; }
-  if (!users || users.length === 0) users = [{id:"admin", pw:"1234"}];
-
-  if (users.some(u => u.id === id)) return window.showToast?.("이미 존재하는 ID입니다.");
-
-  users.push({id, pw});
-  window.safeSetItem('scenergy_users', JSON.stringify(users));
-
-  const idEl = document.getElementById('newUserId'); if (idEl) idEl.value = '';
-  const pwEl = document.getElementById('newUserPw'); if (pwEl) pwEl.value = '';
-
-  window.renderUserList?.();
-  window.showToast?.("유저 추가 완료");
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/admin/users`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ id, pw })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.status !== "OK") {
+      window.showToast?.(data.msg || "유저 추가 실패");
+      return;
+    }
+    if (idEl) idEl.value = "";
+    if (pwEl) pwEl.value = "";
+    window.showToast?.("유저 추가 완료");
+    window.renderUserList?.();
+  } catch (e) {
+    console.error(e);
+    window.showToast?.("네트워크 오류");
+  }
 };
 
-window.removeUser = function(id) {
-  if (id === 'admin') return window.showToast?.("admin은 삭제할 수 없습니다.");
-  let users = [];
-  try { users = JSON.parse(window.safeGetItem('scenergy_users') || "[]"); } catch(e) { users = []; }
-  users = (users || []).filter(u => u.id !== id);
-  if (users.length === 0) users = [{id:"admin", pw:"1234"}];
-  window.safeSetItem('scenergy_users', JSON.stringify(users));
-  window.renderUserList?.();
-  window.showToast?.("삭제 완료");
+window.removeUser = async function (id) {
+  if (!id) return;
+  if (!confirm("삭제할까요?")) return;
+
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/admin/users/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      credentials: "include"
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.status !== "OK") {
+      window.showToast?.(data.msg || "삭제 실패");
+      return;
+    }
+    window.showToast?.("삭제 완료");
+    window.renderUserList?.();
+  } catch (e) {
+    console.error(e);
+    window.showToast?.("네트워크 오류");
+  }
 };
 
 // --- Finance re-calc hook (parameter changes) ---
