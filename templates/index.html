@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- 보안 정책: 외부 리소스 허용 -->
     <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests"> 
     <title>SCEnergy 태양광 채굴기</title>
     
@@ -17,23 +18,30 @@
     <style>
         body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: 'Pretendard', sans-serif; }
         #map { width: 100%; height: 100%; z-index: 1; background: #1a1a1a; }
+        
+        /* 로그인 오버레이 */
         #login-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(10px); z-index: 9999; display: flex; align-items: center; justify-content: center; transition: opacity 0.5s ease-out; }
         #login-overlay.hidden-overlay { opacity: 0; pointer-events: none; }
+        
         .sidebar { z-index: 2000; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
         .sidebar.collapsed { transform: translateX(-100%); }
         #sidebar-toggle-btn { left: 420px; transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1); z-index: 2001; }
         #sidebar-toggle-btn.collapsed { left: 0; }
+        
         .tab-btn { transition: all 0.2s; border-bottom: 2px solid transparent; }
         .tab-btn.active { border-bottom-color: #06b6d4; color: #06b6d4; font-weight: bold; background-color: #f8fafc; }
         .result-card { background: rgba(15, 23, 42, 0.95); border-left: 4px solid #06b6d4; backdrop-filter: blur(4px); }
+        
         .spinner { border: 3px solid rgba(255,255,255,0.1); border-radius: 50%; border-top: 3px solid #06b6d4; width: 24px; height: 24px; animation: spin 1s linear infinite; }
         .login-input { background: rgba(30, 41, 59, 0.5); border: 1px solid #475569; color: white; transition: all 0.3s; }
         .d-pad-btn { width: 36px; height: 36px; background: #334155; border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.1s; color: white; font-size: 16px; font-weight: bold; box-shadow: 0 2px 0 #0f172a; }
         .d-pad-btn:active { background: #1e293b; transform: translateY(2px); box-shadow: none; }
+        
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body class="bg-gray-100">
+    <!-- 상세 리포트 전송용 폼 -->
     <form id="reportForm" method="POST" target="_blank" class="hidden">
         <input type="hidden" name="address" id="form_address">
         <input type="hidden" name="capacity" id="form_capacity">
@@ -41,11 +49,8 @@
         <input type="hidden" name="date" id="form_date">
         <input type="hidden" name="finance" id="form_finance">
         <input type="hidden" name="ai_analysis" id="form_ai">
-        <input type="hidden" name="ai_score" id="form_score">
-        <input type="hidden" name="land_price" id="form_price">
     </form>
 
-    <!-- (로그인 UI 등 HTML 구조는 기존과 동일하게 유지) -->
     <div id="login-overlay">
         <div class="bg-slate-900 p-8 rounded-2xl shadow-2xl border border-slate-700 w-[400px] text-center relative overflow-hidden" id="login-box">
             <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500"></div>
@@ -54,6 +59,7 @@
                 <h1 class="text-2xl font-bold text-white tracking-tight">SCEnergy 태양광 채굴기</h1>
                 <p class="text-slate-400 text-sm mt-2">태양광 발전 분석 클라우드 (Enterprise)</p>
             </div>
+            <!-- 사용자 로그인 -->
             <div id="step-user-login" class="space-y-4">
                 <div class="space-y-3 text-left">
                     <div><label for="userId" class="text-xs font-bold text-slate-400 ml-1">아이디</label><input type="text" id="userId" placeholder="User ID" class="login-input w-full rounded px-4 py-3 text-sm mt-1"></div>
@@ -62,12 +68,13 @@
                 <button onclick="window.attemptLogin()" class="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 rounded-lg transition mt-2">접속하기</button>
                 <div class="flex justify-between items-center mt-4 pt-4 border-t border-slate-700/50"><button onclick="window.showAdminLogin()" class="text-[10px] text-slate-500 hover:text-cyan-400 transition font-bold flex items-center gap-1"><i class="ph ph-lock-key"></i> 관리자 로그인</button></div>
             </div>
-            <!-- (관리자 모드 및 대시보드 포함) -->
-             <div id="step-admin-login" class="hidden space-y-4">
+            <!-- 관리자 로그인 -->
+            <div id="step-admin-login" class="hidden space-y-4">
                 <div class="text-left"><label for="adminPw" class="text-xs font-bold text-red-400 ml-1">관리자 비밀번호</label><input type="password" id="adminPw" class="login-input w-full rounded px-4 py-3 text-sm font-mono mt-1" placeholder="Admin Password" onkeypress="if(event.key==='Enter') window.verifyAdmin()"></div>
                 <button onclick="window.verifyAdmin()" class="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-lg transition">관리자 접속</button>
                 <button onclick="window.exitAdminMode()" class="text-xs text-slate-400 hover:text-white">돌아가기</button>
             </div>
+            <!-- 관리자 대시보드 -->
             <div id="step-admin-dashboard" class="hidden space-y-4">
                 <div class="bg-slate-800/50 rounded-lg p-3 text-left border border-slate-700">
                     <label class="text-[10px] font-bold text-slate-400 block mb-1">신규 유저 등록</label>
@@ -83,28 +90,27 @@
         </div>
     </div>
 
-    <!-- (사이드바, 탭, 설정 패널 등 기존과 동일) -->
     <!-- 사이드바 -->
     <div id="sidebar" class="sidebar absolute top-0 left-0 h-full w-[420px] bg-white shadow-2xl flex flex-col border-r border-gray-200">
-        <!-- ... (기존 사이드바 내용) ... -->
         <div class="p-4 bg-slate-900 text-white shadow-lg shrink-0">
             <h1 class="text-lg font-bold flex items-center gap-2"><i class="ph ph-solar-panel text-yellow-400"></i> SCEnergy 태양광 채굴기</h1>
-            <div class="flex justify-between items-center text-[10px] text-slate-400 mt-2 border-t border-slate-700 pt-2"><span id="currentUserDisplay">Not Logged In</span><button onclick="window.logout('Manual')" class="text-red-400 hover:text-red-300 underline">로그아웃</button></div>
+            <div class="flex justify-between items-center text-[10px] text-slate-400 mt-2 border-t border-slate-700 pt-2"><span id="currentUserDisplay">Not Logged In</span><button onclick="window.logout()" class="text-red-400 hover:text-red-300 underline">로그아웃</button></div>
             <div class="grid grid-cols-3 gap-1 mt-3 text-center">
                 <div class="bg-slate-900 rounded p-1 border border-slate-700 text-[8px]"><div class="text-slate-500">Backend</div><div id="cnt-vworld" class="font-mono font-bold text-cyan-400">0</div></div>
                 <div class="bg-slate-900 rounded p-1 border border-slate-700 text-[8px]"><div class="text-slate-500">DB Sync</div><div id="cnt-public" class="font-mono font-bold text-yellow-400">0</div></div>
                 <div class="bg-slate-900 rounded p-1 border border-slate-700 text-[8px]"><div class="text-slate-500">AI Analysis</div><div id="cnt-ai" class="font-mono font-bold text-purple-400">0</div></div>
             </div>
         </div>
+        <!-- 탭 메뉴 -->
         <div class="flex border-b border-gray-200 shrink-0 bg-white shadow-sm">
             <button onclick="window.switchTab('scan')" id="tab-scan" class="tab-btn active flex-1 py-3 text-xs text-center"><i class="ph ph-radar text-lg"></i>전수 스캔</button>
             <button onclick="window.switchTab('analysis')" id="tab-analysis" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-magnifying-glass-plus text-lg"></i>정밀 분석</button>
             <button onclick="window.switchTab('legal')" id="tab-legal" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-sparkle text-lg"></i>종합 리포트</button>
             <button onclick="window.switchTab('history')" id="tab-history" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-clock-counter-clockwise text-lg"></i>기록</button>
         </div>
-        
+
+        <!-- 설정 패널 -->
         <div class="flex-1 overflow-y-auto bg-slate-50">
-             <!-- 설정 패널 -->
             <div class="p-4 pb-0">
                 <details class="bg-white rounded-lg border border-slate-200 shadow-sm group mb-4" open>
                     <summary class="p-3 text-xs font-bold text-slate-600 cursor-pointer flex items-center justify-between hover:bg-slate-50 bg-slate-100 rounded-t-lg"><span class="flex items-center gap-1"><i class="ph ph-sliders-horizontal"></i> 분석 파라미터</span><i class="ph ph-caret-down group-open:rotate-180 transition"></i></summary>
@@ -234,10 +240,12 @@
                     <div class="bg-slate-800 p-4 rounded-lg shadow-lg text-white min-h-[300px]">
                         <h3 class="text-sm font-bold border-b border-slate-700 pb-2 flex items-center gap-2"><i class="ph ph-files"></i> AI 인허가 분석 대시보드</h3>
                         
+                        <!-- AI 점수/가격 표시 -->
                         <div id="aiScorePanel" class="hidden mb-4 bg-slate-900/50 p-3 rounded border border-slate-600">
                              <div class="flex items-center justify-between mb-2">
                                  <span class="text-xs text-slate-300 font-bold">땅 구매 매력도 (AI Score)</span>
                                  <span id="scoreValue" class="text-lg font-bold text-green-400">0점</span>
+                                 <!-- 신뢰도 표시 추가 -->
                                  <span id="confidenceValue" class="text-[10px] text-slate-400 ml-1"></span>
                              </div>
                              <div class="w-full bg-slate-700 rounded-full h-2.5 mb-3 overflow-hidden">
@@ -331,6 +339,7 @@
         
         // 메모리 백업 (스토리지 차단 대비)
         let _memoryUsers = [{id:"admin", pw:"1234"}]; 
+        const API_COUNT_KEYS = ['vworld', 'public', 'ai'];
 
         // [중요] 헬퍼 함수
         function safeGetItem(key) {
@@ -434,7 +443,8 @@
         window.toggleLayer = function(type) {
             if(!map) return;
             if(type === 'cadastral') {
-                if(document.getElementById('cadastralToggle').checked) map.addLayer(cadastralLayer); else map.removeLayer(cadastralLayer);
+                if(document.getElementById('cadastralToggle').checked) map.addLayer(cadastralLayer);
+                else map.removeLayer(cadastralLayer);
             } else if(type === 'existing') {
                 if(document.getElementById('existingPlantToggle').checked) { 
                     if(existingGroup.getLayers().length === 0) window.createMockMarkers(map.getCenter(), 'plant'); 
@@ -591,7 +601,6 @@
 
             try {
                 window.trackApi('ai');
-                // [보안] X-CLIENT-TOKEN 헤더 추가
                 const res = await fetch(`${BACKEND_URL}/api/analyze/comprehensive`, {
                     method: 'POST',
                     headers: {
@@ -720,8 +729,7 @@
                     window.showToast("영역이 작아 최소 패널 1개를 배치했습니다.");
                 } else {
                     newLayer = L.geoJSON({type:"FeatureCollection", features: tempPanels}, {
-                        // [수정] 토지 모드: 밝은 브라운(#8d6e63) 테두리 + 투명도 0.4
-                        style: scanTarget === 'land' ? { color: '#8d6e63', weight: 3, fillColor: '#8d6e63', fillOpacity: 0.4 } : { color: '#1e40af', weight: 1, fillColor: '#3b82f6', fillOpacity: 0.3 }
+                        style: scanTarget === 'land' ? { color: '#5d4037', weight: 1, fillColor: '#5d4037', fillOpacity: 0.1 } : { color: '#1e40af', weight: 1, fillColor: '#3b82f6', fillOpacity: 0.3 }
                     });
                 }
                 
@@ -783,28 +791,17 @@
             if(analysisMarkerGroup) analysisMarkerGroup.clearLayers();
             selectedFeatures.clear(); 
             accumulatedPanelsCount=0; 
-            
-            // [수정] UI 완전 초기화
-            document.getElementById('analysisAddress').innerText = "-";
-            document.getElementById('analysisCount').innerText = "0 장";
-            document.getElementById('analysisCapacity').innerText = "0 kW";
-            document.getElementById('resultCard').classList.add('hidden'); 
-            
-            // AI 패널 초기화
-            document.getElementById('legalContent').classList.add('hidden');
-            document.getElementById('aiScorePanel').classList.add('hidden');
-            document.getElementById('legalPlaceholder').classList.remove('hidden');
-
+            const rc = document.getElementById('resultCard');
+            if(rc) rc.classList.add('hidden'); 
             currentAnalysisData = {};
         };
 
         window.resetCalibration = function() { 
             currentGeoState = { x: 0, y: 0, rot: 0 }; 
-            panelGroup.clearLayers(); // [수정] 중복 방지: 기존 패널 삭제
+            panelGroup.clearLayers(); 
             if(currentAnalysisFeature) {
                 const res = window.drawPanels(currentAnalysisFeature.geometry);
                 if (res && !isMultiSelectMode) {
-                    // [수정] 단일 모드 데이터 정합성 유지
                     selectedFeatures.clear();
                     const center = turf.center(currentAnalysisFeature).geometry.coordinates;
                     const fid = currentAnalysisFeature.properties.pnu || `${center[1].toFixed(6)}_${center[0].toFixed(6)}`;
@@ -818,7 +815,7 @@
             currentGeoState.x += dx * 5; 
             currentGeoState.y += dy * 5; 
             currentGeoState.rot += drot; 
-            panelGroup.clearLayers(); // [수정] 이동 시 잔상 제거
+            panelGroup.clearLayers(); 
             if(currentAnalysisFeature) {
                 const res = window.drawPanels(currentAnalysisFeature.geometry);
                 if (res && !isMultiSelectMode) window.calculateFinance(res.count);
@@ -851,7 +848,6 @@
         window.toggleTarget = function() { 
             const els = document.getElementsByName('scanTarget'); 
             els.forEach(e => { if(e.checked) scanTarget = e.value; }); 
-            // [수정] 모드 변경 시 기존 결과 초기화 후 재스캔 유도
             window.clearResults(); 
             window.showToast(`모드 변경: ${scanTarget === 'land' ? '토지' : '지붕'}`);
             if(map) { const c = map.getCenter(); window.scanBuildings(c.lat, c.lng, true); }
@@ -878,7 +874,6 @@
             for (let i = 0; i < 20; i++) {
                 if(stopScan) { window.showToast("스캔 중지됨"); break; }
                 const r = Math.floor(i/5), c = i%5;
-                // [수정] force=true로 스캔 락 무시하고 진행
                 await window.scanBuildings(bounds.getSouth() + latStep*(r+0.5), bounds.getWest() + lngStep*(c+0.5), true);
                 const fc = document.getElementById('foundCount');
                 if(fc) fc.innerText = `검색된 구역: ${selectableGroup.getLayers().length}개`;
@@ -918,50 +913,8 @@
             document.getElementById('sidebar-toggle-btn').classList.toggle('collapsed'); 
         };
 
-        // UI 제어 함수들 (로그인 관련)
-        window.attemptLogin = function() {
-            const id = document.getElementById('userId').value.trim();
-            const pw = document.getElementById('userPw').value.trim();
-            if(!id || !pw) return window.showToast("ID/PW를 입력하세요.");
-
-            let users = window.getUsers();
-            if (users.length === 0) {
-                 users = [{id:"admin", pw:"1234"}];
-                 safeSetItem('scenergy_users', JSON.stringify(users));
-            }
-
-            const user = users.find(u => u.id === id && u.pw === pw);
-            if(user) {
-                isLoggedIn = true; currentUser = id;
-                document.getElementById('login-overlay').classList.add('hidden-overlay');
-                document.getElementById('currentUserDisplay').innerText = id;
-                window.initMap();
-                window.updateHistoryList();
-            } else { 
-                window.showToast("계정 정보를 확인해주세요."); 
-            }
-        };
-
-        window.logout = function() { location.reload(); };
-        window.showAdminLogin = function() { document.getElementById('step-user-login').classList.add('hidden'); document.getElementById('step-admin-login').classList.remove('hidden'); };
-        window.verifyAdmin = function() { if(btoa(document.getElementById('adminPw').value) === ENCODED_ADMIN_PW) { document.getElementById('step-admin-login').classList.add('hidden'); document.getElementById('step-admin-dashboard').classList.remove('hidden'); } };
-        window.exitAdminMode = function() { document.getElementById('step-admin-login').classList.add('hidden'); document.getElementById('step-admin-dashboard').classList.add('hidden'); document.getElementById('step-user-login').classList.remove('hidden'); };
-        
-        window.addUser = function() {
-            const id = document.getElementById('newUserId').value.trim();
-            const pw = document.getElementById('newUserPw').value.trim();
-            if(!id || !pw) return window.showToast("ID/PW를 입력하세요.");
-            
-            let users = [];
-            const stored = safeGetItem('scenergy_users');
-            if(stored) users = JSON.parse(stored);
-            
-            users.push({id, pw});
-            safeSetItem('scenergy_users', JSON.stringify(users));
-            window.showToast("유저 추가 완료");
-        };
-
-        window.onload = function() {
+        // 초기화 코드
+        window.addEventListener('load', function() {
             window.updateEstimatedTime();
             // 기본 계정 확인 (비상용)
             try {
@@ -969,7 +922,7 @@
                 if(!u) safeSetItem('scenergy_users', JSON.stringify([{id:"admin", pw:"1234"}]));
             } catch(e){}
             window.logSystem("System Ready.");
-        };
+        });
     </script>
 </body>
 </html>
