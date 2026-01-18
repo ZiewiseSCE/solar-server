@@ -5,3 +5,4 @@ google-generativeai
 urllib3
 gunicorn
 flask-limiter
+psycopg2-binary
