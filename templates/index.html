@@ -41,7 +41,7 @@
     </style>
 </head>
 <body class="bg-gray-100">
-    <!-- 상세 리포트 전송 폼 -->
+    <!-- 상세 리포트 전송용 폼 -->
     <form id="reportForm" method="POST" target="_blank" class="hidden">
         <input type="hidden" name="address" id="form_address">
         <input type="hidden" name="capacity" id="form_capacity">
@@ -58,6 +58,8 @@
                 <div class="mx-auto w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mb-4 border border-slate-700 shadow-lg"><i class="ph ph-solar-panel text-3xl text-cyan-400"></i></div>
                 <h1 class="text-2xl font-bold text-white tracking-tight">SCEnergy 태양광 채굴기</h1>
                 <p class="text-slate-400 text-sm mt-2">태양광 발전 분석 클라우드 (Enterprise)</p>
+                <!-- 닫기 버튼 추가 (비상용) -->
+                <button onclick="window.exitAdminMode()" id="exit-admin-btn" aria-label="닫기" class="hidden absolute top-0 right-0 text-slate-500 hover:text-white"><i class="ph ph-x"></i></button>
             </div>
             <!-- 사용자 로그인 -->
             <div id="step-user-login" class="space-y-4">
@@ -94,7 +96,7 @@
     <div id="sidebar" class="sidebar absolute top-0 left-0 h-full w-[420px] bg-white shadow-2xl flex flex-col border-r border-gray-200">
         <div class="p-4 bg-slate-900 text-white shadow-lg shrink-0">
             <h1 class="text-lg font-bold flex items-center gap-2"><i class="ph ph-solar-panel text-yellow-400"></i> SCEnergy 태양광 채굴기</h1>
-            <div class="flex justify-between items-center text-[10px] text-slate-400 mt-2 border-t border-slate-700 pt-2"><span id="currentUserDisplay">Not Logged In</span><button onclick="window.logout()" class="text-red-400 hover:text-red-300 underline">로그아웃</button></div>
+            <div class="flex justify-between items-center text-[10px] text-slate-400 mt-2 border-t border-slate-700 pt-2"><span id="currentUserDisplay">Not Logged In</span><button onclick="window.logout('Manual')" class="text-red-400 hover:text-red-300 underline">로그아웃</button></div>
             <div class="grid grid-cols-3 gap-1 mt-3 text-center">
                 <div class="bg-slate-900 rounded p-1 border border-slate-700 text-[8px]"><div class="text-slate-500">Backend</div><div id="cnt-vworld" class="font-mono font-bold text-cyan-400">0</div></div>
                 <div class="bg-slate-900 rounded p-1 border border-slate-700 text-[8px]"><div class="text-slate-500">DB Sync</div><div id="cnt-public" class="font-mono font-bold text-yellow-400">0</div></div>
@@ -134,7 +136,7 @@
             </div>
 
             <div class="px-4 pb-4">
-                <!-- 1. 스캔 패널 -->
+                <!-- 1. 스캔 패널 (지역 리스트 전체 포함) -->
                 <div id="panel-scan" class="space-y-4">
                     <div class="bg-white p-3 rounded border border-gray-200 shadow-sm">
                         <label for="regionSelect" class="text-xs font-bold text-gray-700 mb-2 block">📍 지역 선택</label>
@@ -183,14 +185,17 @@
                         <div class="flex justify-between items-center bg-slate-700/50 p-1.5 rounded border border-slate-600 mb-1">
                             <label for="scanDelay" class="text-[9px] font-bold text-cyan-300">API 안전 딜레이</label>
                             <select id="scanDelay" class="bg-slate-900 text-[10px] font-mono border-none outline-none text-yellow-400" onchange="window.updateEstimatedTime()">
-                                <option value="1000">1초</option>
-                                <option value="3000">3초</option>
                                 <option value="6000" selected>6초 (권장)</option>
+                                <option value="10000">10초 (저속)</option>
                             </select>
                         </div>
                         <div class="flex justify-between items-end"><div id="timerRemaining" class="text-xl font-mono font-bold text-yellow-400">00:00:00</div><div id="progressCount" class="text-[10px] text-gray-500 font-mono">0 / 20</div></div>
                         <div class="w-full bg-slate-700 rounded-full h-1.5 overflow-hidden"><div id="totalProgressBar" class="bg-cyan-500 h-full transition-all duration-500" style="width: 0%"></div></div>
                         <div class="flex justify-between items-end mt-1 px-1"><div class="text-[9px] text-cyan-400 font-bold" id="foundCount">검색된 구역: 0개</div></div>
+                        <div class="flex items-center gap-2 mb-2 mt-2">
+                             <input type="checkbox" id="autoFollow" class="w-4 h-4 rounded border-gray-600 text-indigo-600 focus:ring-indigo-500 bg-gray-700" checked>
+                             <label for="autoFollow" class="text-[10px] text-slate-300 cursor-pointer select-none">지도 자동 따라가기</label>
+                        </div>
                         <div class="grid grid-cols-2 gap-2 pt-1"><button onclick="window.startMission()" id="startBtn" class="bg-indigo-600 hover:bg-indigo-700 py-2 rounded font-bold text-xs transition">▶ 스캔 시작</button><button onclick="window.clearResults()" class="bg-slate-700 hover:bg-slate-600 py-2 rounded font-bold text-xs transition">🔄 초기화</button></div>
                     </div>
                 </div>
@@ -236,14 +241,18 @@
                     </div>
                 </div>
 
+                <!-- 3. 종합 리포트 패널 -->
                 <div id="panel-legal" class="hidden space-y-4">
                     <div class="bg-slate-800 p-4 rounded-lg shadow-lg text-white min-h-[300px]">
                         <h3 class="text-sm font-bold border-b border-slate-700 pb-2 flex items-center gap-2"><i class="ph ph-files"></i> AI 인허가 분석 대시보드</h3>
                         
+                        <!-- AI 분석 결과 -->
                         <div id="aiScorePanel" class="hidden mb-4 bg-slate-900/50 p-3 rounded border border-slate-600">
                              <div class="flex items-center justify-between mb-2">
                                  <span class="text-xs text-slate-300 font-bold">땅 구매 매력도 (AI Score)</span>
                                  <span id="scoreValue" class="text-lg font-bold text-green-400">0점</span>
+                                 <!-- 신뢰도 추가 -->
+                                 <span id="confidenceValue" class="text-[10px] text-slate-400 ml-1"></span>
                              </div>
                              <div class="w-full bg-slate-700 rounded-full h-2.5 mb-3 overflow-hidden">
                                  <div id="scoreBar" class="bg-gradient-to-r from-red-500 via-yellow-500 to-green-500 h-2.5 rounded-full" style="width: 0%"></div>
@@ -273,6 +282,7 @@
                     </div>
                 </div>
 
+                <!-- 4. 기록 패널 -->
                 <div id="panel-history" class="hidden space-y-4">
                     <div class="bg-white p-3 rounded border border-gray-200 shadow-sm">
                         <div class="flex justify-between items-center mb-2 border-b pb-1">
@@ -320,10 +330,9 @@
     <div id="map"></div>
 
     <script>
-        // 전역 변수 선언 (window 없이)
+        // 전역 변수 (window 없이)
         const VWORLD_TILE_KEY = "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F"; 
         const BACKEND_URL = "https://port-0-solar-server-mkiol9jsc308f567.sel3.cloudtype.app";
-        // [보안 주의] 클라이언트 측 Base64 확인은 보안에 취약합니다. 운영 환경에서는 서버 인증 필수.
         const ENCODED_ADMIN_PW = "Wmlld2lzZTEyMyE=";
 
         let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, analysisMarkerGroup, existingGroup, substationGroup;
@@ -333,7 +342,7 @@
         let stopScan = false;
         let scanLock = false; 
         
-        let _memoryUsers = [{id:"admin", pw:"1234"}]; // 비상용 메모리 스토리지
+        let _memoryUsers = [{id:"admin", pw:"1234"}]; // 비상용 메모리
 
         // 로컬 스토리지 안전 접근
         function safeGetItem(key) {
@@ -374,7 +383,7 @@
             } 
         };
 
-        window.getUsers = function() {
+        function getUsers() {
             try { 
                 const stored = safeGetItem('scenergy_users');
                 return stored ? JSON.parse(stored) : _memoryUsers; 
@@ -417,7 +426,15 @@
                 
                 map.addLayer(cadastralLayer);
                 map.on('click', (e) => window.scanBuildings(e.latlng.lat, e.latlng.lng));
-                map.on('moveend', () => { if(autoScanMode && isLoggedIn) { const c = map.getCenter(); window.scanBuildings(c.lat, c.lng); } });
+                map.on('moveend', () => { 
+                    if(autoScanMode && isLoggedIn) { 
+                        // 지도 따라가기 옵션 체크
+                        if(document.getElementById('autoFollow')?.checked) return; // 따라가기 중엔 중복 스캔 방지
+                        // 일반 이동 시 스캔은 scanBuildings 내부의 debounce로 처리
+                        const c = map.getCenter(); 
+                        window.scanBuildings(c.lat, c.lng); 
+                    } 
+                });
                 
                 if(document.getElementById('existingPlantToggle').checked) window.toggleLayer('existing');
                 if(document.getElementById('substationToggle').checked) window.toggleLayer('substation');
@@ -437,8 +454,7 @@
         window.toggleLayer = function(type) {
             if(!map) return;
             if(type === 'cadastral') {
-                if(document.getElementById('cadastralToggle').checked) map.addLayer(cadastralLayer);
-                else map.removeLayer(cadastralLayer);
+                if(document.getElementById('cadastralToggle').checked) map.addLayer(cadastralLayer); else map.removeLayer(cadastralLayer);
             } else if(type === 'existing') {
                 if(document.getElementById('existingPlantToggle').checked) { 
                     if(existingGroup.getLayers().length === 0) window.createMockMarkers(map.getCenter(), 'plant'); 
@@ -454,8 +470,7 @@
 
         window.createMockMarkers = function(center, type) {
             const group = type === 'plant' ? existingGroup : substationGroup;
-            // 중복 생성 방지: 기존 마커가 없을 때만 생성 (기존 레이어는 유지)
-            if(group.getLayers().length > 0) return;
+            if(group.getLayers().length > 0) return; // 중복 생성 방지
 
             for(let i=0; i<3; i++) {
                 const lat = center.lat + (Math.random() * 0.01 - 0.005);
@@ -510,17 +525,16 @@
             } catch(e) { console.error(e); } finally { if(loading) loading.classList.add('hidden'); }
         };
 
+        // [수정] 스캔 락 적용 + 멀티 모드 누적 방지
         window.scanBuildings = async function(lat, lng, force=false) {
             if (!map || (scanLock && !force)) return;
             scanLock = true;
             
             try {
                 window.trackApi('vworld');
-                // [수정] 멀티 모드가 아닐 때만 기존 선택 레이어 삭제
-                if (!isMultiSelectMode) {
-                    if (selectableGroup) selectableGroup.clearLayers();
-                    window.clearResults();
-                }
+                // 멀티 모드라도 기존 '후보군' 표시는 지우고 새로 그림 (선택된건 panelGroup에 보존)
+                if (selectableGroup) selectableGroup.clearLayers();
+                if (!isMultiSelectMode) window.clearResults();
 
                 if (analysisMarkerGroup) analysisMarkerGroup.clearLayers();
                 L.marker([lat, lng]).addTo(analysisMarkerGroup);
@@ -532,7 +546,7 @@
                 
                 if(data.response?.status === 'OK') {
                     L.geoJSON(data.response.result.featureCollection.features, {
-                        // [수정] 토지 모드 스타일: 밝은 브라운(#8d6e63) 테두리 + 투명도 0.4
+                        // 토지 모드: 밝은 브라운(#8d6e63) 테두리 + 투명도 0.4
                         style: scanTarget === 'land' 
                             ? { color: '#8d6e63', weight: 3, fillColor: '#8d6e63', fillOpacity: 0.4 } 
                             : { color: '#3b82f6', weight: 2, fillOpacity: 0.2 },
@@ -544,20 +558,23 @@
         };
 
         window.analyzeFeature = async function(feature) {
-            // [수정] ID 생성 방식 개선 (좌표 기반)
+            // [수정] ID 생성 방식 안정화 (좌표 기반)
             const center = turf.center(feature).geometry.coordinates;
             const featureId = feature.properties.pnu || `${center[1].toFixed(6)}_${center[0].toFixed(6)}`;
             
+            // 토글 로직
             if (selectedFeatures.has(featureId)) {
                 if (isMultiSelectMode) {
                     const stored = selectedFeatures.get(featureId);
                     panelGroup.removeLayer(stored.layer);
                     selectedFeatures.delete(featureId);
+                    
                     let total = 0; selectedFeatures.forEach(v => total += v.count);
                     accumulatedPanelsCount = total;
                     if (total === 0) window.clearResults(); else window.calculateFinance(total);
-                    window.showToast("선택 해제");
+                    window.showToast("선택 해제됨");
                 } else {
+                    // 단일 모드에선 이미 선택된거 누르면 재분석 or 무시
                     window.clearResults();
                 }
                 return;
@@ -566,9 +583,7 @@
             if (!isMultiSelectMode) window.clearResults();
 
             window.switchTab('analysis');
-            // 결과 카드 강제 표시 [수정]
             document.getElementById('resultCard').classList.remove('hidden');
-            
             const props = feature.properties;
             const addr = props.road_nm_ad || props.jibun_addr || props.addr || `PNU:${props.pnu}` || "주소 미상";
             document.getElementById('analysisAddress').innerText = addr;
@@ -584,7 +599,7 @@
             currentAnalysisData = { address: addr, date: new Date().toLocaleDateString() };
             currentAnalysisFeature = feature;
             
-            // AI 호출은 비동기로 진행 (UI 멈춤 방지)
+            // AI 호출
             window.fetchAIData(center[1], center[0], addr);
         };
 
@@ -601,7 +616,11 @@
 
             try {
                 window.trackApi('ai');
-                const res = await fetch(`${BACKEND_URL}/api/analyze/comprehensive?lat=${lat}&lng=${lng}&address=${encodeURIComponent(addr)}`);
+                const res = await fetch(`${BACKEND_URL}/api/analyze/comprehensive`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({lat, lng, address: addr})
+                });
                 const data = await res.json();
                 
                 if(loadingEl) loadingEl.classList.add('hidden');
@@ -609,28 +628,24 @@
 
                 if(data.status === 'OK') {
                      currentAnalysisData.ai_analysis = data;
-                     // [수정] 한전 용량 데이터 확보 시 폼 입력값 준비
                      if(data.kepco_capacity) currentAnalysisData.ai_analysis.kepco_capacity = data.kepco_capacity;
 
                      if(data.sun_hours) window.calculateFinance(accumulatedPanelsCount, data.sun_hours);
                      const cb = document.getElementById('aiCommentBox');
                      if(cb) cb.innerText = data.ai_comment || "분석 완료";
 
-                     let score = 55;
-                     if (data.zoning.includes("계획관리")) score += 25;
-                     if (data.eco_grade.includes("1")) score -= 55;
-                     if (data.sun_hours < 3.4) score -= 25;
-                     score = Math.max(10, Math.min(99, score));
+                     // 신뢰도 표시
+                     if(data.ai_score && data.ai_score.confidence) {
+                        document.getElementById('confidenceValue').innerText = `(신뢰도: ${data.ai_score.confidence}%)`;
+                     }
 
-                     scorePanel.classList.remove('hidden');
-                     document.getElementById('scoreValue').innerText = score + "점";
-                     document.getElementById('scoreBar').style.width = score + "%";
-                     
-                     let regPrice = addr.includes("경기") ? 85 : addr.includes("충청") ? 45 : 30;
-                     const priceMsg = `약 ${Math.floor(regPrice*0.7)}~${Math.floor(regPrice*1.4)}만원/평`;
-                     document.getElementById('priceValue').innerText = priceMsg;
-                     currentAnalysisData.ai_analysis.score = score;
-                     currentAnalysisData.ai_analysis.price = priceMsg;
+                     if(scorePanel) {
+                         scorePanel.classList.remove('hidden');
+                         const score = data.ai_score?.score || 50;
+                         document.getElementById('scoreValue').innerText = score + "점";
+                         document.getElementById('scoreBar').style.width = score + "%";
+                         document.getElementById('priceValue').innerText = data.price_estimate || "분석 중...";
+                     }
 
                      const resultContainer = document.getElementById('aiAnalysisResult');
                      const items = [
@@ -677,7 +692,7 @@
             if(arEl) arEl.innerText = `${Math.round(annualRev).toLocaleString()} 원`;
             const pbEl = document.getElementById('resPfPayback');
             if(pbEl) pbEl.innerText = `${payback} 년`;
-            
+
             document.getElementById('resultCard').classList.remove('hidden');
 
             currentAnalysisData.finance = {
@@ -693,6 +708,8 @@
                 let poly = turf.feature(geo);
                 if (currentGeoState.x !== 0 || currentGeoState.y !== 0 || currentGeoState.rot !== 0) {
                     poly = turf.transformRotate(poly, currentGeoState.rot);
+                    // D-Pad는 m단위지만 turf는 km가 기본인 경우 있으므로 변환 주의
+                    // 여기서는 1000으로 나누어 km로 변환
                     poly = turf.transformTranslate(poly, currentGeoState.x / 1000, 90, {units: 'kilometers'});
                     poly = turf.transformTranslate(poly, currentGeoState.y / 1000, 0, {units: 'kilometers'});
                 }
@@ -700,14 +717,11 @@
                 const modH = parseFloat(document.getElementById('modHeight').value);
                 const angle = parseFloat(document.getElementById('installAngle').value);
                 const projectedH = modH * Math.cos(angle * Math.PI / 180);
-                // 단위 변환: 미터 -> 킬로미터 -> 위도
-                const dLng = (modW + 0.1) / 88800; 
-                const dLat = (projectedH + 0.1) / 111000;
+                const dLng = (modW + 0.1) / 88800; const dLat = (projectedH + 0.1) / 111000;
                 
                 const bbox = turf.bbox(poly);
                 let tempPanels = [], count = 0, loopGuard = 0;
-                // [중요] 계산 한도 대폭 상향 (10만회)
-                const MAX_LOOP = 100000;
+                const MAX_LOOP = 50000; // 상향 조정
 
                 for(let x = bbox[0]; x < bbox[2]; x += dLng) {
                     for(let y = bbox[1]; y < bbox[3]; y += dLat) {
@@ -730,8 +744,8 @@
                     window.showToast("영역이 작아 최소 패널 1개를 배치했습니다.");
                 } else {
                     newLayer = L.geoJSON({type:"FeatureCollection", features: tempPanels}, {
-                        // [수정] 토지 모드: 밝은 브라운(#8d6e63) 테두리 + 투명도 0.4
-                        style: scanTarget === 'land' ? { color: '#8d6e63', weight: 1, fillColor: '#8d6e63', fillOpacity: 0.4 } : { color: '#1e40af', weight: 1, fillColor: '#3b82f6', fillOpacity: 0.3 }
+                        // [수정] 토지 모드: 다크브라운(#5d4037) 테두리 + 투명도 0.1
+                        style: scanTarget === 'land' ? { color: '#5d4037', weight: 3, fillColor: '#5d4037', fillOpacity: 0.1 } : { color: '#1e40af', weight: 1, fillColor: '#3b82f6', fillOpacity: 0.3 }
                     });
                 }
                 
@@ -750,7 +764,7 @@
             try { history = JSON.parse(safeGetItem('scenergy_history') || "[]"); } catch(e){}
             history.push({ 
                 date: new Date().toLocaleString(), address: addr, capacity: fn.capacity, revenue: fn.annualRev,
-                zoning: ai.zoning, jimok: ai.jimok, eco: ai.eco_grade, kepco: ai.kepco_capacity, sun: ai.sun_hours, score: ai.score, price: ai.price
+                zoning: ai.zoning, jimok: ai.jimok, eco: ai.eco_grade, kepco: ai.kepco_capacity, sun: ai.sun_hours, score: ai.ai_score?.score, price: ai.price_estimate
             });
             safeSetItem('scenergy_history', JSON.stringify(history));
             window.updateHistoryList(); window.showToast("상세 정보 저장 완료");
@@ -787,7 +801,6 @@
 
         window.clearHistory = function() { if(confirm("전체 삭제?")) { safeSetItem('scenergy_history', "[]"); window.updateHistoryList(); } };
         
-        // [수정] UI 초기화 로직 보완
         window.clearResults = function() { 
             if(panelGroup) panelGroup.clearLayers(); 
             if(selectableGroup) selectableGroup.clearLayers(); 
@@ -795,21 +808,27 @@
             selectedFeatures.clear(); 
             accumulatedPanelsCount=0; 
             
+            // [수정] UI 완전 초기화
             document.getElementById('analysisAddress').innerText = "-";
             document.getElementById('analysisCount').innerText = "0 장";
             document.getElementById('analysisCapacity').innerText = "0 kW";
             document.getElementById('resultCard').classList.add('hidden'); 
             
+            // AI 패널 초기화
+            document.getElementById('legalContent').classList.add('hidden');
+            document.getElementById('aiScorePanel').classList.add('hidden');
+            document.getElementById('legalPlaceholder').classList.remove('hidden');
+
             currentAnalysisData = {};
         };
 
         window.resetCalibration = function() { 
             currentGeoState = { x: 0, y: 0, rot: 0 }; 
-            panelGroup.clearLayers(); 
+            panelGroup.clearLayers(); // [수정] 중복 방지: 기존 패널 삭제
             if(currentAnalysisFeature) {
                 const res = window.drawPanels(currentAnalysisFeature.geometry);
-                // [수정] 단일 모드일 때만 자동 재계산 (데이터 정합성)
                 if (res && !isMultiSelectMode) {
+                    // [수정] 단일 모드 데이터 정합성 유지
                     selectedFeatures.clear();
                     const center = turf.center(currentAnalysisFeature).geometry.coordinates;
                     const fid = currentAnalysisFeature.properties.pnu || `${center[1].toFixed(6)}_${center[0].toFixed(6)}`;
@@ -823,7 +842,7 @@
             currentGeoState.x += dx * 5; 
             currentGeoState.y += dy * 5; 
             currentGeoState.rot += drot; 
-            panelGroup.clearLayers(); 
+            panelGroup.clearLayers(); // [수정] 이동 시 잔상 제거
             if(currentAnalysisFeature) {
                 const res = window.drawPanels(currentAnalysisFeature.geometry);
                 if (res && !isMultiSelectMode) window.calculateFinance(res.count);
@@ -856,14 +875,10 @@
         window.toggleTarget = function() { 
             const els = document.getElementsByName('scanTarget'); 
             els.forEach(e => { if(e.checked) scanTarget = e.value; }); 
-            
-            // [수정] 모드 변경 시 화면 재스캔하여 스타일 즉시 반영
+            // [수정] 모드 변경 시 기존 결과 초기화 후 재스캔 유도
             window.clearResults(); 
-            if(map) {
-                 const c = map.getCenter();
-                 window.scanBuildings(c.lat, c.lng, true);
-            }
             window.showToast(`모드 변경: ${scanTarget === 'land' ? '토지' : '지붕'}`);
+            if(map) { const c = map.getCenter(); window.scanBuildings(c.lat, c.lng, true); }
         };
 
         window.updateEstimatedTime = function() { 
@@ -887,6 +902,7 @@
             for (let i = 0; i < 20; i++) {
                 if(stopScan) { window.showToast("스캔 중지됨"); break; }
                 const r = Math.floor(i/5), c = i%5;
+                // [수정] force=true로 스캔 락 무시하고 진행
                 await window.scanBuildings(bounds.getSouth() + latStep*(r+0.5), bounds.getWest() + lngStep*(c+0.5), true);
                 const fc = document.getElementById('foundCount');
                 if(fc) fc.innerText = `검색된 구역: ${selectableGroup.getLayers().length}개`;
@@ -926,8 +942,7 @@
             document.getElementById('sidebar-toggle-btn').classList.toggle('collapsed'); 
         };
 
-        // 초기화 코드
-        window.addEventListener('load', function() {
+        window.onload = function() {
             window.updateEstimatedTime();
             // 기본 계정 확인 (비상용)
             try {
@@ -935,7 +950,7 @@
                 if(!u) safeSetItem('scenergy_users', JSON.stringify([{id:"admin", pw:"1234"}]));
             } catch(e){}
             window.logSystem("System Ready.");
-        });
+        };
     </script>
 </body>
 </html>
