@@ -43,6 +43,7 @@
     </style>
 </head>
 <body class="bg-gray-100">
+    <!-- 리포트 전송용 히든 폼 -->
     <form id="reportForm" method="POST" target="_blank" class="hidden">
         <input type="hidden" name="address" id="form_address">
         <input type="hidden" name="capacity" id="form_capacity">
@@ -53,7 +54,7 @@
     </form>
 
     <div id="login-overlay">
-        <!-- 로그인 화면 (기존과 동일) -->
+        <!-- 로그인 UI -->
         <div class="bg-slate-900 p-8 rounded-2xl shadow-2xl border border-slate-700 w-[400px] text-center relative overflow-hidden" id="login-box">
             <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500"></div>
             <div class="mb-6 relative">
@@ -108,7 +109,7 @@
         <div class="flex border-b border-gray-200 shrink-0 bg-white shadow-sm">
             <button onclick="switchTab('scan')" id="tab-scan" class="tab-btn active flex-1 py-3 text-xs text-center"><i class="ph ph-radar text-lg"></i>전수 스캔</button>
             <button onclick="switchTab('analysis')" id="tab-analysis" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-magnifying-glass-plus text-lg"></i>정밀 분석</button>
-            <button onclick="switchTab('legal')" id="tab-legal" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-sparkle text-lg text-purple-600"></i>종합 리포트</button>
+            <button onclick="switchTab('legal')" id="tab-legal" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-sparkle text-lg"></i>종합 리포트</button>
             <button onclick="switchTab('history')" id="tab-history" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-clock-counter-clockwise text-lg"></i>기록</button>
         </div>
 
@@ -120,7 +121,7 @@
                     <div class="p-3 space-y-3 border-t border-gray-200">
                         <div class="bg-indigo-50 p-2 rounded border border-indigo-100 text-xs">
                              <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="modWidth" class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 가로(m)</label><input type="number" id="modWidth" value="1.13" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="modHeight" class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 세로(m)</label><input type="number" id="modHeight" value="2.4" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
-                             <!-- [확인] 설치 최대높이 반영 -->
+                             <!-- 텍스트 수정: 설치 최대높이 -->
                              <div class="grid grid-cols-2 gap-2 mb-2"><div><label for="installHeight" class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 최대높이(m)</label><input type="number" id="installHeight" value="0.5" step="0.1" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="installAngle" class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 각도(°)</label><input type="number" id="installAngle" value="20" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
                              <div class="grid grid-cols-2 gap-2"><div><label for="modPower" class="block mb-0.5 text-[10px] text-slate-500">모듈 출력(W)</label><input type="number" id="modPower" value="640" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div><div><label for="rowSpacing" class="block mb-0.5 text-[10px] text-slate-500">이격(m)</label><input type="number" id="rowSpacing" value="1.2" step="0.1" class="w-full border p-1 rounded text-center bg-white" onchange="reCalculate()"></div></div>
                         </div>
@@ -190,7 +191,7 @@
                         </div>
                         <div class="flex justify-between items-end"><div id="timerRemaining" class="text-xl font-mono font-bold text-yellow-400">00:00:00</div><div id="progressCount" class="text-[10px] text-gray-500 font-mono">0 / 20</div></div>
                         <div class="w-full bg-slate-700 rounded-full h-1.5 overflow-hidden"><div id="totalProgressBar" class="bg-cyan-500 h-full transition-all duration-500" style="width: 0%"></div></div>
-                        <!-- [추가] 스캔된 구역 수 표시 -->
+                        <!-- [복구됨] 스캔된 구역 수 표시 -->
                         <div class="flex justify-between items-end mt-1 px-1"><div class="text-[9px] text-cyan-400 font-bold" id="foundCount">검색된 구역: 0개</div></div>
                         <div class="grid grid-cols-2 gap-2 pt-1"><button onclick="startMission()" id="startBtn" class="bg-indigo-600 hover:bg-indigo-700 py-2 rounded font-bold text-xs transition">▶ 스캔 시작</button><button onclick="clearResults()" class="bg-slate-700 hover:bg-slate-600 py-2 rounded font-bold text-xs transition">🔄 초기화</button></div>
                     </div>
@@ -200,6 +201,7 @@
                 <div id="panel-analysis" class="hidden space-y-4">
                     <div class="bg-slate-800 p-2 rounded-lg border border-indigo-500/50 shadow-lg mb-2">
                         <div class="flex justify-between items-center mb-2 border-b border-slate-700 pb-1"><span class="text-[11px] font-bold text-indigo-300 flex items-center gap-1"><i class="ph ph-crosshair"></i> 패널 조정 (D-Pad)</span><button onclick="resetCalibration()" class="text-[9px] bg-slate-700 hover:bg-slate-600 px-1.5 py-0.5 rounded text-white border border-slate-600">초기화</button></div>
+                        <!-- D-Pad UI -->
                         <div class="flex flex-col items-center justify-center gap-2 pt-2 pb-1">
                              <div class="grid grid-cols-3 gap-2">
                                 <div></div><button class="d-pad-btn" onclick="applyCalibration(0, 0.5)">▲</button><div></div>
@@ -213,6 +215,7 @@
                                 <button class="d-pad-btn flex-1 text-[10px]" onclick="applyCalibration(0, 0, 5)">↻ 회전</button>
                             </div>
                         </div>
+                        <p class="text-[9px] text-slate-500 text-center mt-1">* 버튼을 눌러 위치와 각도를 미세 조정하세요.</p>
                     </div>
 
                     <div id="resultCard" class="hidden result-card p-4 rounded-lg shadow-lg text-white space-y-3">
@@ -322,8 +325,8 @@
         let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, analysisMarkerGroup, existingGroup, substationGroup;
         let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
         let apiCounts = { vworld: 0, public: 0, ai: 0 };
-        // [중복 방지]
-        let selectedFeatureIds = new Set();
+        // [중복 선택 방지 Map]
+        let selectedFeatures = new Map();
         let currentAnalysisData = {}; 
         
         function trackApi(type) { if(apiCounts[type]!==undefined) { apiCounts[type]++; const el=document.getElementById(`cnt-${type}`); if(el) el.innerText=apiCounts[type]; } }
@@ -407,13 +410,11 @@
 
             const box = `${lng - 0.001},${lat - 0.001},${lng + 0.001},${lat + 0.001}`;
             try {
-                // [수정] 모드에 따른 레이어 선택
                 const layerName = scanTarget === 'land' ? 'LP_PA_CBND_BUBUN' : 'LT_C_SPBD';
                 const url = `https://api.vworld.kr/req/data?service=data&request=GetFeature&data=${layerName}&key=${VWORLD_TILE_KEY}&geomFilter=BOX(${box})&size=1000`;
                 const data = await jsonpRequest(url);
                 if(data.response?.status === 'OK') {
                     L.geoJSON(data.response.result.featureCollection.features, {
-                        // [수정] 토지 모드 스타일: 형광 녹색 테두리 + 투명도 0.1
                         style: scanTarget === 'land' 
                             ? { color: '#39ff14', weight: 3, fillColor: '#22c55e', fillOpacity: 0.1 } 
                             : { color: '#3b82f6', weight: 2, fillOpacity: 0.2 },
@@ -433,6 +434,7 @@
             };
             layers.sat.addTo(map);
             selectableGroup = L.layerGroup().addTo(map); panelGroup = L.layerGroup().addTo(map); existingGroup = L.layerGroup().addTo(map); substationGroup = L.layerGroup().addTo(map);
+            analysisMarkerGroup = L.layerGroup().addTo(map);
             cadastralLayer = L.tileLayer.wms('https://api.vworld.kr/req/wms/1.0.0', { layers: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', styles: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', format: 'image/png', transparent: true, opacity: 0.7, key: VWORLD_TILE_KEY });
             map.addLayer(cadastralLayer);
             map.on('click', (e) => scanBuildings(e.latlng.lat, e.latlng.lng));
@@ -471,28 +473,70 @@
             document.getElementById('user-count').innerText = `${users.length}명`;
         }
 
+        // [중복 방지 & 스마트 토글]
         async function analyzeFeature(feature) {
-            // [중복 방지 & 스마트 토글]
+            // ID 또는 좌표를 키로 중복 체크
             const featureId = feature.id || JSON.stringify(feature.geometry.coordinates);
-            if (isMultiSelectMode && selectedFeatureIds.has(featureId)) { return showToast("이미 선택된 영역입니다."); }
-            if (!isMultiSelectMode) { selectedFeatureIds.clear(); }
-            selectedFeatureIds.add(featureId);
+            
+            // 1. 이미 선택된 경우 (해제 로직)
+            if (selectedFeatures.has(featureId)) {
+                const stored = selectedFeatures.get(featureId);
+                panelGroup.removeLayer(stored.layer);
+                selectedFeatures.delete(featureId);
+                
+                // 합산 다시 계산
+                let totalPanels = 0;
+                selectedFeatures.forEach(v => totalPanels += v.count);
+                accumulatedPanelsCount = totalPanels;
+                calculateFinance(totalPanels);
+                
+                showToast("선택이 해제되었습니다.");
+                return;
+            }
 
+            // 2. 단일 모드일 경우 기존 선택 초기화
+            if (!isMultiSelectMode) {
+                clearResults(); // 초기화 (selectedFeatures도 비워짐)
+            }
+
+            // 3. 신규 선택 (분석 시작)
             switchTab('analysis'); 
             document.getElementById('resultCard').classList.remove('hidden');
-            const addr = feature.properties.road_nm_ad || feature.properties.jibun || feature.properties.addr || "주소 미상";
+            
+            // 상세 주소 확보 (jibun_addr 등 활용)
+            const props = feature.properties;
+            const addr = props.road_nm_ad || props.jibun_addr || props.addr || `PNU: ${props.pnu}` || "주소 미상";
             document.getElementById('analysisAddress').innerText = addr;
             
-            // 데이터 저장용 객체 초기화
+            // 패널 그리기 (결과 리턴받음)
+            const drawResult = drawPanels(feature.geometry); 
+            
+            if (drawResult) {
+                // 맵에 저장
+                selectedFeatures.set(featureId, {
+                    layer: drawResult.layer,
+                    count: drawResult.count,
+                    address: addr
+                });
+                
+                // 합산 업데이트
+                let totalPanels = 0;
+                selectedFeatures.forEach(v => totalPanels += v.count);
+                accumulatedPanelsCount = totalPanels;
+                calculateFinance(totalPanels);
+            }
+
             currentAnalysisData = { address: addr, date: new Date().toLocaleDateString() };
             currentAnalysisFeature = feature;
-            
-            drawPanels(feature.geometry); 
 
+            // AI 데이터 가져오기
             const center = turf.center(feature);
             const lng = center.geometry.coordinates[0];
             const lat = center.geometry.coordinates[1];
+            fetchAIData(lat, lng, addr);
+        }
 
+        async function fetchAIData(lat, lng, addr) {
             const loadingEl = document.getElementById('legalLoading');
             const contentEl = document.getElementById('legalContent');
             const placeholderEl = document.getElementById('legalPlaceholder');
@@ -502,7 +546,6 @@
             if(contentEl) contentEl.classList.add('hidden');
 
             try {
-                // 백엔드 종합 분석 호출
                 const res = await fetch(`${BACKEND_URL}/api/analyze/comprehensive?lat=${lat}&lng=${lng}&address=${encodeURIComponent(addr)}`);
                 const data = await res.json();
                 
@@ -510,7 +553,6 @@
                 if(contentEl) contentEl.classList.remove('hidden');
 
                 if(data.status === 'OK') {
-                     // AI 데이터 저장
                      currentAnalysisData.ai_analysis = data;
                      
                      // [수정] 일사량 반영하여 수익 재계산
