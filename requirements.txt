@@ -4,3 +4,4 @@ requests
 google-generativeai
 urllib3
 gunicorn
+flask-limiter
