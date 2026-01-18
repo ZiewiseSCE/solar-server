@@ -5,12 +5,14 @@ import sys
 import json
 import datetime
 import logging
-from flask import Flask, render_template, request, jsonify
+from functools import wraps
+from flask import Flask, render_template, request, jsonify, session
 from flask_cors import CORS
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import urllib3
 import google.generativeai as genai
+from werkzeug.security import check_password_hash, generate_password_hash
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -21,6 +23,20 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # ---------------------------------------------------------
+# Flask Session (signed cookie) 설정
+#  - 서버 저장소(Redis/DB) 없이도 로그인 유지 가능 (Cloudtype Free 환경에 적합)
+#  - 반드시 FLASK_SECRET_KEY를 환경변수로 설정하세요 (재시작해도 동일해야 함)
+# ---------------------------------------------------------
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "CHANGE-ME-IN-PROD")
+
+# 프론트/백엔드 도메인이 다른 경우(SameSite=None) 쿠키가 HTTPS에서만 동작합니다.
+COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true").lower() == "true"
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="None",
+    SESSION_COOKIE_SECURE=COOKIE_SECURE,
+)
+# ---------------------------------------------------------
 # 설정
 # ---------------------------------------------------------
 VWORLD_KEY = os.environ.get("VWORLD_KEY", "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F")
@@ -30,7 +46,7 @@ MY_DOMAIN_URL = os.environ.get("MY_DOMAIN_URL", "https://solar-server-jszy.onren
 CLIENT_TOKEN = os.environ.get("CLIENT_TOKEN", "scenergy-secret-token-2025")
 
 allowed_origins = [MY_DOMAIN_URL, "http://localhost:5000", "http://127.0.0.1:5000"]
-CORS(app, resources={r"/api/*": {"origins": allowed_origins}})
+CORS(app, resources={r"/api/*": {"origins": allowed_origins}}, supports_credentials=True)
 
 limiter = Limiter(
     get_remote_address, app=app, default_limits=["2000 per day", "100 per hour"], storage_uri="memory://"
@@ -51,6 +67,33 @@ COMMON_HEADERS = {
 if GEMINI_API_KEY: genai.configure(api_key=GEMINI_API_KEY)
 
 # ---------------------------------------------------------
+# Auth helpers (운영 권장: 환경변수 기반 + 서버에서만 비밀번호 검증)
+# ---------------------------------------------------------
+def get_auth_users():
+    """환경변수 기반 유저 목록 반환.
+    - ADMIN_ID: 기본 admin 아이디 (기본: admin)
+    - ADMIN_PW_HASH: 비밀번호 해시(권장). 없으면 개발용으로 '1234' 해시를 임시 생성.
+    """
+    admin_id = os.environ.get("ADMIN_ID", "admin")
+    admin_pw_hash = os.environ.get("ADMIN_PW_HASH")
+    if not admin_pw_hash:
+        # ⚠️ 개발용 fallback. 운영에서는 반드시 ADMIN_PW_HASH를 세팅하세요.
+        admin_pw_hash = generate_password_hash("1234")
+    return {admin_id: admin_pw_hash}
+
+
+def login_required(fn):
+    """세션 기반 로그인 체크 데코레이터"""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not session.get("user_id"):
+            return jsonify({"status": "UNAUTHORIZED"}), 401
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+
+# ---------------------------------------------------------
 # 라우트
 # ---------------------------------------------------------
 @app.route('/')
@@ -58,6 +101,43 @@ def index(): return render_template('index.html')
 
 @app.route('/health')
 def health_check(): return "OK", 200
+
+
+# ---------------------------------------------------------
+# Auth API
+# ---------------------------------------------------------
+@app.route("/api/auth/login", methods=["POST"])
+@limiter.limit("20/minute")
+def api_login():
+    data = request.get_json(silent=True) or {}
+    user_id = (data.get("id") or "").strip()
+    pw = (data.get("pw") or "").strip()
+
+    if not user_id or not pw:
+        return jsonify({"status": "ERROR", "msg": "Missing id/pw"}), 400
+
+    users = get_auth_users()
+    pw_hash = users.get(user_id)
+    if (not pw_hash) or (not check_password_hash(pw_hash, pw)):
+        return jsonify({"status": "FAIL"}), 401
+
+    session["user_id"] = user_id
+    return jsonify({"status": "OK", "user": user_id})
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def api_logout():
+    session.pop("user_id", None)
+    return jsonify({"status": "OK"})
+
+
+@app.route("/api/auth/me", methods=["GET"])
+def api_me():
+    uid = session.get("user_id")
+    if not uid:
+        return jsonify({"status": "NOLOGIN"}), 200
+    return jsonify({"status": "OK", "user": uid}), 200
+
 
 @app.route('/report', methods=['POST'])
 def report_page():
@@ -164,9 +244,8 @@ def ask_gemini(context):
 
 @app.route('/api/analyze/comprehensive', methods=['POST'])
 @limiter.limit("10/minute")
+@login_required
 def analyze_site():
-    if request.headers.get("X-CLIENT-TOKEN") != CLIENT_TOKEN:
-        return jsonify({"status": "FORBIDDEN"}), 403
 
     req = request.get_json()
     lat, lng, addr = req.get('lat'), req.get('lng'), req.get('address', '주소 미상')
