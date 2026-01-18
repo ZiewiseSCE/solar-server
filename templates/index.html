@@ -16,7 +16,7 @@
     <!-- 차트 라이브러리 -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
-    <!-- Firebase -->
+    <!-- Firebase (에러 방지용) -->
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
@@ -31,7 +31,6 @@
         .sidebar.collapsed { transform: translateX(-100%); }
         #sidebar-toggle-btn { left: 420px; transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1); z-index: 2001; }
         #sidebar-toggle-btn.collapsed { left: 0; }
-        .tab-btn { transition: all 0.2s; border-bottom: 2px solid transparent; }
         .tab-btn.active { border-bottom-color: #06b6d4; color: #06b6d4; font-weight: bold; background-color: #f8fafc; }
         .result-card { background: rgba(15, 23, 42, 0.95); border-left: 4px solid #06b6d4; backdrop-filter: blur(4px); }
         .spinner { border: 3px solid rgba(255,255,255,0.1); border-radius: 50%; border-top: 3px solid #06b6d4; width: 24px; height: 24px; animation: spin 1s linear infinite; }
@@ -57,7 +56,6 @@
     </form>
 
     <div id="login-overlay">
-        <!-- 로그인 화면 -->
         <div class="bg-slate-900 p-8 rounded-2xl shadow-2xl border border-slate-700 w-[400px] text-center relative overflow-hidden" id="login-box">
             <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500"></div>
             <div class="mb-6 relative">
@@ -94,7 +92,6 @@
         </div>
     </div>
 
-    <!-- 사이드바 -->
     <div id="sidebar" class="sidebar absolute top-0 left-0 h-full w-[420px] bg-white shadow-2xl flex flex-col border-r border-gray-200">
         <div class="p-4 bg-slate-900 text-white shadow-lg shrink-0">
             <h1 class="text-lg font-bold flex items-center gap-2"><i class="ph ph-solar-panel text-yellow-400"></i> SCEnergy 태양광 채굴기</h1>
@@ -105,15 +102,13 @@
                 <div class="bg-slate-900 rounded p-1 border border-slate-700 text-[8px]"><div class="text-slate-500">AI Analysis</div><div id="cnt-ai" class="font-mono font-bold text-purple-400">0</div></div>
             </div>
         </div>
-        <!-- 탭 메뉴 -->
         <div class="flex border-b border-gray-200 shrink-0 bg-white shadow-sm">
             <button onclick="switchTab('scan')" id="tab-scan" class="tab-btn active flex-1 py-3 text-xs text-center"><i class="ph ph-radar text-lg"></i>전수 스캔</button>
             <button onclick="switchTab('analysis')" id="tab-analysis" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-magnifying-glass-plus text-lg"></i>정밀 분석</button>
-            <button onclick="switchTab('legal')" id="tab-legal" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-sparkle text-lg text-purple-600"></i>종합 리포트</button>
+            <button onclick="switchTab('legal')" id="tab-legal" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-sparkle text-lg"></i>종합 리포트</button>
             <button onclick="switchTab('history')" id="tab-history" class="tab-btn flex-1 py-3 text-xs text-center"><i class="ph ph-clock-counter-clockwise text-lg"></i>기록</button>
         </div>
 
-        <!-- 설정 패널 -->
         <div class="flex-1 overflow-y-auto bg-slate-50">
             <div class="p-4 pb-0">
                 <details class="bg-white rounded-lg border border-slate-200 shadow-sm group mb-4" open>
@@ -294,12 +289,16 @@
     </div>
     
     <div id="sidebar-toggle-btn" onclick="toggleSidebar()" class="absolute top-1/2 transform -translate-y-1/2 bg-white w-6 h-12 rounded-r-lg shadow-md cursor-pointer flex items-center justify-center border border-l-0 border-gray-300 text-gray-400 hover:text-cyan-600"><i class="ph ph-caret-left font-bold transition-transform"></i></div>
+    
     <div class="absolute top-5 left-1/2 transform -translate-x-1/2 z-[1000] flex flex-col items-center gap-2">
         <div class="bg-white p-1 rounded-lg shadow-xl border border-slate-200 flex items-center">
-            <input type="text" id="addrInput" placeholder="주소 검색 (예: 강남대로 123)" class="w-64 px-3 py-2 text-sm outline-none text-slate-700 font-medium" onkeypress="if(event.key==='Enter') searchAddress()">
+            <input type="text" id="addrInput" placeholder="주소 검색 (예: 강남대로 123)" 
+                   class="w-64 px-3 py-2 text-sm outline-none text-slate-700 font-medium"
+                   onkeypress="if(event.key==='Enter') searchAddress()">
             <button onclick="searchAddress()" class="bg-cyan-600 hover:bg-cyan-700 text-white p-2 rounded-md transition shadow-md"><i class="ph ph-magnifying-glass font-bold"></i></button>
         </div>
     </div>
+    
     <div class="absolute top-5 right-5 z-[1000] bg-white p-2 rounded-lg shadow-lg border border-gray-200 text-xs w-44">
         <div class="font-bold text-slate-600 mb-2 border-b pb-1 flex items-center gap-1"><i class="ph ph-stack"></i> 지도 설정</div>
         <label class="flex items-center gap-2 cursor-pointer p-1.5 mb-2 bg-indigo-50 rounded text-indigo-700 font-bold border border-indigo-200"><input type="checkbox" id="multiSelectToggle" onchange="toggleMultiSelect()"><span class="flex items-center gap-1"><i class="ph ph-plus-circle"></i> 결과 누적 모드</span></label>
@@ -313,6 +312,7 @@
             <label class="flex items-center gap-2 cursor-pointer p-1 hover:bg-slate-50 rounded"><input type="radio" name="mapL" value="base" onchange="setMap('base')"> <span>🗺️ 일반 지도</span></label>
         </div>
     </div>
+
     <div id="toastMsg" class="absolute bottom-10 left-1/2 transform -translate-x-1/2 z-[3000] bg-slate-800 text-white px-6 py-3 rounded-full shadow-2xl hidden items-center gap-2 border border-cyan-500"><i class="ph ph-info text-cyan-400"></i><span class="font-bold text-sm" id="toastText"></span></div>
     <div id="map"></div>
 
@@ -321,72 +321,122 @@
         const BACKEND_URL = "https://port-0-solar-server-mkiol9jsc308f567.sel3.cloudtype.app";
         const ENCODED_ADMIN_PW = "Wmlld2lzZTEyMyE=";
 
+        // 변수 선언 (전역)
         let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, analysisMarkerGroup, existingGroup, substationGroup;
         let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
         let selectedFeatures = new Map();
         let currentAnalysisData = {}; 
         let stopScan = false;
-        const API_COUNT_KEYS = ['vworld', 'public', 'ai'];
+        let _memoryUsers = [{id:"admin", pw:"1234"}]; // 안전장치 (메모리)
+
+        const apiKeys = ['vworld', 'public', 'ai'];
+
+        // [중요] 헬퍼 함수: 로컬 스토리지 안전 접근
+        function safeGetItem(key) {
+            try { return localStorage.getItem(key); } catch(e) { return null; }
+        }
+        function safeSetItem(key, val) {
+            try { localStorage.setItem(key, val); } catch(e) { console.warn("Storage restricted"); }
+        }
 
         function trackApi(type) { 
             const el = document.getElementById(`cnt-${type}`); 
             if(el) {
                 const newCnt = parseInt(el.innerText || "0") + 1;
                 el.innerText = newCnt;
-                try { localStorage.setItem(`api_count_${type}`, newCnt); } catch(e){}
+                safeSetItem(`api_count_${type}`, newCnt);
             }
         }
-        function showToast(m) { const t = document.getElementById('toastMsg'); t.classList.remove('hidden'); t.classList.add('flex'); document.getElementById('toastText').innerText = m; setTimeout(() => t.classList.add('hidden'), 3000); }
-        function logSystem(msg) { const w = document.getElementById('logWindow'); if(w) { const p = document.createElement('div'); p.innerText = `> ${msg}`; w.appendChild(p); w.scrollTop = w.scrollHeight; } }
 
-        function getUsers() {
-            try { return JSON.parse(localStorage.getItem('scenergy_users')) || []; } catch(e) { return []; }
+        function showToast(m) { 
+            const t = document.getElementById('toastMsg'); 
+            const text = document.getElementById('toastText');
+            if(t && text) {
+                t.classList.remove('hidden'); 
+                t.classList.add('flex'); 
+                text.innerText = m; 
+                setTimeout(() => t.classList.add('hidden'), 3000); 
+            }
+        }
+        
+        function logSystem(msg) { 
+            const w = document.getElementById('logWindow'); 
+            if(w) { 
+                const p = document.createElement('div'); 
+                p.innerText = `> ${msg}`; 
+                w.appendChild(p); 
+                w.scrollTop = w.scrollHeight; 
+            } 
         }
 
         function initMap() {
             if (map) return;
-            if (typeof L === 'undefined') return;
+            if (typeof L === 'undefined') {
+                logSystem("Error: Leaflet library not loaded.");
+                return;
+            }
 
-            map = L.map('map', { zoomControl: false }).setView([36.5, 127.5], 7);
-            L.control.zoom({ position: 'bottomright' }).addTo(map);
-            
-            layers = { 
-                base: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Base/{z}/{y}/{x}.png`), 
-                sat: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Satellite/{z}/{y}/{x}.jpeg`),
-                hybrid: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Hybrid/{z}/{y}/{x}.png`) 
-            };
-            layers.sat.addTo(map);
-            
-            selectableGroup = L.layerGroup().addTo(map); 
-            panelGroup = L.layerGroup().addTo(map); 
-            analysisMarkerGroup = L.layerGroup().addTo(map);
-            existingGroup = L.layerGroup().addTo(map); 
-            substationGroup = L.layerGroup().addTo(map);
-            
-            cadastralLayer = L.tileLayer.wms('https://api.vworld.kr/req/wms/1.0.0', { layers: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', styles: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', format: 'image/png', transparent: true, opacity: 0.7, key: VWORLD_TILE_KEY });
-            map.addLayer(cadastralLayer);
-            map.on('click', (e) => scanBuildings(e.latlng.lat, e.latlng.lng));
-            map.on('moveend', () => { if(autoScanMode && isLoggedIn) { const c = map.getCenter(); scanBuildings(c.lat, c.lng); } });
-            
-            if(document.getElementById('existingPlantToggle').checked) toggleLayer('existing');
-            if(document.getElementById('substationToggle').checked) toggleLayer('substation');
+            try {
+                map = L.map('map', { zoomControl: false }).setView([36.5, 127.5], 7);
+                L.control.zoom({ position: 'bottomright' }).addTo(map);
+                
+                layers = { 
+                    base: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Base/{z}/{y}/{x}.png`), 
+                    sat: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Satellite/{z}/{y}/{x}.jpeg`),
+                    hybrid: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Hybrid/{z}/{y}/{x}.png`) 
+                };
+                layers.sat.addTo(map);
+                
+                selectableGroup = L.layerGroup().addTo(map); 
+                panelGroup = L.layerGroup().addTo(map); 
+                analysisMarkerGroup = L.layerGroup().addTo(map);
+                existingGroup = L.layerGroup().addTo(map); 
+                substationGroup = L.layerGroup().addTo(map);
+                
+                cadastralLayer = L.tileLayer.wms('https://api.vworld.kr/req/wms/1.0.0', { 
+                    layers: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', 
+                    styles: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', 
+                    format: 'image/png', 
+                    transparent: true, 
+                    opacity: 0.7, 
+                    key: VWORLD_TILE_KEY 
+                });
+                
+                map.addLayer(cadastralLayer);
+                map.on('click', (e) => scanBuildings(e.latlng.lat, e.latlng.lng));
+                map.on('moveend', () => { 
+                    if(autoScanMode && isLoggedIn) { 
+                        const c = map.getCenter(); 
+                        scanBuildings(c.lat, c.lng); 
+                    } 
+                });
+                
+                if(document.getElementById('existingPlantToggle').checked) toggleLayer('existing');
+                if(document.getElementById('substationToggle').checked) toggleLayer('substation');
 
-            API_COUNT_KEYS.forEach(k => {
-                let cnt="0"; try { cnt = localStorage.getItem(`api_count_${k}`) || "0"; } catch(e){}
-                const el = document.getElementById(`cnt-${k}`);
-                if(el) el.innerText = cnt;
-            });
-            logSystem("Map Initialized.");
+                apiKeys.forEach(k => {
+                    let cnt = safeGetItem(`api_count_${k}`) || "0";
+                    const el = document.getElementById(`cnt-${k}`);
+                    if(el) el.innerText = cnt;
+                });
+                logSystem("Map Initialized.");
+            } catch (e) {
+                console.error("Map Init Error:", e);
+                logSystem("Map Init Failed.");
+            }
         }
 
         function toggleLayer(type) {
             if(!map) return;
             if(type === 'cadastral') {
-                if(document.getElementById('cadastralToggle').checked) map.addLayer(cadastralLayer); else map.removeLayer(cadastralLayer);
+                if(document.getElementById('cadastralToggle').checked) map.addLayer(cadastralLayer);
+                else map.removeLayer(cadastralLayer);
             } else if(type === 'existing') {
-                if(document.getElementById('existingPlantToggle').checked) { createMockMarkers(map.getCenter(), 'plant'); map.addLayer(existingGroup); } else { existingGroup.clearLayers(); map.removeLayer(existingGroup); }
+                if(document.getElementById('existingPlantToggle').checked) { createMockMarkers(map.getCenter(), 'plant'); map.addLayer(existingGroup); }
+                else { existingGroup.clearLayers(); map.removeLayer(existingGroup); }
             } else if(type === 'substation') {
-                if(document.getElementById('substationToggle').checked) { createMockMarkers(map.getCenter(), 'substation'); map.addLayer(substationGroup); } else { substationGroup.clearLayers(); map.removeLayer(substationGroup); }
+                if(document.getElementById('substationToggle').checked) { createMockMarkers(map.getCenter(), 'substation'); map.addLayer(substationGroup); }
+                else { substationGroup.clearLayers(); map.removeLayer(substationGroup); }
             }
         }
 
@@ -411,11 +461,20 @@
         async function jsonpRequest(url) {
             return new Promise((resolve, reject) => {
                 const callbackName = 'jsonp_callback_' + Math.round(100000 * Math.random());
-                window[callbackName] = (data) => { delete window[callbackName]; document.body.removeChild(script); resolve(data); };
+                window[callbackName] = (data) => { 
+                    delete window[callbackName]; 
+                    const script = document.getElementById(callbackName);
+                    if(script) document.body.removeChild(script); 
+                    resolve(data); 
+                };
                 const script = document.createElement('script');
                 script.id = callbackName;
                 script.src = `${url}&format=json&callback=${callbackName}&domain=${window.location.hostname}`;
-                script.onerror = () => { delete window[callbackName]; document.body.removeChild(script); reject(new Error('JSONP failed')); };
+                script.onerror = () => { 
+                    delete window[callbackName]; 
+                    document.body.removeChild(script); 
+                    reject(new Error('JSONP failed')); 
+                };
                 document.body.appendChild(script);
             });
         }
@@ -451,7 +510,10 @@
                 const data = await jsonpRequest(url);
                 if(data.response?.status === 'OK') {
                     L.geoJSON(data.response.result.featureCollection.features, {
-                        style: scanTarget === 'land' ? { color: '#5d4037', weight: 3, fillColor: '#5d4037', fillOpacity: 0.1 } : { color: '#3b82f6', weight: 2, fillOpacity: 0.2 },
+                        // 토지 모드: 다크브라운(#5d4037) 테두리 + 투명도 0.3
+                        style: scanTarget === 'land' 
+                            ? { color: '#5d4037', weight: 3, fillColor: '#5d4037', fillOpacity: 0.3 } 
+                            : { color: '#3b82f6', weight: 2, fillOpacity: 0.3 },
                         onEachFeature: (feature, layer) => { layer.on('click', () => analyzeFeature(feature)); }
                     }).addTo(selectableGroup);
                 }
@@ -477,7 +539,8 @@
             switchTab('analysis');
             const props = feature.properties;
             const addr = props.road_nm_ad || props.jibun_addr || props.addr || `PNU:${props.pnu}` || "주소 미상";
-            document.getElementById('analysisAddress').innerText = addr;
+            const addrEl = document.getElementById('analysisAddress');
+            if(addrEl) addrEl.innerText = addr;
             
             const drawResult = drawPanels(feature.geometry); 
             if (drawResult) {
@@ -515,7 +578,8 @@
                 if(data.status === 'OK') {
                      currentAnalysisData.ai_analysis = data;
                      if(data.sun_hours) calculateFinance(accumulatedPanelsCount, data.sun_hours);
-                     document.getElementById('aiCommentBox').innerText = data.ai_comment || "분석 완료";
+                     const cb = document.getElementById('aiCommentBox');
+                     if(cb) cb.innerText = data.ai_comment || "분석 완료";
 
                      let score = 55;
                      if (data.zoning.includes("계획관리")) score += 25;
@@ -548,7 +612,8 @@
                         </div>
                      `).join('');
                 }
-            } catch(e) { console.error(e); }
+                return data;
+            } catch(e) { console.error(e); return null; }
         }
 
         function calculateFinance(count, sunHoursOverride) { 
@@ -572,12 +637,12 @@
             const netIncome = annualRev - annualInterest;
             const payback = netIncome > 0 ? (totalCost / netIncome).toFixed(1) : 99;
 
-            document.getElementById('resTotalCost').innerText = `${Math.round(totalCost).toLocaleString()} 원`;
-            document.getElementById('resAnnualRev').innerText = `${Math.round(annualRev).toLocaleString()} 원`;
-            document.getElementById('resLoanAmount').innerText = `${Math.round(loan).toLocaleString()} 원`;
-            document.getElementById('resEquityAmount').innerText = `${Math.round(totalCost - loan).toLocaleString()} 원`;
-            document.getElementById('resInterest').innerText = `${Math.round(annualInterest).toLocaleString()} 원`;
-            document.getElementById('resPfPayback').innerText = `${payback} 년`;
+            const tcEl = document.getElementById('resTotalCost');
+            if(tcEl) tcEl.innerText = `${Math.round(totalCost).toLocaleString()} 원`;
+            const arEl = document.getElementById('resAnnualRev');
+            if(arEl) arEl.innerText = `${Math.round(annualRev).toLocaleString()} 원`;
+            const pbEl = document.getElementById('resPfPayback');
+            if(pbEl) pbEl.innerText = `${payback} 년`;
 
             currentAnalysisData.finance = {
                 capacity: `${capKw.toFixed(1)} kW`, totalCost: `${Math.round(totalCost).toLocaleString()} 원`,
@@ -597,7 +662,8 @@
                 }
                 const modW = parseFloat(document.getElementById('modWidth').value);
                 const modH = parseFloat(document.getElementById('modHeight').value);
-                const projectedH = modH * Math.cos(parseFloat(document.getElementById('installAngle').value) * Math.PI / 180);
+                const angle = parseFloat(document.getElementById('installAngle').value);
+                const projectedH = modH * Math.cos(angle * Math.PI / 180);
                 const dLng = (modW + 0.1) / 88800; const dLat = (projectedH + 0.1) / 111000;
                 
                 const bbox = turf.bbox(poly);
@@ -619,36 +685,40 @@
                 if (tempPanels.length === 0) {
                     const center = turf.center(poly);
                     const [cx, cy] = center.geometry.coordinates;
-                    newLayer = L.geoJSON(turf.bboxPolygon([cx, cy, cx+dLng, cy+dLat]), { style: { color: 'red', fillColor: '#ef4444', fillOpacity: 0.5 } });
+                    const fallback = turf.bboxPolygon([cx, cy, cx+dLng, cy+dLat]);
+                    newLayer = L.geoJSON(fallback, { style: { color: 'red', fillColor: '#ef4444', fillOpacity: 0.5 } });
                     count = 1;
                     showToast("영역이 작아 최소 패널 1개를 배치했습니다.");
                 } else {
                     newLayer = L.geoJSON({type:"FeatureCollection", features: tempPanels}, {
-                        style: scanTarget === 'land' ? { color: '#5d4037', weight: 1, fillColor: '#5d4037', fillOpacity: 0.1 } : { color: '#1e40af', weight: 1, fillColor: '#3b82f6', fillOpacity: 0.7 }
+                        style: scanTarget === 'land' ? { color: '#5d4037', weight: 1, fillColor: '#5d4037', fillOpacity: 0.3 } : { color: '#1e40af', weight: 1, fillColor: '#3b82f6', fillOpacity: 0.3 }
                     });
                 }
                 
                 newLayer.addTo(panelGroup);
                 return { layer: newLayer, count: count };
-            } catch(e) { console.error(e); return null; } 
+            } catch(e) { console.error("Panel Draw Error:", e); return null; } 
         }
 
-        function saveResult() {
+        // 저장 및 리포트 관련
+        window.saveResult = function() {
             const addr = document.getElementById('analysisAddress').innerText;
             if(addr === '-' || addr === '주소 미상') return showToast("저장할 데이터가 없습니다.");
             const ai = currentAnalysisData.ai_analysis || {};
             const fn = currentAnalysisData.finance || {};
-            let history = JSON.parse(localStorage.getItem('scenergy_history') || "[]");
+            let history = [];
+            try { history = JSON.parse(safeGetItem('scenergy_history') || "[]"); } catch(e){}
             history.push({ 
                 date: new Date().toLocaleString(), address: addr, capacity: fn.capacity, revenue: fn.annualRev,
                 zoning: ai.zoning, jimok: ai.jimok, eco: ai.eco_grade, kepco: ai.kepco_capacity, sun: ai.sun_hours, score: ai.score, price: ai.price
             });
-            localStorage.setItem('scenergy_history', JSON.stringify(history));
+            safeSetItem('scenergy_history', JSON.stringify(history));
             updateHistoryList(); showToast("상세 정보 저장 완료");
         }
 
-        function downloadCSV() {
-            const history = JSON.parse(localStorage.getItem('scenergy_history') || "[]");
+        window.downloadCSV = function() {
+            let history = [];
+            try { history = JSON.parse(safeGetItem('scenergy_history') || "[]"); } catch(e){}
             if(history.length === 0) return showToast("데이터가 없습니다.");
             const headers = ["날짜", "주소", "용량", "연수익", "용도지역", "지목", "생태등급", "한전용량", "일사량", "AI점수", "추정땅값"];
             const csvRows = [headers.join(",")];
@@ -664,7 +734,8 @@
         function updateHistoryList() {
             const listEl = document.getElementById('historyList');
             if(!listEl) return;
-            const history = JSON.parse(localStorage.getItem('scenergy_history') || "[]");
+            let history = [];
+            try { history = JSON.parse(safeGetItem('scenergy_history') || "[]"); } catch(e){}
             if(history.length === 0) { listEl.innerHTML = '<p class="text-center py-4">기록 없음</p>'; return; }
             listEl.innerHTML = history.slice().reverse().map(h => `
                 <div class="bg-slate-50 p-2 rounded border border-slate-200 text-xs mb-1">
@@ -674,7 +745,7 @@
             `).join('');
         }
 
-        function clearHistory() { if(confirm("전체 삭제?")) { localStorage.removeItem('scenergy_history'); updateHistoryList(); } }
+        window.clearHistory = function() { if(confirm("전체 삭제?")) { safeSetItem('scenergy_history', "[]"); updateHistoryList(); } };
         
         function clearResults() { 
             if(panelGroup) panelGroup.clearLayers(); 
@@ -687,12 +758,34 @@
             currentAnalysisData = {};
         }
 
-        function resetCalibration() { currentGeoState={x:0,y:0,rot:0}; if(currentAnalysisFeature) drawPanels(currentAnalysisFeature.geometry); }
-        function applyCalibration(dx, dy, drot = 0) { currentGeoState.x += dx * 5; currentGeoState.y += dy * 5; currentGeoState.rot += drot; if(currentAnalysisFeature) { panelGroup.clearLayers(); drawPanels(currentAnalysisFeature.geometry); } }
-        function toggleMultiSelect() { isMultiSelectMode=document.getElementById('multiSelectToggle').checked; clearResults(); }
-        function toggleAutoScan() { autoScanMode=document.getElementById('autoScanToggle').checked; }
+        window.resetCalibration = function() { 
+            currentGeoState = { x: 0, y: 0, rot: 0 }; 
+            if(currentAnalysisFeature) { 
+                panelGroup.clearLayers(); 
+                window.drawPanels(currentAnalysisFeature.geometry); 
+            } 
+        };
         
-        function switchTab(m) { 
+        window.applyCalibration = function(dx, dy, drot = 0) { 
+            currentGeoState.x += dx * 5; 
+            currentGeoState.y += dy * 5; 
+            currentGeoState.rot += drot; 
+            if(currentAnalysisFeature) { 
+                panelGroup.clearLayers(); 
+                window.drawPanels(currentAnalysisFeature.geometry); 
+            } 
+        };
+        
+        window.toggleMultiSelect = function() { 
+            isMultiSelectMode = document.getElementById('multiSelectToggle').checked; 
+            window.clearResults(); 
+        };
+        
+        window.toggleAutoScan = function() { 
+            autoScanMode = document.getElementById('autoScanToggle').checked; 
+        };
+        
+        window.switchTab = function(m) { 
             const tabs = ['scan','analysis','legal','history'];
             tabs.forEach(t => {
                 const btn = document.getElementById(`tab-${t}`);
@@ -706,28 +799,28 @@
             if(activePanel) activePanel.classList.remove('hidden');
         }
 
-        function toggleTarget() { 
+        window.toggleTarget = function() { 
             const els = document.getElementsByName('scanTarget'); 
             els.forEach(e => { if(e.checked) scanTarget = e.value; }); 
-            clearResults(); 
-            showToast(`모드 변경: ${scanTarget === 'land' ? '토지' : '지붕'}`);
-        }
+            window.clearResults(); 
+            window.showToast(`모드 변경: ${scanTarget === 'land' ? '토지' : '지붕'}`);
+        };
 
-        function updateEstimatedTime() { 
+        window.updateEstimatedTime = function() { 
             const d = parseInt(document.getElementById('scanDelay').value || "6000"); 
             const tr = document.getElementById('timerRemaining');
             if(tr) tr.innerText = `약 ${Math.floor(d*20/1000/60)}분 ${Math.floor(d*20/1000%60)}초`; 
-        }
+        };
 
-        async function startMission() {
+        window.startMission = async function() {
             if(!map) return;
             const bounds = map.getBounds(); 
             const latStep = (bounds.getNorth()-bounds.getSouth())/4, lngStep = (bounds.getEast()-bounds.getWest())/5;
             const delay = parseInt(document.getElementById('scanDelay').value || "6000");
-            showToast("순차적 스캔 시작");
+            window.showToast("순차적 스캔 시작");
             for (let i = 0; i < 20; i++) {
                 const r = Math.floor(i/5), c = i%5;
-                await scanBuildings(bounds.getSouth() + latStep*(r+0.5), bounds.getWest() + lngStep*(c+0.5));
+                await window.scanBuildings(bounds.getSouth() + latStep*(r+0.5), bounds.getWest() + lngStep*(c+0.5));
                 const fc = document.getElementById('foundCount');
                 if(fc) fc.innerText = `검색된 구역: ${selectableGroup.getLayers().length}개`;
                 const pc = document.getElementById('progressCount');
@@ -736,10 +829,10 @@
                 if(pb) pb.style.width = `${((i+1)/20)*100}%`;
                 await new Promise(r => setTimeout(r, delay));
             }
-            showToast("스캔 미션 완료");
-        }
+            window.showToast("스캔 미션 완료");
+        };
 
-        function setRegion() { 
+        window.setRegion = function() { 
             if(!map) return;
             const val = document.getElementById('regionSelect').value; 
             const REGIONS = {
@@ -753,18 +846,37 @@
             const bounds = REGIONS[val]; 
             if(bounds) { 
                 map.setView(bounds[0], 15); 
-                scanBuildings(bounds[0][0], bounds[0][1]); 
-                showToast("지역 이동"); 
+                window.scanBuildings(bounds[0][0], bounds[0][1]); 
+                window.showToast("지역 이동"); 
             }
-        }
+        };
         
-        function toggleSidebar() { 
+        window.toggleSidebar = function() { 
             document.getElementById('sidebar').classList.toggle('collapsed'); 
             document.getElementById('sidebar-toggle-btn').classList.toggle('collapsed'); 
+        };
+
+        // 로컬 스토리지 헬퍼 함수 (안전장치)
+        function safeGetItem(key) {
+            try { return localStorage.getItem(key); } catch(e) { 
+                return window._memoryUsers ? JSON.stringify(window._memoryUsers) : null; 
+            }
+        }
+        function safeSetItem(key, val) {
+            try { localStorage.setItem(key, val); } catch(e) { }
         }
 
+        // 초기화 (로그인 체크 및 자동 로그인 시도)
         window.onload = function() {
-            updateEstimatedTime();
+            window.updateEstimatedTime();
+            // 기본값 설정 (없을 경우에만) - 안전하게 처리
+            try {
+                let u = safeGetItem('scenergy_users');
+                if(!u) {
+                     // 초기 사용자 설정 로직 (필요 시 활성화)
+                     // safeSetItem('scenergy_users', JSON.stringify([{id:"admin", pw:"1234"}]));
+                }
+            } catch(e){}
             logSystem("System Ready.");
         };
     </script>
