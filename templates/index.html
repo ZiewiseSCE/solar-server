@@ -316,19 +316,24 @@
 
     <script>
         const VWORLD_TILE_KEY = "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F"; 
-        const BACKEND_URL = "";
+        const BACKEND_URL = ""; window.BACKEND_URL = BACKEND_URL;
         const CLIENT_TOKEN = "scenergy-secret-token-2025";
         const ENCODED_ADMIN_PW = "Wmlld2lzZTEyMyE=";
 
         let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, analysisMarkerGroup, existingGroup, substationGroup;
         let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
         let selectedFeatures = new Map();
-        let currentAnalysisData = {};
+        let currentAnalysisData = {}; window.currentAnalysisData = currentAnalysisData; window.currentAnalysisData = currentAnalysisData;
         // ✅ 패널 교정(캘리브레이션)용: 최초 계산된 패널(기준) 피처컬렉션 저장
         let _basePanelsFC = null;
         let _currentPanelsLayer = null;
  
         let stopScan = false;
+        let missionTimerInterval = null;
+        let missionEndAt = null;
+        let _missionPanning = false;
+        let scanResultIds = new Set();
+        let scanResultCount = 0;
         let scanLock = false; 
         
         let _memoryUsers = [{id:"admin", pw:"1234"}]; 
@@ -420,7 +425,7 @@ catch(e) { console.warn("Storage restricted"); }
                 map.on('click', (e) => window.scanBuildings(e.latlng.lat, e.latlng.lng));
                 map.on('moveend', () => { 
                     if(autoScanMode && isLoggedIn) { 
-                        if(document.getElementById('autoFollow')?.checked) return;
+                        if(_missionPanning) return;
                         const c = map.getCenter(); 
                         window.scanBuildings(c.lat, c.lng); 
                     } 
@@ -516,17 +521,23 @@ catch(e) { console.warn("Storage restricted"); }
             } catch(e) { console.error(e); } finally { if(loading) loading.classList.add('hidden'); }
         };
 
-        window.scanBuildings = async function(lat, lng, force=false) {
+        window.scanBuildings = async function(lat, lng, force=false, opts={}) {
             if (!map || (scanLock && !force)) return;
             scanLock = true;
             try {
                 window.trackApi('vworld');
-                // [수정] 멀티 모드가 아닐 때만 기존 선택 레이어 삭제 (선택된건 panelGroup에 보존)
-                if (!isMultiSelectMode) {
-                    if (selectableGroup) selectableGroup.clearLayers();
-                    window.clearResults();
-                } else {
-                     if (selectableGroup) selectableGroup.clearLayers();
+                const append = !!opts.append;
+                const keepAnalysis = !!opts.keepAnalysis;
+
+                // 결과 초기화/누적 제어
+                if (!append) {
+                    // 멀티 모드가 아닐 때만 기존 선택 레이어 삭제 (선택된건 panelGroup에 보존)
+                    if (!isMultiSelectMode) {
+                        if (selectableGroup) selectableGroup.clearLayers();
+                        if (!keepAnalysis) window.clearResults();
+                    } else {
+                        if (selectableGroup) selectableGroup.clearLayers();
+                    }
                 }
 
                 if (analysisMarkerGroup) analysisMarkerGroup.clearLayers();
@@ -538,7 +549,25 @@ catch(e) { console.warn("Storage restricted"); }
                 const data = await jsonpRequest(url);
                 
                 if(data.response?.status === 'OK') {
-                    L.geoJSON(data.response.result.featureCollection.features, {
+                    const feats = data.response.result.featureCollection.features || [];
+                    let renderFeats = feats;
+                    if (append) {
+                        renderFeats = feats.filter(f => {
+                            try {
+                                let id = f?.properties?.pnu || f?.properties?.UFID || f?.properties?.OBJECTID || f?.properties?.FID;
+                                if (!id) {
+                                    const first = f?.geometry?.coordinates?.[0]?.[0];
+                                    id = first ? first.join(',') : JSON.stringify(f?.geometry);
+                                }
+                                if (scanResultIds.has(id)) return false;
+                                scanResultIds.add(id);
+                                return true;
+                            } catch(e) { return true; }
+                        });
+                        scanResultCount += renderFeats.length;
+                    }
+
+                    L.geoJSON(renderFeats, {
                         // [수정] 토지: 밝은 브라운(#8d6e63) 테두리 + 투명도 0.4
                         style: scanTarget === 'land' 
                             ? { color: '#8d6e63', weight: 3, fillColor: '#8d6e63', fillOpacity: 0.4 } 
@@ -584,7 +613,7 @@ catch(e) { console.warn("Storage restricted"); }
             const addr = props.road_nm_ad || props.jibun_addr || props.addr || `PNU:${props.pnu}` || "주소 미상";
             document.getElementById('analysisAddress').innerText = addr;
             
-            const drawResult = window.drawPanels(feature.geometry); 
+            const drawResult = window.drawPanels(feature.geometry, { keepExisting: isMultiSelectMode }); 
             if (drawResult) {
                 selectedFeatures.set(featureId, { layer: drawResult.layer, count: drawResult.count, address: addr });
                 let total = 0; selectedFeatures.forEach(v => total += v.count);
@@ -592,7 +621,9 @@ catch(e) { console.warn("Storage restricted"); }
                 window.calculateFinance(total);
             }
 
-            currentAnalysisData = { address: addr, date: new Date().toLocaleDateString() };
+            currentAnalysisData.address = addr;
+            currentAnalysisData.date = new Date().toLocaleDateString();
+            window.currentAnalysisData = currentAnalysisData;
             currentAnalysisFeature = feature;
             
             window.fetchAIData(center[1], center[0], addr);
@@ -628,6 +659,9 @@ catch(e) { console.warn("Storage restricted"); }
                      currentAnalysisData.ai_analysis = data;
                      // [수정] 데이터 무결성 보장
                      if(data.kepco_capacity) currentAnalysisData.ai_analysis.kepco_capacity = data.kepco_capacity;
+                     const kcEl = document.getElementById('kepcoCapacity');
+                     if(kcEl) kcEl.innerText = data.kepco_capacity || '-';
+                     window.currentAnalysisData = currentAnalysisData;
 
                      if(data.sun_hours) window.calculateFinance(accumulatedPanelsCount, data.sun_hours);
                      const cb = document.getElementById('aiCommentBox');
@@ -646,12 +680,17 @@ catch(e) { console.warn("Storage restricted"); }
                      }
 
                      const resultContainer = document.getElementById('aiAnalysisResult');
+                     const links = data.links || {};
+                     const flags = (data.ai_score?.risk_flags && data.ai_score.risk_flags.length) ? data.ai_score.risk_flags.join(', ') : '없음';
                      const items = [
-                        {icon: 'ph-buildings', title: '용도지역', val: data.zoning, link: data.links.eum},
-                        {icon: 'ph-map-trifold', title: '지목', val: data.jimok || '미확인', link: data.links.eum},
-                        {icon: 'ph-plant', title: '생태등급', val: data.eco_grade, link: data.links.heritage},
-                        {icon: 'ph-lightning', title: '한전용량', val: data.kepco_capacity, link: data.links.kepco},
-                        {icon: 'ph-sun', title: '일사량', val: `${data.sun_hours}시간/일`, link: '#'}
+                        {icon: 'ph-buildings', title: '용도지역', val: data.zoning, link: links.eum},
+                        {icon: 'ph-map-trifold', title: '지목', val: data.jimok || '미확인', link: links.eum},
+                        {icon: 'ph-plant', title: '생태등급', val: data.eco_grade, link: links.heritage},
+                        {icon: 'ph-shield-warning', title: '환경검토', val: data.env_assessment || '-', link: links.neins},
+                        {icon: 'ph-lightning', title: '한전용량', val: data.kepco_capacity, link: links.kepco},
+                        {icon: 'ph-sun', title: '일사량', val: `${data.sun_hours}시간/일`, link: '#'},
+                        {icon: 'ph-chart-line-up', title: 'AI 점수/등급', val: `${data.ai_score?.score ?? '-'}점 (${data.ai_score?.grade ?? '-'}) · 리스크:${flags}`, link: links.elis},
+                        {icon: 'ph-tag', title: '추정지가', val: data.price_estimate || '-', link: links.eum}
                      ];
                      resultContainer.innerHTML = items.map(item => `
                         <div class="bg-slate-700/50 p-2 rounded border border-slate-600 flex justify-between items-center text-[10px]">
@@ -750,6 +789,8 @@ catch(e) { console.warn("Storage restricted"); }
             // ---- Store for report
             currentAnalysisData.finance = {
                 acCapacity: `${acKw.toFixed(1)} kW`,
+                capacity: `${acKw.toFixed(1)} kW`,
+                panelsCount: count,
                 dcCapacity: `${dcKw.toFixed(1)} kW`,
                 annualKwh: `${Math.round(annualKwh).toLocaleString()} kWh`,
                 annualRev: `${Math.round(annualRev).toLocaleString()} 원`,
@@ -834,19 +875,23 @@ catch(e) { console.warn("Storage restricted"); }
             return fc;
         }
 
-        window.drawPanels = function(geo) {
+        window.drawPanels = function(geo, opts={}) {
             try {
+                const keepExisting = !!opts.keepExisting;
+
                 // 1) 최초 클릭 시에는 그리드 계산
                 const built = _buildPanelsGrid(geo);
                 _basePanelsFC = built.fc;
 
-                // 2) 즉시 렌더(기준 상태)
-                if (_currentPanelsLayer) {
+                // 2) 렌더
+                if (!keepExisting && _currentPanelsLayer) {
                     panelGroup.removeLayer(_currentPanelsLayer);
                 }
-                _currentPanelsLayer = _renderPanels(_basePanelsFC);
+                const layer = _renderPanels(_basePanelsFC);
 
-                return { layer: _currentPanelsLayer, count: built.count, fc: _basePanelsFC };
+                if (!keepExisting) _currentPanelsLayer = layer;
+
+                return { layer, count: built.count, fc: _basePanelsFC };
             } catch(e) { console.error("Panel Draw Error:", e); return null; } 
         };
 
@@ -912,7 +957,7 @@ catch(e) { console.warn("Storage restricted"); }
             document.getElementById('aiScorePanel').classList.add('hidden');
             document.getElementById('legalPlaceholder').classList.remove('hidden');
 
-            currentAnalysisData = {};
+            currentAnalysisData = {}; window.currentAnalysisData = currentAnalysisData;
         };
 
         window.resetCalibration = function() { 
@@ -980,11 +1025,20 @@ catch(e) { console.warn("Storage restricted"); }
             if(map) { const c = map.getCenter(); window.scanBuildings(c.lat, c.lng, true); }
         };
 
+        function formatHMS(ms){
+            ms = Math.max(0, Math.floor(ms));
+            const s = Math.floor(ms/1000);
+            const hh = String(Math.floor(s/3600)).padStart(2,'0');
+            const mm = String(Math.floor((s%3600)/60)).padStart(2,'0');
+            const ss = String(s%60).padStart(2,'0');
+            return `${hh}:${mm}:${ss}`;
+        }
+
         window.updateEstimatedTime = function() { 
             const d = parseInt(document.getElementById('scanDelay').value || "6000"); 
             const tr = document.getElementById('timerRemaining');
-            if(tr) tr.innerText = `약 ${Math.floor(d*20/1000/60)}분 ${Math.floor(d*20/1000%60)}초`; 
-        };
+            if(tr) tr.innerText = formatHMS(d*20);
+            };
 
         window.startMission = async function() {
             if(!map) return;
@@ -992,23 +1046,66 @@ catch(e) { console.warn("Storage restricted"); }
             const latStep = (bounds.getNorth()-bounds.getSouth())/4, lngStep = (bounds.getEast()-bounds.getWest())/5;
             const delay = parseInt(document.getElementById('scanDelay').value || "6000");
             stopScan = false;
+
+            // ✅ 미션 스캔 결과 누적(중복 방지)
+            scanResultIds = new Set();
+            scanResultCount = 0;
+            if (selectableGroup) selectableGroup.clearLayers();
+
             const btn = document.getElementById('startBtn');
             btn.innerText = "■ 중지";
             btn.onclick = () => { stopScan = true; };
-            
+
+            // ✅ 카운트다운(예상)
+            missionEndAt = Date.now() + delay*20;
+            const tr = document.getElementById('timerRemaining');
+            if (missionTimerInterval) { try { clearInterval(missionTimerInterval); } catch(e){} }
+            missionTimerInterval = setInterval(() => {
+                if (!missionEndAt) return;
+                const rem = missionEndAt - Date.now();
+                if (tr) tr.innerText = formatHMS(rem);
+            }, 250);
+
             window.showToast("순차적 스캔 시작");
             for (let i = 0; i < 20; i++) {
                 if(stopScan) { window.showToast("스캔 중지됨"); break; }
                 const r = Math.floor(i/5), c = i%5;
-                await window.scanBuildings(bounds.getSouth() + latStep*(r+0.5), bounds.getWest() + lngStep*(c+0.5), true);
+                const lat = bounds.getSouth() + latStep*(r+0.5);
+                const lng = bounds.getWest() + lngStep*(c+0.5);
+
+                // ✅ 지도 자동 따라가기
+                if (document.getElementById('autoFollow')?.checked) {
+                    _missionPanning = true;
+                    try {
+                        const z = Math.max(map.getZoom(), 18);
+                        map.setView([lat, lng], z, { animate: true });
+                    } catch(e) {}
+                    setTimeout(() => { _missionPanning = false; }, 700);
+                }
+
+                await window.scanBuildings(lat, lng, true, { append: true, keepAnalysis: true });
+
                 const fc = document.getElementById('foundCount');
-                if(fc) fc.innerText = `검색된 구역: ${selectableGroup.getLayers().length}개`;
+                if(fc) fc.innerText = `검색된 구역: ${scanResultIds.size}개`;
+
                 const pc = document.getElementById('progressCount');
                 if(pc) pc.innerText = `${i+1} / 20`;
+
                 const pb = document.getElementById('totalProgressBar');
                 if(pb) pb.style.width = `${((i+1)/20)*100}%`;
+
+                // 다음 스텝 기준으로 남은시간 재계산(예상)
+                missionEndAt = Date.now() + delay*(20-(i+1));
+
                 await new Promise(r => setTimeout(r, delay));
             }
+
+            // cleanup
+            if (missionTimerInterval) { try { clearInterval(missionTimerInterval); } catch(e){} }
+            missionTimerInterval = null;
+            missionEndAt = null;
+            if (tr) tr.innerText = "00:00:00";
+
             btn.innerText = "▶ 스캔 시작";
             btn.onclick = window.startMission;
             if(!stopScan) window.showToast("스캔 미션 완료");
@@ -1256,22 +1353,25 @@ window.reCalculate = function() {
 
 // --- Full report submit ---
 window.openFullReport = function() {
-  if (!window.currentAnalysisData?.finance) return window.showToast?.("먼저 분석을 수행해주세요.");
+  const cad = window.currentAnalysisData || currentAnalysisData;
+  if (!cad?.finance) return window.showToast?.("먼저 지붕/토지를 클릭해 분석을 수행해주세요.");
 
   const form = document.getElementById('reportForm');
   if (!form) return window.showToast?.("리포트 폼이 없습니다.");
 
-  document.getElementById('form_address').value = window.currentAnalysisData.address || '';
-  document.getElementById('form_capacity').value = window.currentAnalysisData.finance.capacity || '';
-  document.getElementById('form_kepco').value = window.currentAnalysisData?.ai_analysis?.kepco_capacity || '정보 없음';
-  document.getElementById('form_date').value = window.currentAnalysisData.date || new Date().toLocaleDateString();
-  document.getElementById('form_finance').value = JSON.stringify(window.currentAnalysisData.finance || {});
-  document.getElementById('form_ai').value = JSON.stringify(window.currentAnalysisData.ai_analysis || {});
+  const finance = cad.finance || {};
+  const ai = cad.ai_analysis || {};
 
-  // BACKEND_URL should exist
-  if (typeof window.BACKEND_URL !== 'undefined') {
-    form.action = window.BACKEND_URL + "/report";
-  }
+  document.getElementById('form_address').value = cad.address || '';
+  document.getElementById('form_capacity').value = finance.capacity || finance.acCapacity || '';
+  document.getElementById('form_kepco').value = ai.kepco_capacity || '정보 없음';
+  document.getElementById('form_date').value = cad.date || new Date().toLocaleDateString();
+  document.getElementById('form_finance').value = JSON.stringify(finance);
+  document.getElementById('form_ai').value = JSON.stringify(ai);
+  document.getElementById('form_score').value = JSON.stringify(ai.ai_score || {});
+  document.getElementById('form_price').value = ai.price_estimate || '';
+
+  form.action = (typeof BACKEND_URL !== 'undefined' ? BACKEND_URL : (window.BACKEND_URL || '')) + "/report";
   form.submit();
 };
 
