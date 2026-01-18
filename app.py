@@ -4,6 +4,11 @@ import json
 import datetime
 import logging
 import sqlite3
+try:
+    import psycopg2
+    import psycopg2.extras
+except Exception:
+    psycopg2 = None
 import requests
 import urllib3
 
@@ -60,9 +65,16 @@ MY_DOMAIN_URL = os.environ.get("MY_DOMAIN_URL", "https://port-0-solar-server-mki
 # ✅ 관리자 계정 (프론트에서 관리자 로그인 시 id=admin, pw=입력값으로 백엔드 로그인)
 ADMIN_ID = os.environ.get("ADMIN_ID", "admin")
 ADMIN_PW_HASH = os.environ.get("ADMIN_PW_HASH", "")
+ADMIN_PW = os.environ.get("ADMIN_PW", "")
+if (not ADMIN_PW_HASH) and ADMIN_PW:
+    try:
+        ADMIN_PW_HASH = generate_password_hash(ADMIN_PW)
+        logger.info("ADMIN_PW provided: generated ADMIN_PW_HASH")
+    except Exception as e:
+        logger.warning(f"Failed to hash ADMIN_PW: {e}")
 
 # ✅ 사용자 DB (SQLite)
-USER_DB_PATH = os.environ.get("USER_DB_PATH", "users.db")
+USER_DB_PATH = os.environ.get("USER_DB_PATH", "/data/users.db")
 
 # CORS (세션 쿠키 사용하려면 supports_credentials=True 필수)
 allowed_origins_raw = os.environ.get("ALLOWED_ORIGINS", "")
@@ -102,13 +114,62 @@ if genai and GEMINI_API_KEY:
 # ---------------------------------------------------------
 # SQLite helpers
 # ---------------------------------------------------------
-def _db():
+def _db_sqlite():
+    """SQLite connection (file-based)."""
     conn = sqlite3.connect(USER_DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
+def _db_pg():
+    """Postgres connection via DATABASE_URL (cloudtype DB 등)."""
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not set")
+    if psycopg2 is None:
+        raise RuntimeError("psycopg2 is not installed. Add psycopg2-binary to requirements.")
+    # providers sometimes require sslmode; put it into DATABASE_URL if needed
+    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+
+def _userdb_kind():
+    return "postgres" if DATABASE_URL else "sqlite"
+
+def _db():
+    # backward compatibility (existing code expects sqlite conn)
+    return _db_sqlite()
+
+
 def init_user_db():
-    conn = _db()
+    kind = _userdb_kind()
+
+    if kind == "postgres":
+        conn = _db_pg()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                pw_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+
+        if ADMIN_PW_HASH:
+            cur.execute("SELECT id FROM users WHERE id=%s", (ADMIN_ID,))
+            row = cur.fetchone()
+            if not row:
+                cur.execute(
+                    "INSERT INTO users (id, pw_hash, role, created_at) VALUES (%s, %s, 'admin', %s)",
+                    (ADMIN_ID, ADMIN_PW_HASH, datetime.datetime.utcnow().isoformat())
+                )
+                conn.commit()
+                logger.info("Admin user created in Postgres.")
+        else:
+            logger.warning("ADMIN_PW_HASH (or ADMIN_PW) is not set. Admin login will fail.")
+        conn.close()
+        return
+
+    # SQLite
+    conn = _db_sqlite()
     cur = conn.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -120,21 +181,21 @@ def init_user_db():
     """)
     conn.commit()
 
-    # ensure admin exists (in DB)
     if ADMIN_PW_HASH:
         cur.execute("SELECT id FROM users WHERE id=?", (ADMIN_ID,))
         if not cur.fetchone():
             cur.execute(
                 "INSERT INTO users (id, pw_hash, role, created_at) VALUES (?, ?, 'admin', ?)",
-                (ADMIN_ID, ADMIN_PW_HASH, datetime.datetime.utcnow().isoformat()),
+                (ADMIN_ID, ADMIN_PW_HASH, datetime.datetime.utcnow().isoformat())
             )
             conn.commit()
-            logger.info("Admin user inserted into DB.")
+            logger.info("Admin user created in SQLite.")
     else:
-        logger.warning("ADMIN_PW_HASH is not set. Admin login will fail.")
+        logger.warning("ADMIN_PW_HASH (or ADMIN_PW) is not set. Admin login will fail.")
     conn.close()
 
 init_user_db()
+
 
 # ---------------------------------------------------------
 # Auth helpers
@@ -170,15 +231,139 @@ def report_page():
             data["finance"] = json.loads(data["finance"])
         if "ai_analysis" in data:
             data["ai_analysis"] = json.loads(data["ai_analysis"])
-        if "ai_score" in data:
-            try:
-                data["ai_score"] = json.loads(data["ai_score"])
-            except Exception:
-                pass
     except Exception as e:
         logger.warning(f"report parse err: {e}")
+
+    # report.html이 기대하는 키 보강
+    fin = data.get("finance") if isinstance(data.get("finance"), dict) else {}
+    ai = data.get("ai_analysis") if isinstance(data.get("ai_analysis"), dict) else {}
+
+    if isinstance(fin, dict):
+        if (not fin.get("capacity")) and fin.get("acCapacity"):
+            fin["capacity"] = fin.get("acCapacity")
+        if (not fin.get("kepco_capacity")) and isinstance(ai, dict) and ai.get("kepco_capacity"):
+            fin["kepco_capacity"] = ai.get("kepco_capacity")
+        data["finance"] = fin
+
+    if isinstance(ai, dict):
+        if "ai_score" not in ai and data.get("ai_score"):
+            ai["ai_score"] = data.get("ai_score")
+        data["ai_analysis"] = ai
+
     return render_template("report.html", data=data)
 
+
+# ---------------------------------------------------------
+# User DB operations (supports SQLite or Postgres)
+# ---------------------------------------------------------
+def _user_fetch(user_id: str):
+    kind = _userdb_kind()
+    if kind == "postgres":
+        conn = _db_pg()
+        cur = conn.cursor()
+        cur.execute("SELECT id, pw_hash, role, created_at FROM users WHERE id=%s", (user_id,))
+        row = cur.fetchone()
+        conn.close()
+        return row
+    conn = _db_sqlite()
+    cur = conn.cursor()
+    cur.execute("SELECT id, pw_hash, role, created_at FROM users WHERE id=?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def _user_insert(user_id: str, pw_hash: str, role: str = "user"):
+    created = datetime.datetime.utcnow().isoformat()
+    kind = _userdb_kind()
+    if kind == "postgres":
+        conn = _db_pg()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO users (id, pw_hash, role, created_at) VALUES (%s, %s, %s, %s)",
+            (user_id, pw_hash, role, created)
+        )
+        conn.commit()
+        conn.close()
+        return
+    conn = _db_sqlite()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO users (id, pw_hash, role, created_at) VALUES (?, ?, ?, ?)",
+        (user_id, pw_hash, role, created)
+    )
+    conn.commit()
+    conn.close()
+
+def _user_delete(user_id: str):
+    if user_id.lower() == ADMIN_ID.lower():
+        return 0
+    kind = _userdb_kind()
+    if kind == "postgres":
+        conn = _db_pg()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM users WHERE id=%s AND role!='admin'", (user_id,))
+        deleted = cur.rowcount
+        conn.commit()
+        conn.close()
+        return deleted
+    conn = _db_sqlite()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM users WHERE id=? AND role!='admin'", (user_id,))
+    deleted = cur.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
+
+def _user_list():
+    kind = _userdb_kind()
+    if kind == "postgres":
+        conn = _db_pg()
+        cur = conn.cursor()
+        cur.execute("SELECT id, role, created_at FROM users ORDER BY created_at DESC")
+        rows = cur.fetchall() or []
+        conn.close()
+        out = []
+        for r in rows:
+            if isinstance(r, dict):
+                out.append(r)
+            else:
+                out.append({"id": r[0], "role": r[1], "created_at": r[2]})
+        return out
+    conn = _db_sqlite()
+    cur = conn.cursor()
+    cur.execute("SELECT id, role, created_at FROM users ORDER BY created_at DESC")
+    rows = cur.fetchall() or []
+    conn.close()
+    return [dict(r) for r in rows]
+
+def _user_update_pw(user_id: str, pw_hash: str):
+    kind = _userdb_kind()
+    if kind == "postgres":
+        conn = _db_pg()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET pw_hash=%s WHERE id=%s", (pw_hash, user_id))
+        updated = cur.rowcount
+        conn.commit()
+        conn.close()
+        return updated
+    conn = _db_sqlite()
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET pw_hash=? WHERE id=?", (pw_hash, user_id))
+    updated = cur.rowcount
+    conn.commit()
+    conn.close()
+    return updated
+
+def _row_get(row, key, idx=None):
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return row.get(key)
+    if hasattr(row, "get"):
+        return row.get(key)
+    if idx is not None:
+        return row[idx]
+    return None
 # ---------------------------------------------------------
 # Auth API
 # ---------------------------------------------------------
@@ -190,11 +375,7 @@ def api_login():
     if not user_id or not pw:
         return jsonify({"status": "ERROR", "msg": "Missing id/pw"}), 400
 
-    conn = _db()
-    cur = conn.cursor()
-    cur.execute("SELECT id, pw_hash, role FROM users WHERE id=?", (user_id,))
-    row = cur.fetchone()
-    conn.close()
+    row = _user_fetch(user_id)
 
     if not row:
         return jsonify({"status": "ERROR", "msg": "Invalid credentials"}), 401
@@ -279,12 +460,7 @@ def admin_users_delete(user_id):
     if user_id.lower() == ADMIN_ID.lower():
         return jsonify({"status": "ERROR", "msg": "Cannot delete admin"}), 400
 
-    conn = _db()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM users WHERE id=? AND role!='admin'", (user_id,))
-    conn.commit()
-    deleted = cur.rowcount
-    conn.close()
+    deleted = _user_delete(user_id)
 
     if deleted == 0:
         return jsonify({"status": "ERROR", "msg": "User not found"}), 404
