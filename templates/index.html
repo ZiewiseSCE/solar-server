@@ -1075,41 +1075,52 @@ window.safeGetItem = window.safeGetItem || function(key){ try { return localStor
 window.safeSetItem = window.safeSetItem || function(key,val){ try { localStorage.setItem(key,val); } catch(e){ console.warn("Storage restricted"); } };
 
 // --- Login / Logout ---
-window.attemptLogin = function() {
-  const id = (document.getElementById('userId')?.value || '').trim();
-  const pw = (document.getElementById('userPw')?.value || '').trim();
-  if (!id || !pw) return window.showToast?.("아이디/비밀번호를 입력하세요.");
+window.attemptLogin = async function() {
+            const id = (document.getElementById('userId')?.value || '').trim();
+            const pw = (document.getElementById('userPw')?.value || '').trim();
+            if(!id || !pw) return window.showToast("ID/PW를 입력하세요.");
 
-  // ensure default user exists
-  try {
-    const stored = window.safeGetItem('scenergy_users');
-    if (!stored) window.safeSetItem('scenergy_users', JSON.stringify([{id:"admin", pw:"1234"}]));
-  } catch(e){}
+            try {
+                // ✅ 서버 세션 로그인 (localStorage 사용 안함)
+                const res = await fetch(`${BACKEND_URL}/api/auth/login`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    credentials: "include",
+                    body: JSON.stringify({ id, pw })
+                });
 
-  let users = [];
-  try { users = JSON.parse(window.safeGetItem('scenergy_users') || "[]"); } catch(e) { users = []; }
-  if (!users || users.length === 0) users = [{id:"admin", pw:"1234"}];
+                const data = await res.json().catch(() => ({}));
+                if(res.ok && data.status === "OK") {
+                    isLoggedIn = true;
+                    currentUser = data.user || id;
 
-  const user = users.find(u => u.id === id && u.pw === pw);
-  if (!user) return window.showToast?.("ID/PW가 일치하지 않습니다.");
+                    const overlay = document.getElementById('login-overlay');
+                    if(overlay) overlay.classList.add('hidden-overlay');
 
-  window.isLoggedIn = true;
-  window.currentUser = id;
+                    const udisp = document.getElementById('currentUserDisplay');
+                    if(udisp) udisp.innerText = currentUser;
 
-  document.getElementById('login-overlay')?.classList.add('hidden-overlay');
-  const userDisp = document.getElementById('currentUserDisplay');
-  if (userDisp) userDisp.innerText = id;
+                    window.initMap();
+                    window.updateHistoryList();
+                    window.showToast("로그인 완료");
+                } else {
+                    window.showToast("로그인 실패 (ID/PW 확인)");
+                }
+            } catch (e) {
+                console.error(e);
+                window.showToast("서버 연결 실패");
+            }
+        };
 
-  // init map after login
-  if (typeof window.initMap === 'function') window.initMap();
-  if (typeof window.updateHistoryList === 'function') window.updateHistoryList();
-
-  window.showToast?.("로그인 성공");
-};
-
-window.logout = function() {
-  location.reload();
-};
+window.logout = async function(reason) {
+            try {
+                await fetch(`${BACKEND_URL}/api/auth/logout`, {
+                    method: "POST",
+                    credentials: "include"
+                });
+            } catch(e) {}
+            window.location.reload();
+        };
 
 // --- Admin UI flow ---
 window.showAdminLogin = function() {
