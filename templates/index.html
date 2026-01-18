@@ -52,8 +52,6 @@
         <input type="hidden" name="date" id="form_date">
         <input type="hidden" name="finance" id="form_finance">
         <input type="hidden" name="ai_analysis" id="form_ai">
-        <input type="hidden" name="ai_score" id="form_score">
-        <input type="hidden" name="land_price" id="form_price">
     </form>
 
     <div id="login-overlay">
@@ -189,7 +187,6 @@
                         </div>
                         <div class="flex justify-between items-end"><div id="timerRemaining" class="text-xl font-mono font-bold text-yellow-400">00:00:00</div><div id="progressCount" class="text-[10px] text-gray-500 font-mono">0 / 20</div></div>
                         <div class="w-full bg-slate-700 rounded-full h-1.5 overflow-hidden"><div id="totalProgressBar" class="bg-cyan-500 h-full transition-all duration-500" style="width: 0%"></div></div>
-                        <!-- 스캔된 구역 수 표시 -->
                         <div class="flex justify-between items-end mt-1 px-1"><div class="text-[9px] text-cyan-400 font-bold" id="foundCount">검색된 구역: 0개</div></div>
                         <div class="grid grid-cols-2 gap-2 pt-1"><button onclick="window.startMission()" id="startBtn" class="bg-indigo-600 hover:bg-indigo-700 py-2 rounded font-bold text-xs transition">▶ 스캔 시작</button><button onclick="window.clearResults()" class="bg-slate-700 hover:bg-slate-600 py-2 rounded font-bold text-xs transition">🔄 초기화</button></div>
                     </div>
@@ -320,545 +317,534 @@
     <div id="map"></div>
 
     <script>
-        // 전역 변수 초기화
-        const VWORLD_TILE_KEY = "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F"; 
-        const BACKEND_URL = "https://port-0-solar-server-mkiol9jsc308f567.sel3.cloudtype.app";
-        const ENCODED_ADMIN_PW = "Wmlld2lzZTEyMyE=";
+        (function(window) {
+            const VWORLD_TILE_KEY = "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F"; 
+            const BACKEND_URL = "https://port-0-solar-server-mkiol9jsc308f567.sel3.cloudtype.app";
+            const ENCODED_ADMIN_PW = "Wmlld2lzZTEyMyE=";
 
-        let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, analysisMarkerGroup, existingGroup, substationGroup;
-        let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
-        let selectedFeatures = new Map();
-        let currentAnalysisData = {}; 
-        let stopScan = false;
+            let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, analysisMarkerGroup, existingGroup, substationGroup;
+            let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
+            let selectedFeatures = new Map();
+            let currentAnalysisData = {}; 
+            let stopScan = false;
 
-        // [중요] 유틸리티 함수들을 가장 먼저 정의
-        window.trackApi = function(type) { 
-            const el = document.getElementById(`cnt-${type}`); 
-            if(el) {
-                const newCnt = parseInt(el.innerText || "0") + 1;
-                el.innerText = newCnt;
-                localStorage.setItem(`api_count_${type}`, newCnt);
-            }
-        };
-        
-        window.showToast = function(m) { 
-            const t = document.getElementById('toastMsg'); 
-            const text = document.getElementById('toastText');
-            if(t && text) {
-                t.classList.remove('hidden'); 
-                t.classList.add('flex'); 
-                text.innerText = m; 
-                setTimeout(() => t.classList.add('hidden'), 3000); 
-            }
-        };
-        
-        window.logSystem = function(msg) { 
-            const w = document.getElementById('logWindow'); 
-            if(w) { 
-                const p = document.createElement('div'); 
-                p.innerText = `> ${msg}`; 
-                w.appendChild(p); 
-                w.scrollTop = w.scrollHeight; 
-            } 
-        };
-
-        // 지도 초기화 함수
-        window.initMap = function() {
-            if (map) return;
-            
-            if (typeof L === 'undefined') {
-                window.logSystem("Error: Leaflet library not loaded.");
-                return;
-            }
-
-            map = L.map('map', { zoomControl: false }).setView([36.5, 127.5], 7);
-            L.control.zoom({ position: 'bottomright' }).addTo(map);
-            
-            layers = { 
-                base: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Base/{z}/{y}/{x}.png`), 
-                sat: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Satellite/{z}/{y}/{x}.jpeg`),
-                hybrid: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Hybrid/{z}/{y}/{x}.png`) 
+            window.trackApi = function(type) { 
+                const el = document.getElementById(`cnt-${type}`); 
+                if(el) {
+                    const newCnt = parseInt(el.innerText || "0") + 1;
+                    el.innerText = newCnt;
+                    localStorage.setItem(`api_count_${type}`, newCnt);
+                }
             };
-            layers.sat.addTo(map);
             
-            selectableGroup = L.layerGroup().addTo(map); 
-            panelGroup = L.layerGroup().addTo(map); 
-            analysisMarkerGroup = L.layerGroup().addTo(map);
-            existingGroup = L.layerGroup().addTo(map); 
-            substationGroup = L.layerGroup().addTo(map);
+            window.showToast = function(m) { 
+                const t = document.getElementById('toastMsg'); 
+                const text = document.getElementById('toastText');
+                if(t && text) {
+                    t.classList.remove('hidden'); 
+                    t.classList.add('flex'); 
+                    text.innerText = m; 
+                    setTimeout(() => t.classList.add('hidden'), 3000); 
+                }
+            };
             
-            cadastralLayer = L.tileLayer.wms('https://api.vworld.kr/req/wms/1.0.0', { 
-                layers: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', 
-                styles: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', 
-                format: 'image/png', 
-                transparent: true, 
-                opacity: 0.7, 
-                key: VWORLD_TILE_KEY 
-            });
-            
-            map.addLayer(cadastralLayer);
-            map.on('click', (e) => window.scanBuildings(e.latlng.lat, e.latlng.lng));
-            map.on('moveend', () => { 
-                if(autoScanMode && isLoggedIn) { 
-                    const c = map.getCenter(); 
-                    window.scanBuildings(c.lat, c.lng); 
+            window.logSystem = function(msg) { 
+                const w = document.getElementById('logWindow'); 
+                if(w) { 
+                    const p = document.createElement('div'); 
+                    p.innerText = `> ${msg}`; 
+                    w.appendChild(p); 
+                    w.scrollTop = w.scrollHeight; 
                 } 
-            });
-            
-            // 초기 API 카운트 표시
-            ['vworld', 'public', 'ai'].forEach(k => {
-                const cnt = localStorage.getItem(`api_count_${k}`) || "0";
-                const el = document.getElementById(`cnt-${k}`);
-                if(el) el.innerText = cnt;
-            });
-            
-            window.logSystem("Map Initialized.");
-        };
-
-        // 레이어 토글
-        window.toggleLayer = function(type) {
-            if(!map) return;
-            if(type === 'cadastral') {
-                if(document.getElementById('cadastralToggle').checked) map.addLayer(cadastralLayer);
-                else map.removeLayer(cadastralLayer);
-            } else if(type === 'existing') {
-                if(document.getElementById('existingPlantToggle').checked) { window.createMockMarkers(map.getCenter(), 'plant'); map.addLayer(existingGroup); }
-                else { existingGroup.clearLayers(); map.removeLayer(existingGroup); }
-            } else if(type === 'substation') {
-                 if(document.getElementById('substationToggle').checked) { window.createMockMarkers(map.getCenter(), 'substation'); map.addLayer(substationGroup); }
-                 else { substationGroup.clearLayers(); map.removeLayer(substationGroup); }
-            }
-        };
-        
-        window.createMockMarkers = function(center, type) {
-            const group = type === 'plant' ? existingGroup : substationGroup;
-            group.clearLayers();
-            for(let i=0; i<3; i++) {
-                const lat = center.lat + (Math.random() * 0.01 - 0.005);
-                const lng = center.lng + (Math.random() * 0.01 - 0.005);
-                const iconHtml = type === 'plant' ? `<div class="plant-marker w-6 h-6"><i class="ph ph-lightning text-white text-[10px]"></i></div>` : `<div class="substation-marker w-8 h-8"><i class="ph ph-circuitry text-white"></i></div>`;
-                const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [24, 24] });
-                L.marker([lat, lng], { icon: icon, title: type }).bindPopup(type === 'plant' ? "기설치 태양광" : "변전소").addTo(group);
-            }
-        };
-
-        window.setMap = function(t) { 
-            if(!map) return;
-            if(t==='base') { map.addLayer(layers.base); map.removeLayer(layers.sat); } 
-            else { map.addLayer(layers.sat); map.removeLayer(layers.base); } 
-        };
-
-        // JSONP 요청 (VWORLD API 우회)
-        async function jsonpRequest(url) {
-            return new Promise((resolve, reject) => {
-                const callbackName = 'jsonp_callback_' + Math.round(100000 * Math.random());
-                window[callbackName] = (data) => { 
-                    delete window[callbackName]; 
-                    const script = document.getElementById(callbackName);
-                    if(script) document.body.removeChild(script); 
-                    resolve(data); 
-                };
-                const script = document.createElement('script');
-                script.id = callbackName;
-                script.src = `${url}&format=json&callback=${callbackName}&domain=${window.location.hostname}`;
-                script.onerror = () => { 
-                    delete window[callbackName]; 
-                    document.body.removeChild(script); 
-                    reject(new Error('JSONP failed')); 
-                };
-                document.body.appendChild(script);
-            });
-        }
-
-        window.searchAddress = async function() {
-            window.trackApi('vworld');
-            const query = document.getElementById('addrInput').value;
-            if(!query) return window.showToast("주소를 입력하세요.");
-            const loading = document.getElementById('loading');
-            if(loading) { loading.classList.remove('hidden'); loading.querySelector('p').innerText="주소 확인 중..."; }
-            try {
-                const url = `https://api.vworld.kr/req/address?service=address&request=getcoord&version=2.0&crs=epsg:4326&address=${encodeURIComponent(query)}&refine=true&simple=false&type=road&key=${VWORLD_TILE_KEY}`;
-                const data = await jsonpRequest(url);
-                if(data.response?.status === 'OK') {
-                    const { x, y } = data.response.result.point;
-                    map.setView([parseFloat(y), parseFloat(x)], 18);
-                    setTimeout(() => window.scanBuildings(parseFloat(y), parseFloat(x)), 800);
-                } else window.showToast("주소를 찾을 수 없습니다.");
-            } catch(e) { console.error(e); } finally { if(loading) loading.classList.add('hidden'); }
-        };
-
-        window.scanBuildings = async function(lat, lng) {
-            if (!map) return;
-            window.trackApi('vworld');
-            if(!isMultiSelectMode) window.clearResults();
-            if(analysisMarkerGroup) analysisMarkerGroup.clearLayers();
-            L.marker([lat, lng]).addTo(analysisMarkerGroup);
-
-            const box = `${lng - 0.001},${lat - 0.001},${lng + 0.001},${lat + 0.001}`;
-            try {
-                const layerName = scanTarget === 'land' ? 'LP_PA_CBND_BUBUN' : 'LT_C_SPBD';
-                const url = `https://api.vworld.kr/req/data?service=data&request=GetFeature&data=${layerName}&key=${VWORLD_TILE_KEY}&geomFilter=BOX(${box})&size=1000`;
-                const data = await jsonpRequest(url);
-                if(data.response?.status === 'OK') {
-                    L.geoJSON(data.response.result.featureCollection.features, {
-                        // [수정] 토지 모드: 조금 밝은 브라운(#8d6e63) 테두리 + 투명도 0.4(잘 보이게)
-                        style: scanTarget === 'land' 
-                            ? { color: '#8d6e63', weight: 3, fillColor: '#8d6e63', fillOpacity: 0.4 } 
-                            : { color: '#3b82f6', weight: 2, fillOpacity: 0.2 },
-                        onEachFeature: (feature, layer) => { layer.on('click', () => window.analyzeFeature(feature)); }
-                    }).addTo(selectableGroup);
-                }
-            } catch(e) { console.error(e); }
-        };
-
-        window.analyzeFeature = async function(feature) {
-            const featureId = feature.properties.pnu || feature.id || JSON.stringify(feature.geometry.coordinates);
-            
-            if (selectedFeatures.has(featureId)) {
-                const stored = selectedFeatures.get(featureId);
-                panelGroup.removeLayer(stored.layer);
-                selectedFeatures.delete(featureId);
-                let total = 0; selectedFeatures.forEach(v => total += v.count);
-                accumulatedPanelsCount = total;
-                if (total === 0) window.clearResults(); else window.calculateFinance(total);
-                window.showToast("선택 해제");
-                return;
-            }
-
-            if (!isMultiSelectMode) window.clearResults();
-
-            window.switchTab('analysis');
-            const props = feature.properties;
-            const addr = props.road_nm_ad || props.jibun_addr || props.addr || `PNU:${props.pnu}` || "주소 미상";
-            const addrEl = document.getElementById('analysisAddress');
-            if(addrEl) addrEl.innerText = addr;
-            
-            const drawResult = window.drawPanels(feature.geometry); 
-            if (drawResult) {
-                selectedFeatures.set(featureId, { layer: drawResult.layer, count: drawResult.count, address: addr });
-                let total = 0; selectedFeatures.forEach(v => total += v.count);
-                accumulatedPanelsCount = total;
-                window.calculateFinance(total);
-            }
-
-            currentAnalysisData = { address: addr, date: new Date().toLocaleDateString() };
-            currentAnalysisFeature = feature;
-            
-            const center = turf.center(feature);
-            window.fetchAIData(center.geometry.coordinates[1], center.geometry.coordinates[0], addr);
-        };
-
-        window.fetchAIData = async function(lat, lng, addr) {
-            const loadingEl = document.getElementById('legalLoading');
-            const contentEl = document.getElementById('legalContent');
-            const placeholderEl = document.getElementById('legalPlaceholder');
-            const scorePanel = document.getElementById('aiScorePanel');
-            
-            if(placeholderEl) placeholderEl.classList.add('hidden');
-            if(loadingEl) loadingEl.classList.remove('hidden');
-            if(contentEl) contentEl.classList.add('hidden');
-            if(scorePanel) scorePanel.classList.add('hidden');
-
-            try {
-                window.trackApi('ai');
-                const res = await fetch(`${BACKEND_URL}/api/analyze/comprehensive?lat=${lat}&lng=${lng}&address=${encodeURIComponent(addr)}`);
-                const data = await res.json();
-                
-                if(loadingEl) loadingEl.classList.add('hidden');
-                if(contentEl) contentEl.classList.remove('hidden');
-
-                if(data.status === 'OK') {
-                     currentAnalysisData.ai_analysis = data;
-                     if(data.sun_hours) window.calculateFinance(accumulatedPanelsCount, data.sun_hours);
-                     const cb = document.getElementById('aiCommentBox');
-                     if(cb) cb.innerText = data.ai_comment || "분석 완료";
-
-                     let score = 55;
-                     if (data.zoning.includes("계획관리")) score += 25;
-                     if (data.eco_grade.includes("1")) score -= 55;
-                     if (data.sun_hours < 3.4) score -= 25;
-                     score = Math.max(10, Math.min(99, score));
-
-                     scorePanel.classList.remove('hidden');
-                     document.getElementById('scoreValue').innerText = score + "점";
-                     document.getElementById('scoreBar').style.width = score + "%";
-                     
-                     let regPrice = addr.includes("경기") ? 85 : addr.includes("충청") ? 45 : 30;
-                     const priceMsg = `약 ${Math.floor(regPrice*0.7)}~${Math.floor(regPrice*1.4)}만원/평 (추정 시세)`;
-                     document.getElementById('priceValue').innerText = priceMsg;
-                     currentAnalysisData.ai_analysis.score = score;
-                     currentAnalysisData.ai_analysis.price = priceMsg;
-
-                     const resultContainer = document.getElementById('aiAnalysisResult');
-                     const items = [
-                        {icon: 'ph-buildings', title: '용도지역', val: data.zoning, link: data.links.eum},
-                        {icon: 'ph-map-trifold', title: '지목', val: data.jimok || '미확인', link: data.links.eum},
-                        {icon: 'ph-plant', title: '생태등급', val: data.eco_grade, link: data.links.heritage},
-                        {icon: 'ph-lightning', title: '한전용량', val: data.kepco_capacity, link: data.links.kepco},
-                        {icon: 'ph-sun', title: '일사량', val: `${data.sun_hours}시간/일`, link: '#'}
-                     ];
-                     resultContainer.innerHTML = items.map(item => `
-                        <div class="bg-slate-700/50 p-2 rounded border border-slate-600 flex justify-between items-center text-[10px]">
-                            <div class="flex items-center gap-2"><div class="text-cyan-400"><i class="ph ${item.icon}"></i></div><div><div class="text-slate-400 font-bold">${item.title}</div><div class="text-white truncate w-32">${item.val}</div></div></div>
-                            <a href="${item.link}" target="_blank" class="bg-slate-600 px-1.5 py-0.5 rounded transition hover:bg-slate-500">이동</a>
-                        </div>
-                     `).join('');
-                }
-                return data;
-            } catch(e) { console.error(e); return null; }
-        };
-
-        window.calculateFinance = function(count, sunHoursOverride) { 
-            const countEl = document.getElementById('analysisCount');
-            if(countEl) countEl.innerText = `${count} 장`; 
-            const modPower = parseFloat(document.getElementById('modPower').value) || 640;
-            const capKw = (count * modPower) / 1000;
-            const capEl = document.getElementById('analysisCapacity');
-            if(capEl) capEl.innerText = `${capKw.toFixed(1)} kW`;
-
-            const smp = parseFloat(document.getElementById('smp').value);
-            const rec = parseFloat(document.getElementById('rec').value);
-            const costPerKw = parseFloat(document.getElementById('costPerKw').value) * 10000;
-            const modPrice = parseFloat(document.getElementById('modPrice').value);
-            const pfRatio = parseFloat(document.getElementById('pfLoanRatio').value);
-            const pfRate = parseFloat(document.getElementById('pfInterestRate').value);
-            
-            const sunHours = sunHoursOverride || 3.6;
-            const annualRev = capKw * sunHours * 365 * 210; 
-            const totalCost = (capKw * costKw) + (count * modPower * modPrice);
-            const loan = totalCost * (pfRatio / 100);
-            const annualInterest = loan * (pfRate / 100);
-            const netIncome = annualRev - annualInterest;
-            const payback = netIncome > 0 ? (totalCost / netIncome).toFixed(1) : 99;
-
-            const tcEl = document.getElementById('resTotalCost');
-            if(tcEl) tcEl.innerText = `${Math.round(totalCost).toLocaleString()} 원`;
-            const arEl = document.getElementById('resAnnualRev');
-            if(arEl) arEl.innerText = `${Math.round(annualRev).toLocaleString()} 원`;
-            const pbEl = document.getElementById('resPfPayback');
-            if(pbEl) pbEl.innerText = `${payback} 년`;
-
-            currentAnalysisData.finance = {
-                capacity: `${capKw.toFixed(1)} kW`, totalCost: `${Math.round(totalCost).toLocaleString()} 원`,
-                annualRev: `${Math.round(annualRev).toLocaleString()} 원`, payback: `${payback} 년`
             };
-        };
 
-        window.drawPanels = function(geo) { 
-            try { 
-                let poly = turf.feature(geo);
-                if (currentGeoState.x !== 0 || currentGeoState.y !== 0 || currentGeoState.rot !== 0) {
-                    poly = turf.transformRotate(poly, currentGeoState.rot);
-                    // D-Pad 이동 속도 미터 단위 적용
-                    poly = turf.transformTranslate(poly, currentGeoState.x, 90, {units: 'meters'});
-                    poly = turf.transformTranslate(poly, currentGeoState.y, 0, {units: 'meters'});
+            window.initMap = function() {
+                if (map) return;
+                
+                if (typeof L === 'undefined') {
+                    window.logSystem("Error: Leaflet library not loaded.");
+                    return;
                 }
-                const modW = parseFloat(document.getElementById('modWidth').value);
-                const modH = parseFloat(document.getElementById('modHeight').value);
-                const angle = parseFloat(document.getElementById('installAngle').value);
-                const projectedH = modH * Math.cos(angle * Math.PI / 180);
-                
-                // 미터 -> 위경도 단위 변환 (근사치)
-                const ONE_LAT_M = 111000;
-                const ONE_LNG_M = 88800;
-                const dLng = (modW + 0.1) / ONE_LNG_M; 
-                const dLat = (projectedH + 0.1) / ONE_LAT_M;
-                
-                const bbox = turf.bbox(poly);
-                let tempPanels = [], count = 0, loopGuard = 0;
-                // 루프 제한 대폭 상향 (10만회)
-                const MAX_LOOP = 100000;
 
-                for(let x = bbox[0]; x < bbox[2]; x += dLng) {
-                    for(let y = bbox[1]; y < bbox[3]; y += dLat) {
-                        if(loopGuard++ > MAX_LOOP) break; 
-                        if(turf.booleanPointInPolygon(turf.point([x + dLng/2, y + dLat/2]), poly)) {
-                            tempPanels.push(turf.bboxPolygon([x, y, x + dLng*0.9, y + dLat*0.9]));
-                            count++;
-                        }
+                map = L.map('map', { zoomControl: false }).setView([36.5, 127.5], 7);
+                L.control.zoom({ position: 'bottomright' }).addTo(map);
+                
+                layers = { 
+                    base: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Base/{z}/{y}/{x}.png`), 
+                    sat: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Satellite/{z}/{y}/{x}.jpeg`),
+                    hybrid: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Hybrid/{z}/{y}/{x}.png`) 
+                };
+                layers.sat.addTo(map);
+                
+                selectableGroup = L.layerGroup().addTo(map); 
+                panelGroup = L.layerGroup().addTo(map); 
+                analysisMarkerGroup = L.layerGroup().addTo(map);
+                existingGroup = L.layerGroup().addTo(map); 
+                substationGroup = L.layerGroup().addTo(map);
+                
+                cadastralLayer = L.tileLayer.wms('https://api.vworld.kr/req/wms/1.0.0', { 
+                    layers: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', 
+                    styles: 'lp_pa_cbnd_bubun,lp_pa_cbnd_bonbun', 
+                    format: 'image/png', 
+                    transparent: true, 
+                    opacity: 0.7, 
+                    key: VWORLD_TILE_KEY 
+                });
+                
+                map.addLayer(cadastralLayer);
+                map.on('click', (e) => window.scanBuildings(e.latlng.lat, e.latlng.lng));
+                map.on('moveend', () => { 
+                    if(autoScanMode && isLoggedIn) { 
+                        const c = map.getCenter(); 
+                        window.scanBuildings(c.lat, c.lng); 
+                    } 
+                });
+                
+                // 초기 API 카운트 표시
+                ['vworld', 'public', 'ai'].forEach(k => {
+                    const cnt = localStorage.getItem(`api_count_${k}`) || "0";
+                    const el = document.getElementById(`cnt-${k}`);
+                    if(el) el.innerText = cnt;
+                });
+                
+                window.logSystem("Map Initialized.");
+            };
+
+            window.toggleLayer = function(type) {
+                if(!map) return;
+                if(type === 'cadastral') {
+                    if(document.getElementById('cadastralToggle').checked) map.addLayer(cadastralLayer);
+                    else map.removeLayer(cadastralLayer);
+                } else if(type === 'existing') {
+                    if(document.getElementById('existingPlantToggle').checked) { window.createMockMarkers(map.getCenter(), 'plant'); map.addLayer(existingGroup); }
+                    else { existingGroup.clearLayers(); map.removeLayer(existingGroup); }
+                } else if(type === 'substation') {
+                    if(document.getElementById('substationToggle').checked) { window.createMockMarkers(map.getCenter(), 'substation'); map.addLayer(substationGroup); }
+                    else { substationGroup.clearLayers(); map.removeLayer(substationGroup); }
+                }
+            };
+            
+            window.createMockMarkers = function(center, type) {
+                const group = type === 'plant' ? existingGroup : substationGroup;
+                group.clearLayers();
+                for(let i=0; i<3; i++) {
+                    const lat = center.lat + (Math.random() * 0.01 - 0.005);
+                    const lng = center.lng + (Math.random() * 0.01 - 0.005);
+                    const iconHtml = type === 'plant' ? `<div class="plant-marker w-6 h-6"><i class="ph ph-lightning text-white text-[10px]"></i></div>` : `<div class="substation-marker w-8 h-8"><i class="ph ph-circuitry text-white"></i></div>`;
+                    const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [24, 24] });
+                    L.marker([lat, lng], { icon: icon, title: type }).bindPopup(type === 'plant' ? "기설치 태양광" : "변전소").addTo(group);
+                }
+            };
+
+            window.setMap = function(t) { 
+                if(!map) return;
+                if(t==='base') { map.addLayer(layers.base); map.removeLayer(layers.sat); } 
+                else { map.addLayer(layers.sat); map.removeLayer(layers.base); } 
+            };
+
+            async function jsonpRequest(url) {
+                return new Promise((resolve, reject) => {
+                    const callbackName = 'jsonp_callback_' + Math.round(100000 * Math.random());
+                    window[callbackName] = (data) => { 
+                        delete window[callbackName]; 
+                        const script = document.getElementById(callbackName);
+                        if(script) document.body.removeChild(script); 
+                        resolve(data); 
+                    };
+                    const script = document.createElement('script');
+                    script.id = callbackName;
+                    script.src = `${url}&format=json&callback=${callbackName}&domain=${window.location.hostname}`;
+                    script.onerror = () => { 
+                        delete window[callbackName]; 
+                        document.body.removeChild(script); 
+                        reject(new Error('JSONP failed')); 
+                    };
+                    document.body.appendChild(script);
+                });
+            }
+
+            window.searchAddress = async function() {
+                window.trackApi('vworld');
+                const query = document.getElementById('addrInput').value;
+                if(!query) return window.showToast("주소를 입력하세요.");
+                const loading = document.getElementById('loading');
+                if(loading) { loading.classList.remove('hidden'); loading.querySelector('p').innerText="주소 확인 중..."; }
+                try {
+                    const url = `https://api.vworld.kr/req/address?service=address&request=getcoord&version=2.0&crs=epsg:4326&address=${encodeURIComponent(query)}&refine=true&simple=false&type=road&key=${VWORLD_TILE_KEY}`;
+                    const data = await jsonpRequest(url);
+                    if(data.response?.status === 'OK') {
+                        const { x, y } = data.response.result.point;
+                        map.setView([parseFloat(y), parseFloat(x)], 18);
+                        setTimeout(() => window.scanBuildings(parseFloat(y), parseFloat(x)), 800);
+                    } else window.showToast("주소를 찾을 수 없습니다.");
+                } catch(e) { console.error(e); } finally { if(loading) loading.classList.add('hidden'); }
+            };
+
+            window.scanBuildings = async function(lat, lng) {
+                if (!map) return;
+                window.trackApi('vworld');
+                if(!isMultiSelectMode) window.clearResults();
+                if(analysisMarkerGroup) analysisMarkerGroup.clearLayers();
+                L.marker([lat, lng]).addTo(analysisMarkerGroup);
+
+                const box = `${lng - 0.001},${lat - 0.001},${lng + 0.001},${lat + 0.001}`;
+                try {
+                    const layerName = scanTarget === 'land' ? 'LP_PA_CBND_BUBUN' : 'LT_C_SPBD';
+                    const url = `https://api.vworld.kr/req/data?service=data&request=GetFeature&data=${layerName}&key=${VWORLD_TILE_KEY}&geomFilter=BOX(${box})&size=1000`;
+                    const data = await jsonpRequest(url);
+                    if(data.response?.status === 'OK') {
+                        L.geoJSON(data.response.result.featureCollection.features, {
+                            style: scanTarget === 'land' 
+                                ? { color: '#8d6e63', weight: 3, fillColor: '#5d4037', fillOpacity: 0.4 } 
+                                : { color: '#3b82f6', weight: 2, fillOpacity: 0.2 },
+                            onEachFeature: (feature, layer) => { layer.on('click', () => window.analyzeFeature(feature)); }
+                        }).addTo(selectableGroup);
                     }
-                    if(loopGuard > MAX_LOOP) break;
-                }
-                
-                // 0개 방지용: 최소 1개는 무조건 그림 (붉은색)
-                let newLayer;
-                if (tempPanels.length === 0) {
-                    const center = turf.center(poly);
-                    const [cx, cy] = center.geometry.coordinates;
-                    const fallback = turf.bboxPolygon([cx, cy, cx+dLng, cy+dLat]);
-                    newLayer = L.geoJSON(fallback, { style: { color: 'red', fillColor: '#ef4444', fillOpacity: 0.5 } });
-                    count = 1;
-                    window.showToast("영역이 작아 최소 패널 1개를 배치했습니다.");
-                } else {
-                    newLayer = L.geoJSON({type:"FeatureCollection", features: tempPanels}, {
-                        // 토지 모드: 밝은 브라운 + 불투명도 0.4 / 지붕 모드: 파랑
-                        style: scanTarget === 'land' ? { color: '#8d6e63', weight: 1, fillColor: '#8d6e63', fillOpacity: 0.4 } : { color: '#1e40af', weight: 1, fillColor: '#3b82f6', fillOpacity: 0.7 }
-                    });
-                }
-                
-                newLayer.addTo(panelGroup);
-                return { layer: newLayer, count: count };
-            } catch(e) { console.error("Panel Draw Error:", e); return null; } 
-        };
-
-        // 저장 및 리포트 관련
-        window.saveResult = function() {
-            const addr = document.getElementById('analysisAddress').innerText;
-            if(addr === '-' || addr === '주소 미상') return window.showToast("저장할 데이터가 없습니다.");
-            const ai = currentAnalysisData.ai_analysis || {};
-            const fn = currentAnalysisData.finance || {};
-            let history = JSON.parse(localStorage.getItem('scenergy_history') || "[]");
-            history.push({ 
-                date: new Date().toLocaleString(), address: addr, capacity: fn.capacity, revenue: fn.annualRev,
-                zoning: ai.zoning, jimok: ai.jimok, eco: ai.eco_grade, kepco: ai.kepco_capacity, sun: ai.sun_hours, score: ai.score, price: ai.price
-            });
-            localStorage.setItem('scenergy_history', JSON.stringify(history));
-            window.updateHistoryList(); window.showToast("상세 정보 저장 완료");
-        };
-
-        window.downloadCSV = function() {
-            const history = JSON.parse(localStorage.getItem('scenergy_history') || "[]");
-            if(history.length === 0) return window.showToast("데이터가 없습니다.");
-            const headers = ["날짜", "주소", "용량", "연수익", "용도지역", "지목", "생태등급", "한전용량", "일사량", "AI점수", "추정땅값"];
-            const csvRows = [headers.join(",")];
-            history.forEach(h => {
-                csvRows.push([h.date, `"${h.address}"`, h.capacity, `"${h.revenue}"`, `"${h.zoning}"`, h.jimok, h.eco, `"${h.kepco}"`, h.sun, h.score, `"${h.price}"`].join(","));
-            });
-            const blob = new Blob(["\ufeff" + csvRows.join("\n")], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement("a");
-            link.href = URL.createObjectURL(blob);
-            link.download = `SCEnergy_Scan_${new Date().getTime()}.csv`; link.click();
-        };
-
-        window.updateHistoryList = function() {
-            const listEl = document.getElementById('historyList');
-            if(!listEl) return;
-            const history = JSON.parse(localStorage.getItem('scenergy_history') || "[]");
-            if(history.length === 0) { listEl.innerHTML = '<p class="text-center py-4">기록 없음</p>'; return; }
-            listEl.innerHTML = history.slice().reverse().map(h => `
-                <div class="bg-slate-50 p-2 rounded border border-slate-200 text-xs mb-1">
-                    <div class="font-bold truncate">${h.address}</div>
-                    <div class="flex justify-between mt-1"><span class="text-blue-600 font-bold">${h.score}점</span><span>${h.capacity}</span></div>
-                </div>
-            `).join('');
-        };
-
-        window.clearHistory = function() { if(confirm("전체 삭제?")) { localStorage.removeItem('scenergy_history'); window.updateHistoryList(); } };
-        
-        window.clearResults = function() { 
-            if(panelGroup) panelGroup.clearLayers(); 
-            if(selectableGroup) selectableGroup.clearLayers(); 
-            if(analysisMarkerGroup) analysisMarkerGroup.clearLayers();
-            selectedFeatures.clear(); 
-            accumulatedPanelsCount=0; 
-            const rc = document.getElementById('resultCard');
-            if(rc) rc.classList.add('hidden'); 
-            currentAnalysisData = {};
-        };
-
-        window.resetCalibration = function() { 
-            currentGeoState = { x: 0, y: 0, rot: 0 }; 
-            if(currentAnalysisFeature) { 
-                panelGroup.clearLayers(); 
-                window.drawPanels(currentAnalysisFeature.geometry); 
-            } 
-        };
-        
-        window.applyCalibration = function(dx, dy, drot = 0) { 
-            currentGeoState.x += dx; 
-            currentGeoState.y += dy; 
-            currentGeoState.rot += drot; 
-            if(currentAnalysisFeature) { 
-                panelGroup.clearLayers(); 
-                window.drawPanels(currentAnalysisFeature.geometry); 
-            } 
-        };
-        
-        window.toggleMultiSelect = function() { 
-            isMultiSelectMode = document.getElementById('multiSelectToggle').checked; 
-            window.clearResults(); 
-        };
-        
-        window.toggleAutoScan = function() { 
-            autoScanMode = document.getElementById('autoScanToggle').checked; 
-        };
-        
-        window.switchTab = function(m) { 
-            const tabs = ['scan','analysis','legal','history'];
-            tabs.forEach(t => {
-                const btn = document.getElementById(`tab-${t}`);
-                const panel = document.getElementById(`panel-${t}`);
-                if(btn) btn.classList.remove('active');
-                if(panel) panel.classList.add('hidden');
-            });
-            const activeBtn = document.getElementById(`tab-${m}`);
-            const activePanel = document.getElementById(`panel-${m}`);
-            if(activeBtn) activeBtn.classList.add('active');
-            if(activePanel) activePanel.classList.remove('hidden');
-        };
-
-        window.toggleTarget = function() { 
-            const els = document.getElementsByName('scanTarget'); 
-            els.forEach(e => { if(e.checked) scanTarget = e.value; }); 
-            window.clearResults(); 
-            window.showToast(`모드 변경: ${scanTarget === 'land' ? '토지' : '지붕'}`);
-        };
-
-        window.updateEstimatedTime = function() { 
-            const d = parseInt(document.getElementById('scanDelay').value || "6000"); 
-            const tr = document.getElementById('timerRemaining');
-            if(tr) tr.innerText = `약 ${Math.floor(d*20/1000/60)}분 ${Math.floor(d*20/1000%60)}초`; 
-        };
-
-        window.startMission = async function() {
-            if(!map) return;
-            const bounds = map.getBounds(); 
-            const latStep = (bounds.getNorth()-bounds.getSouth())/4, lngStep = (bounds.getEast()-bounds.getWest())/5;
-            const delay = parseInt(document.getElementById('scanDelay').value || "6000");
-            window.showToast("순차적 스캔 시작");
-            for (let i = 0; i < 20; i++) {
-                const r = Math.floor(i/5), c = i%5;
-                await window.scanBuildings(bounds.getSouth() + latStep*(r+0.5), bounds.getWest() + lngStep*(c+0.5));
-                const fc = document.getElementById('foundCount');
-                if(fc) fc.innerText = `검색된 구역: ${selectableGroup.getLayers().length}개`;
-                const pc = document.getElementById('progressCount');
-                if(pc) pc.innerText = `${i+1} / 20`;
-                const pb = document.getElementById('totalProgressBar');
-                if(pb) pb.style.width = `${((i+1)/20)*100}%`;
-                await new Promise(r => setTimeout(r, delay));
-            }
-            window.showToast("스캔 미션 완료");
-        };
-
-        window.setRegion = function() { 
-            if(!map) return;
-            const val = document.getElementById('regionSelect').value; 
-            const REGIONS = {
-                'ansan_ind': [[37.31, 126.78], [37.31, 126.78]], 
-                'hwaseong_ind': [[37.20, 126.77], [37.20, 126.77]],
-                'cheonan_ind': [[36.85, 127.12], [36.85, 127.12]],
-                'gumi_ind': [[36.11, 128.39], [36.11, 128.39]],
-                'seoul': [[37.5665, 126.9780], [37.5665, 126.9780]],
-                'jeju': [[33.4996, 126.5312], [33.4996, 126.5312]]
+                } catch(e) { console.error(e); }
             };
-            const bounds = REGIONS[val]; 
-            if(bounds) { 
-                map.setView(bounds[0], 15); 
-                window.scanBuildings(bounds[0][0], bounds[0][1]); 
-                window.showToast("지역 이동"); 
-            }
-        };
-        
-        window.toggleSidebar = function() { 
-            document.getElementById('sidebar').classList.toggle('collapsed'); 
-            document.getElementById('sidebar-toggle-btn').classList.toggle('collapsed'); 
-        };
 
-        // 초기화 코드
-        window.addEventListener('load', function() {
-            window.updateEstimatedTime();
-            window.logSystem("System Ready.");
-        });
+            window.analyzeFeature = async function(feature) {
+                const featureId = feature.properties.pnu || feature.id || JSON.stringify(feature.geometry.coordinates);
+                
+                if (selectedFeatures.has(featureId)) {
+                    const stored = selectedFeatures.get(featureId);
+                    panelGroup.removeLayer(stored.layer);
+                    selectedFeatures.delete(featureId);
+                    let total = 0; selectedFeatures.forEach(v => total += v.count);
+                    accumulatedPanelsCount = total;
+                    if (total === 0) window.clearResults(); else window.calculateFinance(total);
+                    window.showToast("선택 해제");
+                    return;
+                }
+
+                if (!isMultiSelectMode) window.clearResults();
+
+                window.switchTab('analysis');
+                const props = feature.properties;
+                const addr = props.road_nm_ad || props.jibun_addr || props.addr || `PNU:${props.pnu}` || "주소 미상";
+                const addrEl = document.getElementById('analysisAddress');
+                if(addrEl) addrEl.innerText = addr;
+                
+                const drawResult = window.drawPanels(feature.geometry); 
+                if (drawResult) {
+                    selectedFeatures.set(featureId, { layer: drawResult.layer, count: drawResult.count, address: addr });
+                    let total = 0; selectedFeatures.forEach(v => total += v.count);
+                    accumulatedPanelsCount = total;
+                    window.calculateFinance(total);
+                }
+
+                currentAnalysisData = { address: addr, date: new Date().toLocaleDateString() };
+                currentAnalysisFeature = feature;
+                
+                const center = turf.center(feature);
+                window.fetchAIData(center.geometry.coordinates[1], center.geometry.coordinates[0], addr);
+            };
+
+            window.fetchAIData = async function(lat, lng, addr) {
+                const loadingEl = document.getElementById('legalLoading');
+                const contentEl = document.getElementById('legalContent');
+                const placeholderEl = document.getElementById('legalPlaceholder');
+                const scorePanel = document.getElementById('aiScorePanel');
+                
+                if(placeholderEl) placeholderEl.classList.add('hidden');
+                if(loadingEl) loadingEl.classList.remove('hidden');
+                if(contentEl) contentEl.classList.add('hidden');
+                if(scorePanel) scorePanel.classList.add('hidden');
+
+                try {
+                    window.trackApi('ai');
+                    const res = await fetch(`${BACKEND_URL}/api/analyze/comprehensive?lat=${lat}&lng=${lng}&address=${encodeURIComponent(addr)}`);
+                    const data = await res.json();
+                    
+                    if(loadingEl) loadingEl.classList.add('hidden');
+                    if(contentEl) contentEl.classList.remove('hidden');
+
+                    if(data.status === 'OK') {
+                         currentAnalysisData.ai_analysis = data;
+                         if(data.sun_hours) window.calculateFinance(accumulatedPanelsCount, data.sun_hours);
+                         const cb = document.getElementById('aiCommentBox');
+                         if(cb) cb.innerText = data.ai_comment || "분석 완료";
+
+                         let score = 55;
+                         if (data.zoning.includes("계획관리")) score += 25;
+                         if (data.eco_grade.includes("1")) score -= 55;
+                         if (data.sun_hours < 3.4) score -= 25;
+                         score = Math.max(10, Math.min(99, score));
+
+                         scorePanel.classList.remove('hidden');
+                         document.getElementById('scoreValue').innerText = score + "점";
+                         document.getElementById('scoreBar').style.width = score + "%";
+                         
+                         let regPrice = addr.includes("경기") ? 85 : addr.includes("충청") ? 45 : 30;
+                         const priceMsg = `약 ${Math.floor(regPrice*0.7)}~${Math.floor(regPrice*1.4)}만원/평 (추정 시세)`;
+                         document.getElementById('priceValue').innerText = priceMsg;
+                         currentAnalysisData.ai_analysis.score = score;
+                         currentAnalysisData.ai_analysis.price = priceMsg;
+
+                         const resultContainer = document.getElementById('aiAnalysisResult');
+                         const items = [
+                            {icon: 'ph-buildings', title: '용도지역', val: data.zoning, link: data.links.eum},
+                            {icon: 'ph-map-trifold', title: '지목', val: data.jimok || '미확인', link: data.links.eum},
+                            {icon: 'ph-plant', title: '생태등급', val: data.eco_grade, link: data.links.heritage},
+                            {icon: 'ph-lightning', title: '한전용량', val: data.kepco_capacity, link: data.links.kepco},
+                            {icon: 'ph-sun', title: '일사량', val: `${data.sun_hours}시간/일`, link: '#'}
+                         ];
+                         resultContainer.innerHTML = items.map(item => `
+                            <div class="bg-slate-700/50 p-2 rounded border border-slate-600 flex justify-between items-center text-[10px]">
+                                <div class="flex items-center gap-2"><div class="text-cyan-400"><i class="ph ${item.icon}"></i></div><div><div class="text-slate-400 font-bold">${item.title}</div><div class="text-white truncate w-32">${item.val}</div></div></div>
+                                <a href="${item.link}" target="_blank" class="bg-slate-600 px-1.5 py-0.5 rounded transition hover:bg-slate-500">이동</a>
+                            </div>
+                         `).join('');
+                    }
+                    return data;
+                } catch(e) { console.error(e); return null; }
+            };
+
+            window.calculateFinance = function(count, sunHoursOverride) { 
+                const countEl = document.getElementById('analysisCount');
+                if(countEl) countEl.innerText = `${count} 장`; 
+                const modPower = parseFloat(document.getElementById('modPower').value) || 640;
+                const capKw = (count * modPower) / 1000;
+                const capEl = document.getElementById('analysisCapacity');
+                if(capEl) capEl.innerText = `${capKw.toFixed(1)} kW`;
+
+                const costKw = parseFloat(document.getElementById('costPerKw').value || "90") * 10000;
+                const modPrice = parseFloat(document.getElementById('modPrice').value || "350");
+                const pfRatio = parseFloat(document.getElementById('pfLoanRatio').value || "90");
+                const pfRate = parseFloat(document.getElementById('pfInterestRate').value || "5.5");
+                
+                const sunHours = sunHoursOverride || 3.6;
+                const annualRev = capKw * sunHours * 365 * 210; 
+                const totalCost = (capKw * costKw) + (count * modPower * modPrice);
+                const loan = totalCost * (pfRatio / 100);
+                const annualInterest = loan * (pfRate / 100);
+                const netIncome = annualRev - annualInterest;
+                const payback = netIncome > 0 ? (totalCost / netIncome).toFixed(1) : 99;
+
+                const tcEl = document.getElementById('resTotalCost');
+                if(tcEl) tcEl.innerText = `${Math.round(totalCost).toLocaleString()} 원`;
+                const arEl = document.getElementById('resAnnualRev');
+                if(arEl) arEl.innerText = `${Math.round(annualRev).toLocaleString()} 원`;
+                const pbEl = document.getElementById('resPfPayback');
+                if(pbEl) pbEl.innerText = `${payback} 년`;
+
+                currentAnalysisData.finance = {
+                    capacity: `${capKw.toFixed(1)} kW`, totalCost: `${Math.round(totalCost).toLocaleString()} 원`,
+                    annualRev: `${Math.round(annualRev).toLocaleString()} 원`, payback: `${payback} 년`
+                };
+            };
+
+            window.drawPanels = function(geo) { 
+                try { 
+                    let poly = turf.feature(geo);
+                    if (currentGeoState.x !== 0 || currentGeoState.y !== 0 || currentGeoState.rot !== 0) {
+                        poly = turf.transformRotate(poly, currentGeoState.rot);
+                        poly = turf.transformTranslate(poly, currentGeoState.x / 5000, 90);
+                        poly = turf.transformTranslate(poly, currentGeoState.y / 5000, 0);
+                    }
+                    const modW = parseFloat(document.getElementById('modWidth').value);
+                    const modH = parseFloat(document.getElementById('modHeight').value);
+                    const angle = parseFloat(document.getElementById('installAngle').value);
+                    const projectedH = modH * Math.cos(angle * Math.PI / 180);
+                    const dLng = (modW + 0.1) / 88800; const dLat = (projectedH + 0.1) / 111000;
+                    
+                    const bbox = turf.bbox(poly);
+                    let tempPanels = [], count = 0, loopGuard = 0;
+                    // [중요] 루프 제한 대폭 상향 (10만회) - 대규모 부지 지원
+                    const MAX_LOOP = 100000;
+
+                    for(let x = bbox[0]; x < bbox[2]; x += dLng) {
+                        for(let y = bbox[1]; y < bbox[3]; y += dLat) {
+                            if(loopGuard++ > MAX_LOOP) break; 
+                            if(turf.booleanPointInPolygon(turf.point([x + dLng/2, y + dLat/2]), poly)) {
+                                tempPanels.push(turf.bboxPolygon([x, y, x + dLng*0.9, y + dLat*0.9]));
+                                count++;
+                            }
+                        }
+                        if(loopGuard > MAX_LOOP) break;
+                    }
+                    
+                    let newLayer;
+                    if (tempPanels.length === 0) {
+                        const center = turf.center(poly);
+                        const [cx, cy] = center.geometry.coordinates;
+                        const fallback = turf.bboxPolygon([cx, cy, cx+dLng, cy+dLat]);
+                        newLayer = L.geoJSON(fallback, { style: { color: 'red', fillColor: '#ef4444', fillOpacity: 0.5 } });
+                        count = 1;
+                        window.showToast("영역이 작아 최소 패널 1개를 배치했습니다.");
+                    } else {
+                        newLayer = L.geoJSON({type:"FeatureCollection", features: tempPanels}, {
+                            // [수정] 토지 모드: 밝은 브라운 테두리 + 투명도 0.4 (잘 보이게)
+                            style: scanTarget === 'land' ? { color: '#8d6e63', weight: 1, fillColor: '#8d6e63', fillOpacity: 0.4 } : { color: '#1e40af', weight: 1, fillColor: '#3b82f6', fillOpacity: 0.7 }
+                        });
+                    }
+                    
+                    newLayer.addTo(panelGroup);
+                    return { layer: newLayer, count: count };
+                } catch(e) { console.error("Panel Draw Error:", e); return null; } 
+            };
+
+            // 저장 및 리포트 관련
+            window.saveResult = function() {
+                const addr = document.getElementById('analysisAddress').innerText;
+                if(addr === '-' || addr === '주소 미상') return window.showToast("저장할 데이터가 없습니다.");
+                const ai = currentAnalysisData.ai_analysis || {};
+                const fn = currentAnalysisData.finance || {};
+                let history = JSON.parse(localStorage.getItem('scenergy_history') || "[]");
+                history.push({ 
+                    date: new Date().toLocaleString(), address: addr, capacity: fn.capacity, revenue: fn.annualRev,
+                    zoning: ai.zoning, jimok: ai.jimok, eco: ai.eco_grade, kepco: ai.kepco_capacity, sun: ai.sun_hours, score: ai.score, price: ai.price
+                });
+                localStorage.setItem('scenergy_history', JSON.stringify(history));
+                window.updateHistoryList(); window.showToast("상세 정보 저장 완료");
+            };
+
+            window.downloadCSV = function() {
+                const history = JSON.parse(localStorage.getItem('scenergy_history') || "[]");
+                if(history.length === 0) return window.showToast("데이터가 없습니다.");
+                const headers = ["날짜", "주소", "용량", "연수익", "용도지역", "지목", "생태등급", "한전용량", "일사량", "AI점수", "추정땅값"];
+                const csvRows = [headers.join(",")];
+                history.forEach(h => {
+                    csvRows.push([h.date, `"${h.address}"`, h.capacity, `"${h.revenue}"`, `"${h.zoning}"`, h.jimok, h.eco, `"${h.kepco}"`, h.sun, h.score, `"${h.price}"`].join(","));
+                });
+                const blob = new Blob(["\ufeff" + csvRows.join("\n")], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.download = `SCEnergy_Scan_${new Date().getTime()}.csv`; link.click();
+            };
+
+            window.updateHistoryList = function() {
+                const listEl = document.getElementById('historyList');
+                if(!listEl) return;
+                const history = JSON.parse(localStorage.getItem('scenergy_history') || "[]");
+                if(history.length === 0) { listEl.innerHTML = '<p class="text-center py-4">기록 없음</p>'; return; }
+                listEl.innerHTML = history.slice().reverse().map(h => `
+                    <div class="bg-slate-50 p-2 rounded border border-slate-200 text-xs mb-1">
+                        <div class="font-bold truncate">${h.address}</div>
+                        <div class="flex justify-between mt-1"><span class="text-blue-600 font-bold">${h.score}점</span><span>${h.capacity}</span></div>
+                    </div>
+                `).join('');
+            };
+
+            window.clearHistory = function() { if(confirm("전체 삭제?")) { localStorage.removeItem('scenergy_history'); window.updateHistoryList(); } };
+            
+            window.clearResults = function() { 
+                if(panelGroup) panelGroup.clearLayers(); 
+                if(selectableGroup) selectableGroup.clearLayers(); 
+                if(analysisMarkerGroup) analysisMarkerGroup.clearLayers();
+                selectedFeatures.clear(); 
+                accumulatedPanelsCount=0; 
+                const rc = document.getElementById('resultCard');
+                if(rc) rc.classList.add('hidden'); 
+                currentAnalysisData = {};
+            };
+
+            window.resetCalibration = function() { 
+                currentGeoState = { x: 0, y: 0, rot: 0 }; 
+                if(currentAnalysisFeature) { 
+                    panelGroup.clearLayers(); 
+                    window.drawPanels(currentAnalysisFeature.geometry); 
+                } 
+            };
+            
+            window.applyCalibration = function(dx, dy, drot = 0) { 
+                currentGeoState.x += dx * 5; 
+                currentGeoState.y += dy * 5; 
+                currentGeoState.rot += drot; 
+                if(currentAnalysisFeature) { 
+                    panelGroup.clearLayers(); 
+                    window.drawPanels(currentAnalysisFeature.geometry); 
+                } 
+            };
+            
+            window.toggleMultiSelect = function() { 
+                isMultiSelectMode = document.getElementById('multiSelectToggle').checked; 
+                window.clearResults(); 
+            };
+            
+            window.toggleAutoScan = function() { 
+                autoScanMode = document.getElementById('autoScanToggle').checked; 
+            };
+            
+            window.switchTab = function(m) { 
+                const tabs = ['scan','analysis','legal','history'];
+                tabs.forEach(t => {
+                    const btn = document.getElementById(`tab-${t}`);
+                    const panel = document.getElementById(`panel-${t}`);
+                    if(btn) btn.classList.remove('active');
+                    if(panel) panel.classList.add('hidden');
+                });
+                const activeBtn = document.getElementById(`tab-${m}`);
+                const activePanel = document.getElementById(`panel-${m}`);
+                if(activeBtn) activeBtn.classList.add('active');
+                if(activePanel) activePanel.classList.remove('hidden');
+            };
+
+            window.toggleTarget = function() { 
+                const els = document.getElementsByName('scanTarget'); 
+                els.forEach(e => { if(e.checked) scanTarget = e.value; }); 
+                window.clearResults(); 
+                window.showToast(`모드 변경: ${scanTarget === 'land' ? '토지' : '지붕'}`);
+            };
+
+            window.updateEstimatedTime = function() { 
+                const d = parseInt(document.getElementById('scanDelay').value || "6000"); 
+                const tr = document.getElementById('timerRemaining');
+                if(tr) tr.innerText = `약 ${Math.floor(d*20/1000/60)}분 ${Math.floor(d*20/1000%60)}초`; 
+            };
+
+            window.startMission = async function() {
+                if(!map) return;
+                const bounds = map.getBounds(); 
+                const latStep = (bounds.getNorth()-bounds.getSouth())/4, lngStep = (bounds.getEast()-bounds.getWest())/5;
+                const delay = parseInt(document.getElementById('scanDelay').value || "6000");
+                window.showToast("순차적 스캔 시작");
+                for (let i = 0; i < 20; i++) {
+                    const r = Math.floor(i/5), c = i%5;
+                    await window.scanBuildings(bounds.getSouth() + latStep*(r+0.5), bounds.getWest() + lngStep*(c+0.5));
+                    const fc = document.getElementById('foundCount');
+                    if(fc) fc.innerText = `검색된 구역: ${selectableGroup.getLayers().length}개`;
+                    const pc = document.getElementById('progressCount');
+                    if(pc) pc.innerText = `${i+1} / 20`;
+                    const pb = document.getElementById('totalProgressBar');
+                    if(pb) pb.style.width = `${((i+1)/20)*100}%`;
+                    await new Promise(r => setTimeout(r, delay));
+                }
+                window.showToast("스캔 미션 완료");
+            };
+
+            window.setRegion = function() { 
+                if(!map) return;
+                const val = document.getElementById('regionSelect').value; 
+                const REGIONS = {
+                    'ansan_ind': [[37.31, 126.78], [37.31, 126.78]], 
+                    'hwaseong_ind': [[37.20, 126.77], [37.20, 126.77]],
+                    'cheonan_ind': [[36.85, 127.12], [36.85, 127.12]],
+                    'gumi_ind': [[36.11, 128.39], [36.11, 128.39]],
+                    'seoul': [[37.5665, 126.9780], [37.5665, 126.9780]],
+                    'jeju': [[33.4996, 126.5312], [33.4996, 126.5312]]
+                    // ... (나머지 지역 데이터 생략 없이 모두 포함되어야 함)
+                };
+                const bounds = REGIONS[val]; 
+                if(bounds) { 
+                    map.setView(bounds[0], 15); 
+                    window.scanBuildings(bounds[0][0], bounds[0][1]); 
+                    window.showToast("지역 이동"); 
+                }
+            };
+            
+            window.toggleSidebar = function() { 
+                document.getElementById('sidebar').classList.toggle('collapsed'); 
+                document.getElementById('sidebar-toggle-btn').classList.toggle('collapsed'); 
+            };
+
+            // 초기화 코드
+            window.addEventListener('load', function() {
+                window.updateEstimatedTime();
+                window.logSystem("System Ready.");
+            });
+
+        })(window);
     </script>
 </body>
 </html>
