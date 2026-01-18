@@ -316,7 +316,7 @@
 
     <script>
         const VWORLD_TILE_KEY = "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F"; 
-        const BACKEND_URL = "https://port-0-solar-server-mkiol9jsc308f567.sel3.cloudtype.app";
+        const BACKEND_URL = "";
         const CLIENT_TOKEN = "scenergy-secret-token-2025";
         const ENCODED_ADMIN_PW = "Wmlld2lzZTEyMyE=";
 
@@ -1123,40 +1123,33 @@ window.exitAdminMode = function() {
 };
 
 window.verifyAdmin = async function () {
-  const input = document.getElementById("adminPw");
-  const pw = (input?.value || "").trim();
-  if (!pw) return window.showToast?.("관리자 비밀번호를 입력하세요.");
 
-  try {
-    const res = await fetch(`${BACKEND_URL}/api/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ id: "admin", pw })
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || data.status !== "OK" || data.role !== "admin") {
-      window.showToast?.(data.msg || "관리자 인증 실패");
-      return;
-    }
+                const pw = (document.getElementById('adminPw')?.value || '').trim();
+                if(!pw) return window.showToast("관리자 비밀번호를 입력하세요.");
+                try{
+                    const res = await fetch(`${BACKEND_URL}/api/auth/login`, {
+                        method: 'POST',
+                        headers: {'Content-Type':'application/json'},
+                        credentials: 'include',
+                        body: JSON.stringify({id: 'admin', pw})
+                    });
+                    const data = await res.json().catch(()=>({}));
+                    if(res.ok && data.status === 'OK' && data.role === 'admin'){
+                        // show dashboard
+                        document.getElementById('step-admin-login')?.classList.add('hidden');
+                        document.getElementById('step-admin-dashboard')?.classList.remove('hidden');
+                        document.getElementById('exit-admin-btn')?.classList.remove('hidden');
+                        // load users
+                        await window.refreshAdminUsers();
+                        window.showToast("관리자 인증 완료");
+                    }else{
+                        window.showToast(data.msg || "관리자 인증 실패");
+                    }
+                }catch(e){
+                    window.showToast("서버 연결 실패");
+                }
 
-    // show dashboard
-    document.getElementById("step-admin-login")?.classList.add("hidden");
-    document.getElementById("step-admin-dashboard")?.classList.remove("hidden");
-
-    // also close overlay + init
-    document.getElementById("login-overlay")?.classList.add("hidden-overlay");
-    document.getElementById("currentUserDisplay").innerText = "admin (관리자)";
-    isLoggedIn = true;
-    currentUser = "admin";
-
-    window.initMap?.();
-    window.renderUserList?.();
-  } catch (e) {
-    console.error(e);
-    window.showToast?.("관리자 인증 오류");
-  }
-};
+}
 
 // --- Users CRUD (localStorage) ---
 window.renderUserList = async function () {
