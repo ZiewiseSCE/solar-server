@@ -11,41 +11,29 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import urllib3
 import google.generativeai as genai
-# [보안] Rate Limiter 추가
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-# SSL 경고 억제
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
 # ---------------------------------------------------------
-# 1. 설정 (보안 강화)
+# 설정
 # ---------------------------------------------------------
 VWORLD_KEY = os.environ.get("VWORLD_KEY", "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F")
 KEPCO_KEY = os.environ.get("KEPCO_KEY", "19BZ8JWfae590LQCR6f2tEIyyD94wBBYEzY3UpYp")
-LAW_API_ID = os.environ.get("LAW_API_ID", "kennyyang")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyAp-VUCMqmiM5gRNjTMWkF07JJ1IpwOD3o") 
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "") 
 MY_DOMAIN_URL = os.environ.get("MY_DOMAIN_URL", "https://solar-server-jszy.onrender.com")
-
-# [보안 1] 클라이언트 토큰 (환경변수로 관리 권장, 여기선 기본값 설정)
 CLIENT_TOKEN = os.environ.get("CLIENT_TOKEN", "scenergy-secret-token-2025")
 
-# [보안 3] CORS 도메인 제한 (실서버 및 로컬호스트만 허용)
 allowed_origins = [MY_DOMAIN_URL, "http://localhost:5000", "http://127.0.0.1:5000"]
 CORS(app, resources={r"/api/*": {"origins": allowed_origins}})
 
-# [보안 2] Rate Limiter 설정 (메모리 저장소 사용)
 limiter = Limiter(
-    get_remote_address,
-    app=app,
-    default_limits=["2000 per day", "500 per hour"],
-    storage_uri="memory://"
+    get_remote_address, app=app, default_limits=["2000 per day", "100 per hour"], storage_uri="memory://"
 )
 
 session = requests.Session()
@@ -60,21 +48,16 @@ COMMON_HEADERS = {
     "Origin": MY_DOMAIN_URL
 }
 
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-else:
-    logger.warning("GEMINI_API_KEY is not set.")
+if GEMINI_API_KEY: genai.configure(api_key=GEMINI_API_KEY)
 
 # ---------------------------------------------------------
-# 2. 라우트
+# 라우트
 # ---------------------------------------------------------
 @app.route('/')
-def index():
-    return render_template('index.html')
+def index(): return render_template('index.html')
 
 @app.route('/health')
-def health_check():
-    return "OK", 200
+def health_check(): return "OK", 200
 
 @app.route('/report', methods=['POST'])
 def report_page():
@@ -82,43 +65,32 @@ def report_page():
     try:
         if 'finance' in data: data['finance'] = json.loads(data['finance'])
         if 'ai_analysis' in data: data['ai_analysis'] = json.loads(data['ai_analysis'])
-    except Exception as e:
-        logger.error(f"Report parsing error: {e}")
+    except: pass
     return render_template('report.html', data=data)
 
 # ---------------------------------------------------------
-# 3. 데이터 수집 로직
+# 분석 로직
 # ---------------------------------------------------------
 def get_solar_irradiance(lat, lng):
     try:
         url = "https://archive-api.open-meteo.com/v1/archive"
         end_date = datetime.date.today() - datetime.timedelta(days=7)
         start_date = end_date - datetime.timedelta(days=365)
-        params = {
-            "latitude": lat, "longitude": lng,
-            "start_date": start_date.strftime("%Y-%m-%d"),
-            "end_date": end_date.strftime("%Y-%m-%d"),
-            "daily": "shortwave_radiation_sum", "timezone": "auto"
-        }
+        params = { "latitude": lat, "longitude": lng, "start_date": start_date.strftime("%Y-%m-%d"), "end_date": end_date.strftime("%Y-%m-%d"), "daily": "shortwave_radiation_sum", "timezone": "auto" }
         resp = requests.get(url, params=params, timeout=5)
         if resp.status_code == 200:
             data = resp.json()
             daily = data.get('daily', {}).get('shortwave_radiation_sum', [])
             valid = [x for x in daily if x is not None]
-            if valid:
-                return round((sum(valid) / len(valid)) * 0.2778, 2)
-    except Exception as e: logger.warning(f"Solar API: {e}")
-    return None
+            if valid: return round((sum(valid) / len(valid)) * 0.2778, 2)
+    except: pass
+    return 3.6
 
 def fetch_vworld_info(layer, lat, lng):
     url = "https://api.vworld.kr/req/data"
     delta = 0.0001
     bbox = f"{float(lng)-delta},{float(lat)-delta},{float(lng)+delta},{float(lat)+delta}"
-    params = {
-        "service": "data", "request": "GetFeature", "data": layer,
-        "key": VWORLD_KEY, "geomFilter": f"BOX({bbox})", "size": "1",
-        "domain": MY_DOMAIN_URL, "format": "json"
-    }
+    params = { "service": "data", "request": "GetFeature", "data": layer, "key": VWORLD_KEY, "geomFilter": f"BOX({bbox})", "size": "1", "domain": MY_DOMAIN_URL, "format": "json" }
     try:
         resp = session.get(url, params=params, headers=COMMON_HEADERS, timeout=5, verify=False)
         data = resp.json()
@@ -128,40 +100,40 @@ def fetch_vworld_info(layer, lat, lng):
             if layer == "LT_C_WISNAT": return props.get('GRD_NM')
             if layer == "LP_PA_CBND_BUBUN": return props.get('JIMOK', '미확인')
             return "정보 있음"
-    except Exception as e: logger.warning(f"VWorld: {e}")
+    except: pass
     return None
 
 def calculate_ai_score(context):
     score = 50
-    reasons = []
-    risks = []
+    reasons, risks = [], []
     
+    # 신뢰도
     required = ['zoning', 'jimok', 'eco', 'sun']
     valid_cnt = sum(1 for f in required if context.get(f) and context.get(f) not in ["확인불가", "미확인", "등급외", None])
     confidence = round((valid_cnt / len(required)) * 100)
 
+    # 평가 로직
     zoning = context.get('zoning', '')
     if "계획관리" in zoning: score += 25; reasons.append("계획관리지역")
     elif "생산관리" in zoning: score += 15; reasons.append("생산관리지역")
-    elif "농림" in zoning: score -= 20; risks.append("농림지역 주의")
+    elif "농림" in zoning: score -= 20; risks.append("농림지역 규제")
     elif "보전" in zoning: score -= 30; risks.append("보전지역 규제")
         
     jimok = context.get('jimok', '')
-    if '임' in jimok: score -= 20; risks.append("임야 산지전용 필요")
-    elif '전' in jimok or '답' in jimok: score += 5; reasons.append("농지전용 검토")
-    elif '잡' in jimok or '대' in jimok: score += 15; reasons.append("잡종지/대지 유리")
+    if '임' in jimok: score -= 20; risks.append("산지전용 필요")
+    elif '전' in jimok or '답' in jimok: score += 5; reasons.append("농지전용 가능")
+    elif '잡' in jimok or '대' in jimok: score += 15; reasons.append("개발 용이")
 
     sun = context.get('sun') or 3.6
     if sun >= 4.0: score += 15
     elif sun < 3.2: score -= 15; risks.append("일사량 부족")
         
     eco = context.get('eco', '')
-    if "1등급" in eco: score -= 50; risks.append("생태 1등급 불가")
-    elif "2등급" in eco: score -= 15; risks.append("생태 2등급 협의")
+    if "1등급" in eco: score -= 50; risks.append("생태 1등급")
+    elif "2등급" in eco: score -= 15; risks.append("생태 2등급")
     else: score += 10
         
     score = max(0, min(100, score))
-    
     if score >= 90: grade = "A+"
     elif score >= 80: grade = "A"
     elif score >= 70: grade = "B"
@@ -183,56 +155,48 @@ def ask_gemini(context):
     if not GEMINI_API_KEY: return "AI 분석 키 미설정"
     try:
         model = genai.GenerativeModel('gemini-pro')
-        prompt = f"태양광 사업 부지 분석. 주소:{context['address']}, 용도:{context['zoning']}, 지목:{context['jimok']}, 생태:{context['eco']}, 일사량:{context['sun']}h. 리스크와 장점 위주 3줄 요약."
+        prompt = f"태양광 부지 분석. 주소:{context['address']}, 용도:{context['zoning']}, 지목:{context['jimok']}, 생태:{context['eco']}, 일사량:{context['sun']}h. 리스크/장점 3줄 요약."
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        logger.error(f"Gemini Error: {e}")
+        logger.error(str(e))
         return "AI 분석 지연"
 
-# ---------------------------------------------------------
-# 4. 종합 분석 API (보안 적용)
-# ---------------------------------------------------------
 @app.route('/api/analyze/comprehensive', methods=['POST'])
-@limiter.limit("10/minute") # [보안 2] 분당 10회 제한
+@limiter.limit("10/minute")
 def analyze_site():
-    # [보안 1] 헤더 토큰 검사
-    client_token = request.headers.get("X-CLIENT-TOKEN")
-    if client_token != CLIENT_TOKEN:
-        return jsonify({"status": "FORBIDDEN", "msg": "Invalid Token"}), 403
+    if request.headers.get("X-CLIENT-TOKEN") != CLIENT_TOKEN:
+        return jsonify({"status": "FORBIDDEN"}), 403
 
-    req_data = request.get_json()
-    lat = req_data.get('lat')
-    lng = req_data.get('lng')
-    addr = req_data.get('address', '주소 미상')
-
+    req = request.get_json()
+    lat, lng, addr = req.get('lat'), req.get('lng'), req.get('address', '주소 미상')
     if not lat or not lng: return jsonify({"status": "ERROR"}), 400
 
-    sun_hours = get_solar_irradiance(lat, lng)
+    sun = get_solar_irradiance(lat, lng)
     zoning = fetch_vworld_info("LT_C_UQ111", lat, lng) or "확인불가"
     eco = fetch_vworld_info("LT_C_WISNAT", lat, lng) or "등급외"
     jimok = fetch_vworld_info("LP_PA_CBND_BUBUN", lat, lng) or "미확인"
     
-    ai_score_data = calculate_ai_score({"zoning": zoning, "sun": sun_hours, "eco": eco, "jimok": jimok})
-    price_est = estimate_land_price(addr)
+    ai_score = calculate_ai_score({"zoning": zoning, "sun": sun, "eco": eco, "jimok": jimok})
+    price = estimate_land_price(addr)
     
-    gemini_context = {"address": addr, "zoning": zoning, "jimok": jimok, "eco": eco, "sun": sun_hours or 3.6}
-    ai_comment = ask_gemini(gemini_context)
+    gemini_ctx = {"address": addr, "zoning": zoning, "jimok": jimok, "eco": eco, "sun": sun or 3.6}
+    comment = ask_gemini(gemini_ctx)
 
-    kepco_msg = "데이터 없음 (한전ON 확인)"
-    env_check = "대상 아님"
-    if "보전" in zoning or "농림" in zoning: env_check = "검토 필요"
-    local_name = addr.split(' ')[1] if len(addr.split(' ')) > 1 else ""
+    kepco = "데이터 없음 (한전ON 확인)"
+    env = "대상 아님"
+    if "보전" in zoning or "농림" in zoning: env = "검토 필요"
+    local = addr.split(' ')[1] if len(addr.split(' ')) > 1 else ""
 
     return jsonify({
         "status": "OK",
         "address": addr,
         "zoning": zoning, "jimok": jimok, "eco_grade": eco,
-        "env_assessment": env_check, "kepco_capacity": kepco_msg,
-        "sun_hours": sun_hours, "ai_comment": ai_comment,
-        "ai_score": ai_score_data, "price_estimate": price_est,
+        "env_assessment": env, "kepco_capacity": kepco,
+        "sun_hours": sun, "ai_comment": comment,
+        "ai_score": ai_score, "price_estimate": price,
         "links": { 
-            "elis": f"https://www.elis.go.kr/search/normSearch?searchType=ALL&searchKeyword={local_name}+태양광",
+            "elis": f"https://www.elis.go.kr/search/normSearch?searchType=ALL&searchKeyword={local}+태양광",
             "eum": "https://www.eum.go.kr/web/am/amMain.jsp",
             "kepco": "https://online.kepco.co.kr/",
             "neins": "https://webgis.neins.go.kr/map.do",
