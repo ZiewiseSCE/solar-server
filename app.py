@@ -31,7 +31,7 @@ if not DATABASE_URL:
 
 # HTTPS 환경(Cloudtype)에서 세션 쿠키 안정성
 app.config.update(
-    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SAMESITE=os.environ.get('SESSION_COOKIE_SAMESITE','None'),
     SESSION_COOKIE_SECURE=(os.environ.get('SESSION_COOKIE_SECURE','true').lower()=='true'),
 )
 
@@ -287,6 +287,10 @@ def login():
     if not uid or not pw:
         return jsonify({"ok": False, "msg": "id/pw required"}), 400
 
+    # 관리자 계정은 ADMIN_PW 환경변수로 초기화됩니다. 누락되면 로그인 불가
+    if uid == ADMIN_ID and not ADMIN_PW:
+        return jsonify({"ok": False, "msg": "ADMIN_PW is not configured on server"}), 500
+
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT id, pw_hash, role FROM users WHERE id=%s", (uid,))
@@ -299,7 +303,14 @@ def login():
 
     session["uid"] = row[0]
     session["role"] = row[2]
-    return jsonify({"ok": True, "role": row[2]})
+    return jsonify({"ok": True, "status": "OK", "role": row[2], "user": row[0]})
+
+
+@app.get("/api/auth/me")
+def me():
+    if not session.get("uid"):
+        return jsonify({"ok": False, "loggedIn": False}), 200
+    return jsonify({"ok": True, "loggedIn": True, "user": session.get("uid"), "role": session.get("role")})
 
 @app.post("/api/auth/logout")
 def logout():
