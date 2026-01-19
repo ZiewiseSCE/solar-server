@@ -1,7 +1,7 @@
 import os
 import datetime
 import psycopg2
-from flask import Flask, request, jsonify, session
+from flask import Flask, request, jsonify, session, render_template
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -17,6 +17,15 @@ ADMIN_PW = os.environ.get("ADMIN_PW")
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required (Postgres)")
+
+# ===== pages (FIX: serve templates) =====
+@app.get("/")
+def home():
+    return render_template("index.html")
+
+@app.get("/report.html")
+def report_page():
+    return render_template("report.html")
 
 # ===== DB =====
 def get_conn():
@@ -69,7 +78,7 @@ def health():
 # ===== auth =====
 @app.post("/api/auth/login")
 def login():
-    data = request.json
+    data = request.json or {}
     uid = data.get("id")
     pw = data.get("pw")
 
@@ -93,7 +102,7 @@ def create_user():
     if session.get("role") != "admin":
         return jsonify({"ok": False, "msg": "forbidden"}), 403
 
-    data = request.json
+    data = request.json or {}
     uid = data["id"]
     pw = data["pw"]
     role = data.get("role", "user")
@@ -103,6 +112,8 @@ def create_user():
 
     cur.execute("SELECT id FROM users WHERE id=%s", (uid,))
     if cur.fetchone():
+        cur.close()
+        conn.close()
         return jsonify({"ok": False, "msg": "exists"}), 400
 
     cur.execute(
