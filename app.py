@@ -1,17 +1,15 @@
 import os
 import datetime
-import json
 import psycopg2
 from flask import Flask, request, jsonify, session, render_template
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 
-app = Flask(__name__, template_folder="templates")
+app = Flask(__name__)
 CORS(app, supports_credentials=True)
 
 # ===== env =====
-# NOTE: use SECRET_KEY if set, otherwise fall back to FLASK_SECRET_KEY (some deployments use this name)
-app.secret_key = os.environ.get("SECRET_KEY") or os.environ.get("FLASK_SECRET_KEY") or "dev-secret"
+app.secret_key = os.environ.get("SECRET_KEY", "dev-secret")
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 ADMIN_ID = os.environ.get("ADMIN_ID", "admin")
@@ -19,6 +17,25 @@ ADMIN_PW = os.environ.get("ADMIN_PW")
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required (Postgres)")
+
+# (권장) HTTPS에서 세션 쿠키 안정성
+app.config.update(
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=True,
+)
+
+# ===== pages =====
+@app.get("/")
+def home():
+    return render_template("index.html")
+
+@app.get("/report.html")
+def report_page():
+    return render_template("report.html")
+
+@app.get("/report")
+def report_page2():
+    return render_template("report.html")
 
 # ===== DB =====
 def get_conn():
@@ -38,7 +55,7 @@ def init_db():
     """)
     conn.commit()
 
-    # 관리자 자동 생성/동기화 (ADMIN_PW가 있을 때만)
+    # 관리자 자동 생성/동기화
     if ADMIN_PW:
         cur.execute("SELECT pw_hash FROM users WHERE id=%s", (ADMIN_ID,))
         row = cur.fetchone()
@@ -55,52 +72,12 @@ def init_db():
                 "UPDATE users SET pw_hash=%s WHERE id=%s",
                 (pw_hash, ADMIN_ID)
             )
-
         conn.commit()
 
     cur.close()
     conn.close()
 
 init_db()
-
-# ===== pages =====
-@app.get("/")
-def home():
-    return render_template("index.html")
-
-@app.post("/report")
-def report():
-    """
-    Front sends a hidden form with:
-      form_address, form_capacity, form_kepco, form_date, form_finance, form_ai
-    report.html expects Jinja data.finance, data.ai_analysis etc.
-    """
-    address = request.form.get("address") or request.form.get("form_address") or ""
-    capacity = request.form.get("capacity") or request.form.get("form_capacity") or ""
-    kepco = request.form.get("kepco") or request.form.get("form_kepco") or ""
-    date = request.form.get("date") or request.form.get("form_date") or datetime.datetime.utcnow().strftime("%Y-%m-%d")
-
-    finance_raw = request.form.get("finance") or request.form.get("form_finance") or "{}"
-    ai_raw = request.form.get("ai_analysis") or request.form.get("form_ai") or "{}"
-
-    try:
-        finance = json.loads(finance_raw) if finance_raw else {}
-    except Exception:
-        finance = {}
-    try:
-        ai_analysis = json.loads(ai_raw) if ai_raw else {}
-    except Exception:
-        ai_analysis = {}
-
-    data = {
-        "address": address,
-        "capacity": capacity,
-        "kepco": kepco,
-        "date": date,
-        "finance": finance or {},
-        "ai_analysis": ai_analysis or {}
-    }
-    return render_template("report.html", data=data)
 
 # ===== health =====
 @app.get("/health")
@@ -110,12 +87,9 @@ def health():
 # ===== auth =====
 @app.post("/api/auth/login")
 def login():
-    data = request.get_json(force=True, silent=True) or {}
-    uid = (data.get("id") or "").strip()
-    pw = (data.get("pw") or "").strip()
-
-    if not uid or not pw:
-        return jsonify({"ok": False, "msg": "missing id/pw"}), 400
+    data = request.json or {}
+    uid = data.get("id")
+    pw = data.get("pw")
 
     conn = get_conn()
     cur = conn.cursor()
@@ -129,12 +103,28 @@ def login():
 
     session["uid"] = row[0]
     session["role"] = row[2]
-    return jsonify({"ok": True, "role": row[2], "user": row[0]})
+    return jsonify({"ok": True, "role": row[2]})
 
 @app.post("/api/auth/logout")
 def logout():
     session.clear()
     return jsonify({"ok": True})
+
+# ===== admin: list users (FIX) =====
+@app.get("/api/admin/users")
+def list_users():
+    if session.get("role") != "admin":
+        return jsonify({"ok": False, "msg": "forbidden"}), 403
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, role, created_at FROM users ORDER BY created_at DESC")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    users = [{"id": r[0], "role": r[1], "created_at": r[2]} for r in rows]
+    return jsonify({"ok": True, "users": users})
 
 # ===== admin: create user =====
 @app.post("/api/admin/users")
@@ -142,13 +132,10 @@ def create_user():
     if session.get("role") != "admin":
         return jsonify({"ok": False, "msg": "forbidden"}), 403
 
-    data = request.get_json(force=True, silent=True) or {}
-    uid = (data.get("id") or "").strip()
-    pw = (data.get("pw") or "").strip()
-    role = (data.get("role") or "user").strip()
-
-    if not uid or not pw:
-        return jsonify({"ok": False, "msg": "missing id/pw"}), 400
+    data = request.json or {}
+    uid = data["id"]
+    pw = data["pw"]
+    role = data.get("role", "user")
 
     conn = get_conn()
     cur = conn.cursor()
