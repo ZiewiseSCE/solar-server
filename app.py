@@ -22,7 +22,7 @@ if not DATABASE_URL:
 # HTTPS 환경(Cloudtype)에서 세션 쿠키 안정성
 app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_SECURE=(os.environ.get("SESSION_COOKIE_SECURE","true").lower() == "true"),
 )
 
 # ===== pages =====
@@ -37,6 +37,29 @@ def report_page():
 @app.get("/report")
 def report_page2():
     return render_template("report.html")
+
+
+@app.post("/report")
+def report_submit():
+    """index.html에서 hidden form으로 전달된 데이터를 받아 report.html을 렌더링합니다."""
+    form = request.form or {}
+    # finance / ai_analysis 는 JSON 문자열로 들어옴
+    def _loads(v):
+        try:
+            import json as _json
+            return _json.loads(v) if v else {}
+        except Exception:
+            return {}
+    data = {
+        "address": form.get("address", ""),
+        "capacity": form.get("capacity", ""),
+        "kepco_capacity": form.get("kepco_capacity", ""),
+        "date": form.get("date", ""),
+        "finance": _loads(form.get("finance")),
+        "ai_analysis": _loads(form.get("ai_analysis")),
+    }
+    # report.html 템플릿이 기대하는 키를 최대한 맞춰줌
+    return render_template("report.html", data=data)
 
 # ===== DB =====
 def get_conn():
@@ -111,8 +134,7 @@ def login():
 
     session["uid"] = row[0]
     session["role"] = row[2]
-    return jsonify({"ok": True, "role": row[2]})
-
+    return jsonify({"ok": True, "status": "OK", "role": row[2], "user": row[0]})
 @app.post("/api/auth/logout")
 def logout():
     session.clear()
