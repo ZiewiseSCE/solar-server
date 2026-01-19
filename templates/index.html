@@ -107,8 +107,7 @@
                     <summary class="p-3 text-xs font-bold text-slate-600 cursor-pointer flex items-center justify-between hover:bg-slate-50 bg-slate-100 rounded-t-lg"><span class="flex items-center gap-1"><i class="ph ph-sliders-horizontal"></i> 분석 파라미터</span><i class="ph ph-caret-down group-open:rotate-180 transition"></i></summary>
                     <div class="p-3 space-y-3 border-t border-gray-200 text-xs">
                         <div class="bg-indigo-50 p-2 rounded border border-indigo-100">
-                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 가로(m)</label><input type="number" id="modWidth" value="1.13" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="window.reCalculate()"></div><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 세로(m)</label><input type="number" id="modHeight" value="2.4" step="0.01" class="w-full border p-1 rounded text-center" onchange="window.reCalculate()"></div></div></div></div>
-                        <div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">외곽 이격(세트백, m)</label><div class="flex gap-1"><input type="number" id="setbackDist" value="0.6" step="0.1" class="w-full border p-1 rounded text-center" onchange="window.reCalculate()"></div></div>
+                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 가로(m)</label><input type="number" id="modWidth" value="1.13" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="window.reCalculate()"></div><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 세로(m)</label><input type="number" id="modHeight" value="2.4" step="0.01" class="w-full border p-1 rounded text-center" onchange="window.reCalculate()"></div></div>
                              <div class="grid grid-cols-2 gap-2 mb-2"><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 최대높이(m)</label><input type="number" id="installHeight" value="0.5" step="0.1" class="w-full border p-1 rounded text-center" onchange="window.reCalculate()"></div><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 각도(°)</label><input type="number" id="installAngle" value="20" class="w-full border p-1 rounded text-center" onchange="window.reCalculate()"></div></div>
                              <div class="grid grid-cols-2 gap-2"><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 출력(W)</label><input type="number" id="modPower" value="640" class="w-full border p-1 rounded text-center" onchange="window.reCalculate()"></div><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">이격(m)</label><input type="number" id="rowSpacing" value="1.2" step="0.1" class="w-full border p-1 rounded text-center" onchange="window.reCalculate()"></div></div>
                         </div>
@@ -201,11 +200,11 @@
                         <div class="flex justify-between items-center mb-2 border-b border-slate-700 pb-1"><span class="text-[11px] font-bold text-indigo-300 flex items-center gap-1"><i class="ph ph-crosshair"></i> 패널 조정 (D-Pad)</span><button type="button" onclick="window.resetCalibration()" class="text-[9px] bg-slate-700 hover:bg-slate-600 px-1.5 py-0.5 rounded text-white border border-slate-600">초기화</button></div>
                         <div class="flex flex-col items-center justify-center gap-2 pt-2 pb-1">
                              <div class="grid grid-cols-3 gap-2">
-                                <div></div><button type="button" class="d-pad-btn" onpointerdown="window.startDPad('up')" onpointerup="window.stopDPad()" onpointerleave="window.stopDPad()">▲</button><div></div>
-                                <button type="button" class="d-pad-btn" onpointerdown="window.startDPad('left')" onpointerup="window.stopDPad()" onpointerleave="window.stopDPad()">◀</button>
+                                <div></div><button type="button" class="d-pad-btn" onclick="window.applyCalibration(0, 0.5)">▲</button><div></div>
+                                <button type="button" class="d-pad-btn" onclick="window.applyCalibration(-0.5, 0)">◀</button>
                                 <div class="w-8 h-8 flex items-center justify-center text-[9px] font-mono text-slate-400 border border-slate-600 rounded">Mov</div>
-                                <button type="button" class="d-pad-btn" onpointerdown="window.startDPad('right')" onpointerup="window.stopDPad()" onpointerleave="window.stopDPad()">▶</button>
-                                <div></div><button type="button" class="d-pad-btn" onpointerdown="window.startDPad('down')" onpointerup="window.stopDPad()" onpointerleave="window.stopDPad()">▼</button><div></div>
+                                <button type="button" class="d-pad-btn" onclick="window.applyCalibration(0.5, 0)">▶</button>
+                                <div></div><button type="button" class="d-pad-btn" onclick="window.applyCalibration(0, -0.5)">▼</button><div></div>
                              </div>
                              <div class="flex gap-2 w-full px-4 border-t border-slate-700 pt-2 mt-1">
                                 <button type="button" class="d-pad-btn flex-1 text-[10px]" onclick="window.applyCalibration(0, 0, -5)">↺ 회전</button>
@@ -381,7 +380,27 @@ window.toggleAutoScan()"><span class="flex items-center gap-1"><i class="ph ph-r
 
     <script>
         const VWORLD_TILE_KEY = "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F"; 
-        const BACKEND_URL = "";
+        // 백엔드 URL 설정
+// 1) ?backend=https://your-backend.example.com (쿼리스트링)
+// 2) window.BACKEND_URL 전역 변수
+// 3) <meta name="backend-url" content="...">
+// 4) 기본값: 동일 오리진(같은 서버에서 서빙될 때)
+const BACKEND_URL = (() => {
+  try {
+    const qs = new URLSearchParams(location.search);
+    const fromQS = qs.get("backend");
+    if (fromQS) return fromQS.replace(/\/+$/,'');
+    // @ts-ignore
+    const fromGlobal = (window.BACKEND_URL || "").toString();
+    if (fromGlobal) return fromGlobal.replace(/\/+$/,'');
+    const meta = document.querySelector('meta[name="backend-url"]');
+    const fromMeta = meta?.getAttribute("content") || "";
+    if (fromMeta) return fromMeta.replace(/\/+$/,'');
+    return location.origin;
+  } catch(e) {
+    return location.origin;
+  }
+})();
         let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, analysisMarkerGroup, existingGroup, substationGroup;
         let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
         let selectedFeatures = new Map();
@@ -469,36 +488,7 @@ catch(e) { console.warn("Storage restricted"); }
 
             try {
                 map = L.map('map', { zoomControl: false }).setView([36.5, 127.5], 7);
-                
-        // ===== Auto-scan (move-based) =====
-        let autoScanBoxLayer = null;
-        function _updateAutoScanBox() {
-            try {
-                if (!map) return;
-                const tgl = document.getElementById('autoScanToggle');
-                if (!tgl || !tgl.checked) {
-                    if (autoScanBoxLayer) { try { map.removeLayer(autoScanBoxLayer); } catch(e){} autoScanBoxLayer=null; }
-                    return;
-                }
-                const c = map.getCenter();
-                const box = [[c.lat-0.001, c.lng-0.001],[c.lat+0.001, c.lng+0.001]];
-                const rect = L.rectangle(box, {weight:2, dashArray:'6 6', fill:false});
-                if (autoScanBoxLayer) { try { map.removeLayer(autoScanBoxLayer); } catch(e){} }
-                autoScanBoxLayer = rect.addTo(map);
-            } catch(e){}
-        }
-        let _autoScanDebounce=null;
-        map.on('moveend', () => {
-            _updateAutoScanBox();
-            const tgl = document.getElementById('autoScanToggle');
-            if (!tgl || !tgl.checked) return;
-            if (_autoScanDebounce) clearTimeout(_autoScanDebounce);
-            _autoScanDebounce = setTimeout(() => {
-                const c = map.getCenter();
-                window.scanBuildings(c.lat, c.lng);
-            }, 450);
-        });
-L.control.zoom({ position: 'bottomright' }).addTo(map);
+                L.control.zoom({ position: 'bottomright' }).addTo(map);
                 
                 layers = { 
                     base: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Base/{z}/{y}/{x}.png`), 
@@ -879,18 +869,6 @@ L.control.zoom({ position: 'bottomright' }).addTo(map);
         // ✅ 패널 생성(그리드) / 렌더 / 교정용 변환을 분리해서 "실시간 이동" 체감 개선
         function _buildPanelsGrid(geo) {
             let poly = turf.feature(geo);
-
-            // 외곽 이격(세트백) 적용: 건물/필지 경계에서 일정 거리 띄우기 (m)
-            const setback = parseFloat(document.getElementById('setbackDist')?.value) || 0;
-            if (setback > 0) {
-                try {
-                    const inner = turf.buffer(poly, -setback/1000, { units: 'kilometers' });
-                    // buffer 결과가 유효할 때만 사용
-                    if (inner && inner.geometry && inner.geometry.coordinates && inner.geometry.coordinates.length) {
-                        poly = inner;
-                    }
-                } catch(e) { /* ignore */ }
-            }
 
             const modW = parseFloat(document.getElementById('modWidth').value) || 1.13;
             const modH = parseFloat(document.getElementById('modHeight').value) || 2.4;
