@@ -21,6 +21,43 @@ CORS(app, supports_credentials=True)
 # ===== env =====
 # Cloudtype에서 SECRET_KEY 또는 FLASK_SECRET_KEY 둘 중 하나로 설정한 경우를 모두 지원
 app.secret_key = os.environ.get("SECRET_KEY") or os.environ.get("FLASK_SECRET_KEY") or "dev-secret"
+serializer = URLSafeTimedSerializer(app.secret_key)
+
+def _issue_token(uid: str, role: str) -> str:
+    return serializer.dumps({"uid": uid, "role": role})
+
+def _read_token(token: str, max_age_seconds: int = 60*60*24*7):
+    try:
+        data = serializer.loads(token, max_age=max_age_seconds)
+        if isinstance(data, dict) and data.get("uid") and data.get("role"):
+            return data
+    except SignatureExpired:
+        return None
+    except BadSignature:
+        return None
+    except Exception:
+        return None
+    return None
+
+def _get_auth():
+    # 1) session
+    if session.get("uid"):
+        return {"uid": session.get("uid"), "role": session.get("role")}
+    # 2) bearer token
+    auth = request.headers.get("Authorization","")
+    if auth.lower().startswith("bearer "):
+        token = auth.split(" ",1)[1].strip()
+        data = _read_token(token)
+        if data:
+            return data
+    return None
+
+def _require_admin():
+    auth = _get_auth()
+    if not auth or auth.get("role") != "admin":
+        return None
+    return auth
+
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 ADMIN_ID = os.environ.get("ADMIN_ID", "admin")
@@ -303,14 +340,15 @@ def login():
 
     session["uid"] = row[0]
     session["role"] = row[2]
-    return jsonify({"ok": True, "status": "OK", "role": row[2], "user": row[0]})
+    return jsonify({"ok": True, "status": "OK", "role": row[2], "user": row[0], "token": _issue_token(row[0], row[2])})
 
 
 @app.get("/api/auth/me")
 def me():
-    if not session.get("uid"):
+    auth = _get_auth()
+    if not auth:
         return jsonify({"ok": False, "loggedIn": False}), 200
-    return jsonify({"ok": True, "loggedIn": True, "user": session.get("uid"), "role": session.get("role")})
+    return jsonify({"ok": True, "loggedIn": True, "user": auth.get("uid"), "role": auth.get("role")})
 
 @app.post("/api/auth/logout")
 def logout():
