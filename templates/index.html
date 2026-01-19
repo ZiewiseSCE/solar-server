@@ -387,8 +387,7 @@ window.toggleAutoScan()"><span class="flex items-center gap-1"><i class="ph ph-r
         let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, analysisMarkerGroup, existingGroup, substationGroup;
         let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
         let selectedFeatures = new Map();
-        let for (const k in currentAnalysisData) { try { delete currentAnalysisData[k]; } catch(e){} }
-            window.currentAnalysisData = currentAnalysisData;
+        let currentAnalysisData = {};
         window.currentAnalysisData = currentAnalysisData;
         // ✅ 패널 교정(캘리브레이션)용: 최초 계산된 패널(기준) 피처컬렉션 저장
         let _basePanelsFC = null;
@@ -1218,7 +1217,8 @@ window.attemptLogin = async function() {
                 });
 
                 const data = await res.json().catch(() => ({}));
-                if(res.ok && data.status === "OK") {
+                const ok = (data && (data.ok === true || data.status === "OK"));
+                if(res.ok && ok) {
                     isLoggedIn = true;
                     currentUser = data.user || id;
 
@@ -1274,7 +1274,9 @@ window.verifyAdmin = async function () {
                         body: JSON.stringify({id: 'admin', pw})
                     });
                     const data = await res.json().catch(()=>({}));
-                    if(res.ok && data.status === 'OK' && data.role === 'admin'){
+                    const ok = (data && (data.ok === true || data.status === 'OK'));
+                    const role = data.role || data.user_role || data.user?.role;
+                    if(res.ok && ok && role === 'admin'){
                         // show dashboard
                         document.getElementById('step-admin-login')?.classList.add('hidden');
                         document.getElementById('step-admin-dashboard')?.classList.remove('hidden');
