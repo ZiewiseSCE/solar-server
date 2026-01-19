@@ -107,7 +107,8 @@
                     <summary class="p-3 text-xs font-bold text-slate-600 cursor-pointer flex items-center justify-between hover:bg-slate-50 bg-slate-100 rounded-t-lg"><span class="flex items-center gap-1"><i class="ph ph-sliders-horizontal"></i> 분석 파라미터</span><i class="ph ph-caret-down group-open:rotate-180 transition"></i></summary>
                     <div class="p-3 space-y-3 border-t border-gray-200 text-xs">
                         <div class="bg-indigo-50 p-2 rounded border border-indigo-100">
-                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 가로(m)</label><input type="number" id="modWidth" value="1.13" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="window.reCalculate()"></div><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 세로(m)</label><input type="number" id="modHeight" value="2.4" step="0.01" class="w-full border p-1 rounded text-center" onchange="window.reCalculate()"></div></div>
+                             <div class="grid grid-cols-2 gap-2 mb-2"><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 가로(m)</label><input type="number" id="modWidth" value="1.13" step="0.01" class="w-full border p-1 rounded text-center bg-white" onchange="window.reCalculate()"></div><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 세로(m)</label><input type="number" id="modHeight" value="2.4" step="0.01" class="w-full border p-1 rounded text-center" onchange="window.reCalculate()"></div></div></div></div>
+                        <div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">외곽 이격(세트백, m)</label><div class="flex gap-1"><input type="number" id="setbackDist" value="0.6" step="0.1" class="w-full border p-1 rounded text-center" onchange="window.reCalculate()"></div></div>
                              <div class="grid grid-cols-2 gap-2 mb-2"><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 최대높이(m)</label><input type="number" id="installHeight" value="0.5" step="0.1" class="w-full border p-1 rounded text-center" onchange="window.reCalculate()"></div><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">설치 각도(°)</label><input type="number" id="installAngle" value="20" class="w-full border p-1 rounded text-center" onchange="window.reCalculate()"></div></div>
                              <div class="grid grid-cols-2 gap-2"><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">모듈 출력(W)</label><input type="number" id="modPower" value="640" class="w-full border p-1 rounded text-center" onchange="window.reCalculate()"></div><div><label class="block mb-0.5 text-[10px] text-slate-500 font-bold">이격(m)</label><input type="number" id="rowSpacing" value="1.2" step="0.1" class="w-full border p-1 rounded text-center" onchange="window.reCalculate()"></div></div>
                         </div>
@@ -200,11 +201,11 @@
                         <div class="flex justify-between items-center mb-2 border-b border-slate-700 pb-1"><span class="text-[11px] font-bold text-indigo-300 flex items-center gap-1"><i class="ph ph-crosshair"></i> 패널 조정 (D-Pad)</span><button type="button" onclick="window.resetCalibration()" class="text-[9px] bg-slate-700 hover:bg-slate-600 px-1.5 py-0.5 rounded text-white border border-slate-600">초기화</button></div>
                         <div class="flex flex-col items-center justify-center gap-2 pt-2 pb-1">
                              <div class="grid grid-cols-3 gap-2">
-                                <div></div><button type="button" class="d-pad-btn" onclick="window.applyCalibration(0, 0.5)">▲</button><div></div>
-                                <button type="button" class="d-pad-btn" onclick="window.applyCalibration(-0.5, 0)">◀</button>
+                                <div></div><button type="button" class="d-pad-btn" onpointerdown="window.startDPad('up')" onpointerup="window.stopDPad()" onpointerleave="window.stopDPad()">▲</button><div></div>
+                                <button type="button" class="d-pad-btn" onpointerdown="window.startDPad('left')" onpointerup="window.stopDPad()" onpointerleave="window.stopDPad()">◀</button>
                                 <div class="w-8 h-8 flex items-center justify-center text-[9px] font-mono text-slate-400 border border-slate-600 rounded">Mov</div>
-                                <button type="button" class="d-pad-btn" onclick="window.applyCalibration(0.5, 0)">▶</button>
-                                <div></div><button type="button" class="d-pad-btn" onclick="window.applyCalibration(0, -0.5)">▼</button><div></div>
+                                <button type="button" class="d-pad-btn" onpointerdown="window.startDPad('right')" onpointerup="window.stopDPad()" onpointerleave="window.stopDPad()">▶</button>
+                                <div></div><button type="button" class="d-pad-btn" onpointerdown="window.startDPad('down')" onpointerup="window.stopDPad()" onpointerleave="window.stopDPad()">▼</button><div></div>
                              </div>
                              <div class="flex gap-2 w-full px-4 border-t border-slate-700 pt-2 mt-1">
                                 <button type="button" class="d-pad-btn flex-1 text-[10px]" onclick="window.applyCalibration(0, 0, -5)">↺ 회전</button>
@@ -305,7 +306,66 @@
     <div class="absolute top-5 right-5 z-[1000] bg-white p-2 rounded-lg shadow-lg border border-gray-200 text-xs w-44">
         <div class="font-bold text-slate-600 mb-2 border-b pb-1 flex items-center gap-1"><i class="ph ph-stack"></i> 지도 설정</div>
         <label class="flex items-center gap-2 cursor-pointer p-1.5 mb-2 bg-indigo-50 rounded text-indigo-700 font-bold border border-indigo-200"><input type="checkbox" id="multiSelectToggle" onchange="window.toggleMultiSelect()"><span class="flex items-center gap-1"><i class="ph ph-plus-circle"></i> 결과 누적 모드</span></label>
-        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="autoScanToggle" onchange="window.toggleAutoScan()"><span class="flex items-center gap-1"><i class="ph ph-radar"></i> 자동 스캔</span></label>
+        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="autoScanToggle" onchange="
+        window.downloadScanResults = function(format="geojson") {
+            try {
+                const feats = [];
+                if (selectableGroup) {
+                    selectableGroup.eachLayer(l => {
+                        if (l.toGeoJSON) {
+                            const gj = l.toGeoJSON();
+                            if (gj && gj.type === "Feature") feats.push(gj);
+                            else if (gj && gj.type === "FeatureCollection") feats.push(...(gj.features||[]));
+                        }
+                    });
+                }
+                const fc = { type:"FeatureCollection", features: feats };
+                const ts = new Date().toISOString().replace(/[:.]/g,'-');
+                if (format === "csv") {
+                    const rows = [["id","type","lat","lng"]];
+                    fc.features.forEach((f, idx) => {
+                        const c = f.geometry && f.geometry.type === "Point" ? f.geometry.coordinates : null;
+                        const lng = c ? c[0] : "";
+                        const lat = c ? c[1] : "";
+                        rows.push([String(f.id||idx), String(f.geometry?.type||""), String(lat), String(lng)]);
+                    });
+                    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+                    const blob = new Blob([csv], {type:"text/csv;charset=utf-8"});
+                    const a = document.createElement("a");
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `scan-results-${ts}.csv`;
+                    a.click();
+                    URL.revokeObjectURL(a.href);
+                    return;
+                }
+                const blob = new Blob([JSON.stringify(fc,null,2)], {type:"application/geo+json"});
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = `scan-results-${ts}.geojson`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+            } catch(e) {
+                console.error(e);
+                window.showToast?.("다운로드 실패");
+            }
+        };
+
+        window.cancelMission = function(resetProgressOnly=true) {
+            // stop current mission loop
+            stopScan = true;
+            missionPaused = false;
+            missionRunning = false;
+            if (_missionTimer) { try { clearInterval(_missionTimer); } catch(e){} _missionTimer=null; }
+            const timerEl = document.getElementById('timerRemaining');
+            if (timerEl) timerEl.innerText = "00:00:00";
+            const btn = document.getElementById('startBtn');
+            if (btn) btn.innerText = "▶ 스캔 시작";
+            if (!resetProgressOnly) {
+                window.clearResults();
+            }
+            window.showToast?.(resetProgressOnly ? "스캔 취소(결과 유지)" : "스캔 리셋(결과 삭제)");
+        };
+window.toggleAutoScan()"><span class="flex items-center gap-1"><i class="ph ph-radar"></i> 자동 스캔</span></label>
         <hr class="my-2 border-gray-200">
         <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="existingPlantToggle" onchange="window.toggleLayer('existing')" checked><span>기설치 태양광</span></label>
         <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="substationToggle" onchange="window.toggleLayer('substation')" checked><span>변전소/선로</span></label>
@@ -334,7 +394,7 @@
         window.currentAnalysisData = currentAnalysisData;
 
         // keep alignment marker
-        // (removed stray marker that caused ReferenceError)
+        sData;
         window.currentAnalysisData = currentAnalysisData;
         // ✅ 패널 교정(캘리브레이션)용: 최초 계산된 패널(기준) 피처컬렉션 저장
         let _basePanelsFC = null;
@@ -409,7 +469,36 @@ catch(e) { console.warn("Storage restricted"); }
 
             try {
                 map = L.map('map', { zoomControl: false }).setView([36.5, 127.5], 7);
-                L.control.zoom({ position: 'bottomright' }).addTo(map);
+                
+        // ===== Auto-scan (move-based) =====
+        let autoScanBoxLayer = null;
+        function _updateAutoScanBox() {
+            try {
+                if (!map) return;
+                const tgl = document.getElementById('autoScanToggle');
+                if (!tgl || !tgl.checked) {
+                    if (autoScanBoxLayer) { try { map.removeLayer(autoScanBoxLayer); } catch(e){} autoScanBoxLayer=null; }
+                    return;
+                }
+                const c = map.getCenter();
+                const box = [[c.lat-0.001, c.lng-0.001],[c.lat+0.001, c.lng+0.001]];
+                const rect = L.rectangle(box, {weight:2, dashArray:'6 6', fill:false});
+                if (autoScanBoxLayer) { try { map.removeLayer(autoScanBoxLayer); } catch(e){} }
+                autoScanBoxLayer = rect.addTo(map);
+            } catch(e){}
+        }
+        let _autoScanDebounce=null;
+        map.on('moveend', () => {
+            _updateAutoScanBox();
+            const tgl = document.getElementById('autoScanToggle');
+            if (!tgl || !tgl.checked) return;
+            if (_autoScanDebounce) clearTimeout(_autoScanDebounce);
+            _autoScanDebounce = setTimeout(() => {
+                const c = map.getCenter();
+                window.scanBuildings(c.lat, c.lng);
+            }, 450);
+        });
+L.control.zoom({ position: 'bottomright' }).addTo(map);
                 
                 layers = { 
                     base: L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_TILE_KEY}/Base/{z}/{y}/{x}.png`), 
@@ -791,6 +880,18 @@ catch(e) { console.warn("Storage restricted"); }
         function _buildPanelsGrid(geo) {
             let poly = turf.feature(geo);
 
+            // 외곽 이격(세트백) 적용: 건물/필지 경계에서 일정 거리 띄우기 (m)
+            const setback = parseFloat(document.getElementById('setbackDist')?.value) || 0;
+            if (setback > 0) {
+                try {
+                    const inner = turf.buffer(poly, -setback/1000, { units: 'kilometers' });
+                    // buffer 결과가 유효할 때만 사용
+                    if (inner && inner.geometry && inner.geometry.coordinates && inner.geometry.coordinates.length) {
+                        poly = inner;
+                    }
+                } catch(e) { /* ignore */ }
+            }
+
             const modW = parseFloat(document.getElementById('modWidth').value) || 1.13;
             const modH = parseFloat(document.getElementById('modHeight').value) || 2.4;
             const angle = parseFloat(document.getElementById('installAngle').value) || 20;
@@ -982,70 +1083,6 @@ catch(e) { console.warn("Storage restricted"); }
         window.toggleAutoScan = function() { 
             autoScanMode = document.getElementById('autoScanToggle').checked; 
         };
-
-
-// --- Scan results download (GeoJSON/CSV) ---
-window.downloadScanResults = function(format="geojson") {
-  try {
-    const feats = [];
-    if (selectableGroup) {
-      selectableGroup.eachLayer(l => {
-        if (l.toGeoJSON) {
-          const gj = l.toGeoJSON();
-          if (gj && gj.type === "Feature") feats.push(gj);
-          else if (gj && gj.type === "FeatureCollection") feats.push(...(gj.features || []));
-        }
-      });
-    }
-    const fc = { type:"FeatureCollection", features: feats };
-    const ts = new Date().toISOString().replace(/[:.]/g,'-');
-
-    if (format === "csv") {
-      const rows = [["id","type","lat","lng"]];
-      fc.features.forEach((f, idx) => {
-        const c = (f.geometry && f.geometry.type === "Point") ? f.geometry.coordinates : null;
-        const lng = c ? c[0] : "";
-        const lat = c ? c[1] : "";
-        rows.push([String(f.id||idx), String(f.geometry?.type||""), String(lat), String(lng)]);
-      });
-      const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
-      const blob = new Blob([csv], {type:"text/csv;charset=utf-8"});
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `scan-results-${ts}.csv`;
-      a.click();
-      URL.revokeObjectURL(a.href);
-      return;
-    }
-
-    const blob = new Blob([JSON.stringify(fc,null,2)], {type:"application/geo+json"});
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `scan-results-${ts}.geojson`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  } catch(e) {
-    console.error(e);
-    window.showToast?.("다운로드 실패");
-  }
-};
-
-// --- Mission cancel/reset ---
-window.cancelMission = function(resetProgressOnly=true) {
-  stopScan = true;
-  missionPaused = false;
-  missionRunning = false;
-  if (_missionTimer) { try { clearInterval(_missionTimer); } catch(e){} _missionTimer=null; }
-  const timerEl = document.getElementById('timerRemaining');
-  if (timerEl) timerEl.innerText = "00:00:00";
-  const btn = document.getElementById('startBtn');
-  if (btn) btn.innerText = "▶ 스캔 시작";
-  if (!resetProgressOnly) {
-    window.clearResults?.();
-  }
-  window.showToast?.(resetProgressOnly ? "스캔 취소(결과 유지)" : "스캔 리셋(결과 삭제)");
-};
-
         
         window.switchTab = function(m) { 
             const tabs = ['scan','analysis','legal','history'];
@@ -1284,13 +1321,13 @@ window.verifyAdmin = async function () {
                         body: JSON.stringify({id: 'admin', pw})
                     });
                     const data = await res.json().catch(()=>({}));
-                    if(res.ok && (data.ok === true || data.status === 'OK') && data.role === 'admin'){
+                    if(res.ok && data.status === 'OK' && data.role === 'admin'){
                         // show dashboard
                         document.getElementById('step-admin-login')?.classList.add('hidden');
                         document.getElementById('step-admin-dashboard')?.classList.remove('hidden');
                         document.getElementById('exit-admin-btn')?.classList.remove('hidden');
                         // load users
-                        await window.renderUserList();
+                        await window.refreshAdminUsers();
                         window.showToast("관리자 인증 완료");
                     }else{
                         window.showToast(data.msg || "관리자 인증 실패");
