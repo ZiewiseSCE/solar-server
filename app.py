@@ -5,11 +5,12 @@ from flask import Flask, request, jsonify, session, render_template
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder="templates")
 CORS(app, supports_credentials=True)
 
 # ===== env =====
-app.secret_key = os.environ.get("SECRET_KEY", "dev-secret")
+# Cloudtype에서 SECRET_KEY 또는 FLASK_SECRET_KEY 둘 중 하나로 설정한 경우를 모두 지원
+app.secret_key = os.environ.get("SECRET_KEY") or os.environ.get("FLASK_SECRET_KEY") or "dev-secret"
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 ADMIN_ID = os.environ.get("ADMIN_ID", "admin")
@@ -18,7 +19,7 @@ ADMIN_PW = os.environ.get("ADMIN_PW")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required (Postgres)")
 
-# (권장) HTTPS 환경에서 세션 쿠키 안정화
+# HTTPS 환경(Cloudtype)에서 세션 쿠키 안정성
 app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=True,
@@ -39,6 +40,8 @@ def report_page2():
 
 # ===== DB =====
 def get_conn():
+    # DATABASE_URL에 특수문자 포함 시 URL 인코딩이 필요합니다.
+    # (예: ! -> %21, @ -> %40, # -> %23)
     return psycopg2.connect(DATABASE_URL)
 
 def init_db():
@@ -55,9 +58,9 @@ def init_db():
     """)
     conn.commit()
 
-    # 관리자 자동 생성/동기화
+    # 관리자 자동 생성/동기화 (ADMIN_PW가 설정된 경우에만)
     if ADMIN_PW:
-        cur.execute("SELECT pw_hash FROM users WHERE id=%s", (ADMIN_ID,))
+        cur.execute("SELECT id FROM users WHERE id=%s", (ADMIN_ID,))
         row = cur.fetchone()
         pw_hash = generate_password_hash(ADMIN_PW)
 
@@ -69,14 +72,16 @@ def init_db():
         else:
             # 비밀번호 변경 시 자동 갱신
             cur.execute(
-                "UPDATE users SET pw_hash=%s WHERE id=%s",
+                "UPDATE users SET pw_hash=%s, role='admin' WHERE id=%s",
                 (pw_hash, ADMIN_ID)
             )
+
         conn.commit()
 
     cur.close()
     conn.close()
 
+# gunicorn 워커 시작 시점에 1회 초기화
 init_db()
 
 # ===== health =====
@@ -91,6 +96,9 @@ def login():
     uid = data.get("id")
     pw = data.get("pw")
 
+    if not uid or not pw:
+        return jsonify({"ok": False, "msg": "id/pw required"}), 400
+
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT id, pw_hash, role FROM users WHERE id=%s", (uid,))
@@ -103,7 +111,7 @@ def login():
 
     session["uid"] = row[0]
     session["role"] = row[2]
-    return jsonify({"ok": True, "role": row[2], "id": row[0]})
+    return jsonify({"ok": True, "role": row[2]})
 
 @app.post("/api/auth/logout")
 def logout():
@@ -133,9 +141,12 @@ def create_user():
         return jsonify({"ok": False, "msg": "forbidden"}), 403
 
     data = request.json or {}
-    uid = data["id"]
-    pw = data["pw"]
+    uid = data.get("id")
+    pw = data.get("pw")
     role = data.get("role", "user")
+
+    if not uid or not pw:
+        return jsonify({"ok": False, "msg": "id/pw required"}), 400
 
     conn = get_conn()
     cur = conn.cursor()
@@ -156,11 +167,13 @@ def create_user():
     conn.close()
     return jsonify({"ok": True})
 
-# ===== admin: delete user (FIX) =====
+# ===== admin: delete user =====
 @app.delete("/api/admin/users/<uid>")
 def delete_user(uid):
     if session.get("role") != "admin":
         return jsonify({"ok": False, "msg": "forbidden"}), 403
+
+    # 자기 자신(관리자) 삭제 방지
     if uid == ADMIN_ID:
         return jsonify({"ok": False, "msg": "cannot delete admin"}), 400
 
