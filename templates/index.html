@@ -387,7 +387,8 @@ window.toggleAutoScan()"><span class="flex items-center gap-1"><i class="ph ph-r
         let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, analysisMarkerGroup, existingGroup, substationGroup;
         let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
         let selectedFeatures = new Map();
-        let currentAnalysisData = {};
+        let for (const k in currentAnalysisData) { try { delete currentAnalysisData[k]; } catch(e){} }
+            window.currentAnalysisData = currentAnalysisData;
         window.currentAnalysisData = currentAnalysisData;
         // ✅ 패널 교정(캘리브레이션)용: 최초 계산된 패널(기준) 피처컬렉션 저장
         let _basePanelsFC = null;
@@ -1217,8 +1218,7 @@ window.attemptLogin = async function() {
                 });
 
                 const data = await res.json().catch(() => ({}));
-                const ok = (data && (data.ok === true || data.status === "OK"));
-                if(res.ok && ok) {
+                if(res.ok && (data.ok === true || data.status === "OK")) {
                     isLoggedIn = true;
                     currentUser = data.user || id;
 
@@ -1274,9 +1274,7 @@ window.verifyAdmin = async function () {
                         body: JSON.stringify({id: 'admin', pw})
                     });
                     const data = await res.json().catch(()=>({}));
-                    const ok = (data && (data.ok === true || data.status === 'OK'));
-                    const role = data.role || data.user_role || data.user?.role;
-                    if(res.ok && ok && role === 'admin'){
+                    if(res.ok && data.status === 'OK' && data.role === 'admin'){
                         // show dashboard
                         document.getElementById('step-admin-login')?.classList.add('hidden');
                         document.getElementById('step-admin-dashboard')?.classList.remove('hidden');
@@ -1303,7 +1301,7 @@ window.renderUserList = async function () {
   try {
     const res = await fetch(`${BACKEND_URL}/api/admin/users`, { method: "GET", credentials: "include" });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || data.status !== "OK") {
+    if (!res.ok || !(data.ok === true || data.status === "OK")) {
       box.innerHTML = `<div class="text-[10px] text-red-300 text-center py-3">${data.msg || "목록 조회 실패"}</div>`;
       if (cnt) cnt.innerText = `-`;
       return;
@@ -1345,7 +1343,7 @@ window.addUser = async function () {
       body: JSON.stringify({ id, pw })
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || data.status !== "OK") {
+    if (!res.ok || !(data.ok === true || data.status === "OK")) {
       window.showToast?.(data.msg || "유저 추가 실패");
       return;
     }
@@ -1369,7 +1367,7 @@ window.removeUser = async function (id) {
       credentials: "include"
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || data.status !== "OK") {
+    if (!res.ok || !(data.ok === true || data.status === "OK")) {
       window.showToast?.(data.msg || "삭제 실패");
       return;
     }
