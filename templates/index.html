@@ -305,66 +305,7 @@
     <div class="absolute top-5 right-5 z-[1000] bg-white p-2 rounded-lg shadow-lg border border-gray-200 text-xs w-44">
         <div class="font-bold text-slate-600 mb-2 border-b pb-1 flex items-center gap-1"><i class="ph ph-stack"></i> 지도 설정</div>
         <label class="flex items-center gap-2 cursor-pointer p-1.5 mb-2 bg-indigo-50 rounded text-indigo-700 font-bold border border-indigo-200"><input type="checkbox" id="multiSelectToggle" onchange="window.toggleMultiSelect()"><span class="flex items-center gap-1"><i class="ph ph-plus-circle"></i> 결과 누적 모드</span></label>
-        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="autoScanToggle" onchange="
-        window.downloadScanResults = function(format="geojson") {
-            try {
-                const feats = [];
-                if (selectableGroup) {
-                    selectableGroup.eachLayer(l => {
-                        if (l.toGeoJSON) {
-                            const gj = l.toGeoJSON();
-                            if (gj && gj.type === "Feature") feats.push(gj);
-                            else if (gj && gj.type === "FeatureCollection") feats.push(...(gj.features||[]));
-                        }
-                    });
-                }
-                const fc = { type:"FeatureCollection", features: feats };
-                const ts = new Date().toISOString().replace(/[:.]/g,'-');
-                if (format === "csv") {
-                    const rows = [["id","type","lat","lng"]];
-                    fc.features.forEach((f, idx) => {
-                        const c = f.geometry && f.geometry.type === "Point" ? f.geometry.coordinates : null;
-                        const lng = c ? c[0] : "";
-                        const lat = c ? c[1] : "";
-                        rows.push([String(f.id||idx), String(f.geometry?.type||""), String(lat), String(lng)]);
-                    });
-                    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
-                    const blob = new Blob([csv], {type:"text/csv;charset=utf-8"});
-                    const a = document.createElement("a");
-                    a.href = URL.createObjectURL(blob);
-                    a.download = `scan-results-${ts}.csv`;
-                    a.click();
-                    URL.revokeObjectURL(a.href);
-                    return;
-                }
-                const blob = new Blob([JSON.stringify(fc,null,2)], {type:"application/geo+json"});
-                const a = document.createElement("a");
-                a.href = URL.createObjectURL(blob);
-                a.download = `scan-results-${ts}.geojson`;
-                a.click();
-                URL.revokeObjectURL(a.href);
-            } catch(e) {
-                console.error(e);
-                window.showToast?.("다운로드 실패");
-            }
-        };
-
-        window.cancelMission = function(resetProgressOnly=true) {
-            // stop current mission loop
-            stopScan = true;
-            missionPaused = false;
-            missionRunning = false;
-            if (_missionTimer) { try { clearInterval(_missionTimer); } catch(e){} _missionTimer=null; }
-            const timerEl = document.getElementById('timerRemaining');
-            if (timerEl) timerEl.innerText = "00:00:00";
-            const btn = document.getElementById('startBtn');
-            if (btn) btn.innerText = "▶ 스캔 시작";
-            if (!resetProgressOnly) {
-                window.clearResults();
-            }
-            window.showToast?.(resetProgressOnly ? "스캔 취소(결과 유지)" : "스캔 리셋(결과 삭제)");
-        };
-window.toggleAutoScan()"><span class="flex items-center gap-1"><i class="ph ph-radar"></i> 자동 스캔</span></label>
+        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="autoScanToggle" onchange="window.toggleAutoScan()"><span class="flex items-center gap-1"><i class="ph ph-radar"></i> 자동 스캔</span></label>
         <hr class="my-2 border-gray-200">
         <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="existingPlantToggle" onchange="window.toggleLayer('existing')" checked><span>기설치 태양광</span></label>
         <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="substationToggle" onchange="window.toggleLayer('substation')" checked><span>변전소/선로</span></label>
@@ -393,7 +334,7 @@ window.toggleAutoScan()"><span class="flex items-center gap-1"><i class="ph ph-r
         window.currentAnalysisData = currentAnalysisData;
 
         // keep alignment marker
-        sData;
+        // (removed stray marker that caused ReferenceError)
         window.currentAnalysisData = currentAnalysisData;
         // ✅ 패널 교정(캘리브레이션)용: 최초 계산된 패널(기준) 피처컬렉션 저장
         let _basePanelsFC = null;
@@ -1041,6 +982,70 @@ catch(e) { console.warn("Storage restricted"); }
         window.toggleAutoScan = function() { 
             autoScanMode = document.getElementById('autoScanToggle').checked; 
         };
+
+
+// --- Scan results download (GeoJSON/CSV) ---
+window.downloadScanResults = function(format="geojson") {
+  try {
+    const feats = [];
+    if (selectableGroup) {
+      selectableGroup.eachLayer(l => {
+        if (l.toGeoJSON) {
+          const gj = l.toGeoJSON();
+          if (gj && gj.type === "Feature") feats.push(gj);
+          else if (gj && gj.type === "FeatureCollection") feats.push(...(gj.features || []));
+        }
+      });
+    }
+    const fc = { type:"FeatureCollection", features: feats };
+    const ts = new Date().toISOString().replace(/[:.]/g,'-');
+
+    if (format === "csv") {
+      const rows = [["id","type","lat","lng"]];
+      fc.features.forEach((f, idx) => {
+        const c = (f.geometry && f.geometry.type === "Point") ? f.geometry.coordinates : null;
+        const lng = c ? c[0] : "";
+        const lat = c ? c[1] : "";
+        rows.push([String(f.id||idx), String(f.geometry?.type||""), String(lat), String(lng)]);
+      });
+      const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+      const blob = new Blob([csv], {type:"text/csv;charset=utf-8"});
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `scan-results-${ts}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      return;
+    }
+
+    const blob = new Blob([JSON.stringify(fc,null,2)], {type:"application/geo+json"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `scan-results-${ts}.geojson`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch(e) {
+    console.error(e);
+    window.showToast?.("다운로드 실패");
+  }
+};
+
+// --- Mission cancel/reset ---
+window.cancelMission = function(resetProgressOnly=true) {
+  stopScan = true;
+  missionPaused = false;
+  missionRunning = false;
+  if (_missionTimer) { try { clearInterval(_missionTimer); } catch(e){} _missionTimer=null; }
+  const timerEl = document.getElementById('timerRemaining');
+  if (timerEl) timerEl.innerText = "00:00:00";
+  const btn = document.getElementById('startBtn');
+  if (btn) btn.innerText = "▶ 스캔 시작";
+  if (!resetProgressOnly) {
+    window.clearResults?.();
+  }
+  window.showToast?.(resetProgressOnly ? "스캔 취소(결과 유지)" : "스캔 리셋(결과 삭제)");
+};
+
         
         window.switchTab = function(m) { 
             const tabs = ['scan','analysis','legal','history'];
@@ -1279,13 +1284,13 @@ window.verifyAdmin = async function () {
                         body: JSON.stringify({id: 'admin', pw})
                     });
                     const data = await res.json().catch(()=>({}));
-                    if(res.ok && data.status === 'OK' && data.role === 'admin'){
+                    if(res.ok && (data.ok === true || data.status === 'OK') && data.role === 'admin'){
                         // show dashboard
                         document.getElementById('step-admin-login')?.classList.add('hidden');
                         document.getElementById('step-admin-dashboard')?.classList.remove('hidden');
                         document.getElementById('exit-admin-btn')?.classList.remove('hidden');
                         // load users
-                        await window.refreshAdminUsers();
+                        await window.renderUserList();
                         window.showToast("관리자 인증 완료");
                     }else{
                         window.showToast(data.msg || "관리자 인증 실패");
