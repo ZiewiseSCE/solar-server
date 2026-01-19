@@ -305,66 +305,10 @@
     <div class="absolute top-5 right-5 z-[1000] bg-white p-2 rounded-lg shadow-lg border border-gray-200 text-xs w-44">
         <div class="font-bold text-slate-600 mb-2 border-b pb-1 flex items-center gap-1"><i class="ph ph-stack"></i> 지도 설정</div>
         <label class="flex items-center gap-2 cursor-pointer p-1.5 mb-2 bg-indigo-50 rounded text-indigo-700 font-bold border border-indigo-200"><input type="checkbox" id="multiSelectToggle" onchange="window.toggleMultiSelect()"><span class="flex items-center gap-1"><i class="ph ph-plus-circle"></i> 결과 누적 모드</span></label>
-        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="autoScanToggle" onchange="
-        window.downloadScanResults = function(format="geojson") {
-            try {
-                const feats = [];
-                if (selectableGroup) {
-                    selectableGroup.eachLayer(l => {
-                        if (l.toGeoJSON) {
-                            const gj = l.toGeoJSON();
-                            if (gj && gj.type === "Feature") feats.push(gj);
-                            else if (gj && gj.type === "FeatureCollection") feats.push(...(gj.features||[]));
-                        }
-                    });
-                }
-                const fc = { type:"FeatureCollection", features: feats };
-                const ts = new Date().toISOString().replace(/[:.]/g,'-');
-                if (format === "csv") {
-                    const rows = [["id","type","lat","lng"]];
-                    fc.features.forEach((f, idx) => {
-                        const c = f.geometry && f.geometry.type === "Point" ? f.geometry.coordinates : null;
-                        const lng = c ? c[0] : "";
-                        const lat = c ? c[1] : "";
-                        rows.push([String(f.id||idx), String(f.geometry?.type||""), String(lat), String(lng)]);
-                    });
-                    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
-                    const blob = new Blob([csv], {type:"text/csv;charset=utf-8"});
-                    const a = document.createElement("a");
-                    a.href = URL.createObjectURL(blob);
-                    a.download = `scan-results-${ts}.csv`;
-                    a.click();
-                    URL.revokeObjectURL(a.href);
-                    return;
-                }
-                const blob = new Blob([JSON.stringify(fc,null,2)], {type:"application/geo+json"});
-                const a = document.createElement("a");
-                a.href = URL.createObjectURL(blob);
-                a.download = `scan-results-${ts}.geojson`;
-                a.click();
-                URL.revokeObjectURL(a.href);
-            } catch(e) {
-                console.error(e);
-                window.showToast?.("다운로드 실패");
-            }
-        };
-
-        window.cancelMission = function(resetProgressOnly=true) {
-            // stop current mission loop
-            stopScan = true;
-            missionPaused = false;
-            missionRunning = false;
-            if (_missionTimer) { try { clearInterval(_missionTimer); } catch(e){} _missionTimer=null; }
-            const timerEl = document.getElementById('timerRemaining');
-            if (timerEl) timerEl.innerText = "00:00:00";
-            const btn = document.getElementById('startBtn');
-            if (btn) btn.innerText = "▶ 스캔 시작";
-            if (!resetProgressOnly) {
-                window.clearResults();
-            }
-            window.showToast?.(resetProgressOnly ? "스캔 취소(결과 유지)" : "스캔 리셋(결과 삭제)");
-        };
-window.toggleAutoScan()"><span class="flex items-center gap-1"><i class="ph ph-radar"></i> 자동 스캔</span></label>
+        <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600">
+            <input type="checkbox" id="autoScanToggle" onchange="window.toggleAutoScan()">
+            <span class="flex items-center gap-1"><i class="ph ph-radar"></i> 자동 스캔</span>
+        </label>
         <hr class="my-2 border-gray-200">
         <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="existingPlantToggle" onchange="window.toggleLayer('existing')" checked><span>기설치 태양광</span></label>
         <label class="flex items-center gap-2 cursor-pointer p-1.5 hover:bg-slate-50 rounded text-slate-600"><input type="checkbox" id="substationToggle" onchange="window.toggleLayer('substation')" checked><span>변전소/선로</span></label>
@@ -379,47 +323,16 @@ window.toggleAutoScan()"><span class="flex items-center gap-1"><i class="ph ph-r
     <div id="map"></div>
 
     <script>
-        const VWORLD_TILE_KEY = "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F"; 
-        // 백엔드 URL 설정
-// 1) ?backend=https://your-backend.example.com (쿼리스트링)
-// 2) window.BACKEND_URL 전역 변수
-// 3) <meta name="backend-url" content="...">
-// 4) 기본값: 동일 오리진(같은 서버에서 서빙될 때)
-const BACKEND_URL = (() => {
-  try {
-    const qs = new URLSearchParams(location.search);
-    const fromQS = qs.get("backend");
-    if (fromQS) return fromQS.replace(/\/+$/,'');
-    // @ts-ignore
-    const fromGlobal = (window.BACKEND_URL || "").toString();
-    if (fromGlobal) return fromGlobal.replace(/\/+$/,'');
-    const meta = document.querySelector('meta[name="backend-url"]');
-    const fromMeta = meta?.getAttribute("content") || "";
-    if (fromMeta) return fromMeta.replace(/\/+$/,'');
-    return location.origin;
-  } catch(e) {
-    return location.origin;
-  }
-})();
-// --- API fetch wrapper (supports cookie session + Bearer token fallback) ---
-window.__authToken = window.__authToken || null;
-async function apiFetch(path, options = {}) {
-  const url = (path.startsWith("http") ? path : (BACKEND_URL + path));
-  const headers = new Headers(options.headers || {});
-  headers.set("Accept", "application/json");
-  if (!headers.has("Content-Type") && options.body && typeof options.body === "string") {
-    headers.set("Content-Type", "application/json");
-  }
-  if (window.__authToken) headers.set("Authorization", "Bearer " + window.__authToken);
+        const VWORLD_TILE_KEY = "2ABF83F5-5D52-322D-B58C-6B6655D1CB0F";
+        // --- Safety: avoid hard crashes from accidental stray references ---
+        window.sData = window.sData ?? null;
 
-  const resp = await fetch(url, {
-    ...options,
-    headers,
-    credentials: "include"
-  });
-  return resp;
-}
+        // Some server configurations may require a client token header.
+        // Keep defined to prevent ReferenceError even if unused.
+        const CLIENT_TOKEN = window.CLIENT_TOKEN || "";
 
+ 
+        const BACKEND_URL = "";
         let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, analysisMarkerGroup, existingGroup, substationGroup;
         let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
         let selectedFeatures = new Map();
@@ -432,6 +345,7 @@ async function apiFetch(path, options = {}) {
         window.currentAnalysisData = currentAnalysisData;
 
         // keep alignment marker
+        // (removed) stray sData reference
         window.currentAnalysisData = currentAnalysisData;
         // ✅ 패널 교정(캘리브레이션)용: 최초 계산된 패널(기준) 피처컬렉션 저장
         let _basePanelsFC = null;
@@ -489,6 +403,77 @@ catch(e) { console.warn("Storage restricted"); }
                 w.scrollTop = w.scrollHeight; 
             } 
         };
+
+        // -------------------------
+        // Scan helpers (must NOT be inside HTML attributes)
+        // -------------------------
+        window.downloadScanResults = function(format = "geojson") {
+            try {
+                const feats = [];
+                if (selectableGroup) {
+                    selectableGroup.eachLayer(l => {
+                        if (l && typeof l.toGeoJSON === "function") {
+                            const gj = l.toGeoJSON();
+                            if (gj && gj.type === "Feature") feats.push(gj);
+                            else if (gj && gj.type === "FeatureCollection") feats.push(...(gj.features || []));
+                        }
+                    });
+                }
+                const fc = { type: "FeatureCollection", features: feats };
+                const ts = new Date().toISOString().replace(/[:.]/g, '-');
+
+                if (format === "csv") {
+                    const rows = [["id", "geom_type", "lat", "lng"]];
+                    fc.features.forEach((f, idx) => {
+                        let lng = "", lat = "";
+                        if (f?.geometry?.type === "Point" && Array.isArray(f.geometry.coordinates)) {
+                            lng = f.geometry.coordinates[0];
+                            lat = f.geometry.coordinates[1];
+                        }
+                        rows.push([String(f.id ?? idx), String(f?.geometry?.type ?? ""), String(lat ?? ""), String(lng ?? "")]);
+                    });
+                    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+                    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+                    const a = document.createElement("a");
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `scan-results-${ts}.csv`;
+                    a.click();
+                    URL.revokeObjectURL(a.href);
+                    return;
+                }
+
+                const blob = new Blob([JSON.stringify(fc, null, 2)], { type: "application/geo+json" });
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = `scan-results-${ts}.geojson`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+            } catch (e) {
+                console.error(e);
+                window.showToast?.("다운로드 실패");
+            }
+        };
+
+        window.cancelMission = function(resetProgressOnly = true) {
+            stopScan = true;
+            missionPaused = false;
+            missionRunning = false;
+
+            if (_missionTimer) { try { clearInterval(_missionTimer); } catch(e) {} }
+            _missionTimer = null;
+
+            const timerEl = document.getElementById('timerRemaining');
+            if (timerEl) timerEl.innerText = "00:00:00";
+
+            const btn = document.getElementById('startBtn');
+            if (btn) btn.innerText = "▶ 스캔 시작";
+
+            if (!resetProgressOnly) window.clearResults?.();
+
+            window.showToast?.(resetProgressOnly ? "스캔 취소(결과 유지)" : "스캔 리셋(결과 삭제)");
+        };
+
+
 
         window.getUsers = function() {
             try { 
@@ -726,7 +711,7 @@ catch(e) { console.warn("Storage restricted"); }
 
             try {
                 window.trackApi('ai');
-                const res = await apiFetch('/api/analyze/comprehensive', {
+                const res = await fetch(`${BACKEND_URL}/api/analyze/comprehensive`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1253,7 +1238,7 @@ window.attemptLogin = async function() {
 
             try {
                 // ✅ 서버 세션 로그인 (localStorage 사용 안함)
-                const res = await apiFetch('/api/auth/login', {
+                const res = await fetch(`${BACKEND_URL}/api/auth/login`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     credentials: "include",
@@ -1261,7 +1246,6 @@ window.attemptLogin = async function() {
                 });
 
                 const data = await res.json().catch(() => ({}));
-                    if (data && data.token) window.__authToken = data.token;
                 if (res.ok && (data.ok === true || data.status === "OK")) {
                     isLoggedIn = true;
                     currentUser = data.user || id;
@@ -1286,7 +1270,7 @@ window.attemptLogin = async function() {
 
 window.logout = async function(reason) {
             try {
-                await apiFetch('/api/auth/logout', {
+                await fetch(`${BACKEND_URL}/api/auth/logout`, {
                     method: "POST",
                     credentials: "include"
                 });
@@ -1311,21 +1295,20 @@ window.verifyAdmin = async function () {
                 const pw = (document.getElementById('adminPw')?.value || '').trim();
                 if(!pw) return window.showToast("관리자 비밀번호를 입력하세요.");
                 try{
-                    const res = await apiFetch('/api/auth/login', {
+                    const res = await fetch(`${BACKEND_URL}/api/auth/login`, {
                         method: 'POST',
                         headers: {'Content-Type':'application/json'},
                         credentials: 'include',
                         body: JSON.stringify({id: 'admin', pw})
                     });
                     const data = await res.json().catch(()=>({}));
-                    if (data && data.token) window.__authToken = data.token;
                     if(res.ok && data.status === 'OK' && data.role === 'admin'){
                         // show dashboard
                         document.getElementById('step-admin-login')?.classList.add('hidden');
                         document.getElementById('step-admin-dashboard')?.classList.remove('hidden');
                         document.getElementById('exit-admin-btn')?.classList.remove('hidden');
                         // load users
-                        await window.renderUserList();
+                        await window.refreshAdminUsers();
                         window.showToast("관리자 인증 완료");
                     }else{
                         window.showToast(data.msg || "관리자 인증 실패");
@@ -1344,9 +1327,8 @@ window.renderUserList = async function () {
 
   box.innerHTML = `<div class="text-[10px] text-slate-400 text-center py-3">불러오는 중...</div>`;
   try {
-    const res = await apiFetch('/api/admin/users', { method: "GET", credentials: "include" });
+    const res = await fetch(`${BACKEND_URL}/api/admin/users`, { method: "GET", credentials: "include" });
     const data = await res.json().catch(() => ({}));
-                    if (data && data.token) window.__authToken = data.token;
     if (!res.ok || (data.ok !== true && data.status !== "OK")) {
       box.innerHTML = `<div class="text-[10px] text-red-300 text-center py-3">${data.msg || "목록 조회 실패"}</div>`;
       if (cnt) cnt.innerText = `-`;
@@ -1382,14 +1364,13 @@ window.addUser = async function () {
   if (!id || !pw) return window.showToast?.("아이디/비밀번호를 입력하세요.");
 
   try {
-    const res = await apiFetch('/api/admin/users', {
+    const res = await fetch(`${BACKEND_URL}/api/admin/users`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
       body: JSON.stringify({ id, pw })
     });
     const data = await res.json().catch(() => ({}));
-                    if (data && data.token) window.__authToken = data.token;
     if (!res.ok || (data.ok !== true && data.status !== "OK")) {
       window.showToast?.(data.msg || "유저 추가 실패");
       return;
@@ -1409,12 +1390,11 @@ window.removeUser = async function (id) {
   if (!confirm("삭제할까요?")) return;
 
   try {
-    const res = await apiFetch(`/api/admin/users/${encodeURIComponent(id)}`, {
+    const res = await fetch(`${BACKEND_URL}/api/admin/users/${encodeURIComponent(id)}`, {
       method: "DELETE",
       credentials: "include"
     });
     const data = await res.json().catch(() => ({}));
-                    if (data && data.token) window.__authToken = data.token;
     if (!res.ok || (data.ok !== true && data.status !== "OK")) {
       window.showToast?.(data.msg || "삭제 실패");
       return;
