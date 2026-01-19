@@ -384,12 +384,17 @@ window.toggleAutoScan()"><span class="flex items-center gap-1"><i class="ph ph-r
         const CLIENT_TOKEN = "scenergy-secret-token-2025";
         const ENCODED_ADMIN_PW = "Wmlld2lzZTEyMyE=";
 
-        let map, layers, selectableGroup, panelGroup, cadastralLayer, analysisMarker, analysisMarkerGroup, existingGroup, substationGroup;
-        let scanTarget='building', currentAnalysisFeature=null, currentGeoState={x:0,y:0,rot:0}, autoScanMode=false, isMultiSelectMode=false, accumulatedPanelsCount=0, isLoggedIn=false, currentUser=null;
-        let selectedFeatures = new Map();
-        let for (const k in currentAnalysisData) { try { delete currentAnalysisData[k]; } catch(e){} }
-            window.currentAnalysisData = currentAnalysisData;
-        window.currentAnalysisData = currentAnalysisData;
+    let selectedFeatures = new Map();
+
+    // currentAnalysisData 전역 준비(없으면 새로 만들고, 있으면 재사용)
+    let currentAnalysisData = window.currentAnalysisData || {};
+
+    // (원래 의도: 초기화/리셋)
+    for (const k in currentAnalysisData) { 
+      try { delete currentAnalysisData[k]; } catch (e) {} 
+}
+window.currentAnalysisData = currentAnalysisData;
+
         // ✅ 패널 교정(캘리브레이션)용: 최초 계산된 패널(기준) 피처컬렉션 저장
         let _basePanelsFC = null;
         let _currentPanelsLayer = null;
@@ -1448,3 +1453,4 @@ document.addEventListener('click', function(e){
 </script>
 </body>
 </html>
+
