@@ -18,7 +18,7 @@ ADMIN_PW = os.environ.get("ADMIN_PW")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required (Postgres)")
 
-# (권장) HTTPS에서 세션 쿠키 안정성
+# (권장) HTTPS 환경에서 세션 쿠키 안정화
 app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=True,
@@ -103,14 +103,14 @@ def login():
 
     session["uid"] = row[0]
     session["role"] = row[2]
-    return jsonify({"ok": True, "role": row[2]})
+    return jsonify({"ok": True, "role": row[2], "id": row[0]})
 
 @app.post("/api/auth/logout")
 def logout():
     session.clear()
     return jsonify({"ok": True})
 
-# ===== admin: list users (FIX) =====
+# ===== admin: list users =====
 @app.get("/api/admin/users")
 def list_users():
     if session.get("role") != "admin":
@@ -154,4 +154,24 @@ def create_user():
 
     cur.close()
     conn.close()
+    return jsonify({"ok": True})
+
+# ===== admin: delete user (FIX) =====
+@app.delete("/api/admin/users/<uid>")
+def delete_user(uid):
+    if session.get("role") != "admin":
+        return jsonify({"ok": False, "msg": "forbidden"}), 403
+    if uid == ADMIN_ID:
+        return jsonify({"ok": False, "msg": "cannot delete admin"}), 400
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+    deleted = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    if deleted == 0:
+        return jsonify({"ok": False, "msg": "not found"}), 404
     return jsonify({"ok": True})
