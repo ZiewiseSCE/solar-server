@@ -22,6 +22,7 @@ CORS(
         "Content-Type",
         "X-CLIENT-TOKEN",
         "X-CLIENT-FP",
+        "X-ADMIN-KEY",
     ],
     methods=["GET", "POST", "OPTIONS"],
 )
@@ -39,6 +40,15 @@ def get_conn():
 def now_utc():
     return datetime.now(timezone.utc)
 
+def iso(dt):
+    if not dt:
+        return None
+    # psycopg2 returns aware datetime for timestamptz
+    try:
+        return dt.astimezone(timezone.utc).isoformat()
+    except Exception:
+        return str(dt)
+
 # -------------------------------------------------
 # Health
 # -------------------------------------------------
@@ -55,11 +65,11 @@ def activate_license():
         return ("", 204)
 
     data = request.get_json(force=True, silent=True) or {}
-    token = data.get("token") or request.headers.get("X-CLIENT-TOKEN")
-    fp = data.get("fingerprint") or request.headers.get("X-CLIENT-FP")
+    token = (data.get("token") or request.headers.get("X-CLIENT-TOKEN") or "").strip()
+    fp = (data.get("fingerprint") or request.headers.get("X-CLIENT-FP") or "").strip()
 
     if not token or not fp:
-        return jsonify({"ok": False, "error": "token or fingerprint missing"}), 400
+        return jsonify({"ok": False, "msg": "token or fingerprint missing"}), 400
 
     conn = get_conn()
     cur = conn.cursor()
@@ -73,19 +83,19 @@ def activate_license():
     if not row:
         cur.close()
         conn.close()
-        return jsonify({"ok": False, "error": "invalid license"}), 403
+        return jsonify({"ok": False, "msg": "invalid license"}), 403
 
     expires_at, revoked, bound_fp = row
 
     if revoked:
         cur.close()
         conn.close()
-        return jsonify({"ok": False, "error": "license revoked"}), 403
+        return jsonify({"ok": False, "msg": "license revoked"}), 403
 
     if expires_at < now_utc():
         cur.close()
         conn.close()
-        return jsonify({"ok": False, "error": "license expired"}), 403
+        return jsonify({"ok": False, "msg": "license expired"}), 403
 
     # first bind
     if not bound_fp:
@@ -98,26 +108,32 @@ def activate_license():
         if bound_fp != fp:
             cur.close()
             conn.close()
-            return jsonify({"ok": False, "error": "license bound to another device"}), 403
+            return jsonify({"ok": False, "msg": "license bound to another device"}), 403
 
     cur.close()
     conn.close()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "expires_at": iso(expires_at)})
 
 # -------------------------------------------------
-# Verify
+# Verify (GET+POST 지원)
+#  - GET: 헤더 X-CLIENT-TOKEN / X-CLIENT-FP
+#  - POST: JSON body {token,fingerprint} (또는 헤더)
 # -------------------------------------------------
-@app.route("/api/auth/verify", methods=["POST", "OPTIONS"])
+@app.route("/api/auth/verify", methods=["GET", "POST", "OPTIONS"])
 def verify():
     if request.method == "OPTIONS":
         return ("", 204)
 
-    data = request.get_json(force=True, silent=True) or {}
-    token = data.get("token") or request.headers.get("X-CLIENT-TOKEN")
-    fp = data.get("fingerprint") or request.headers.get("X-CLIENT-FP")
+    if request.method == "GET":
+        token = (request.headers.get("X-CLIENT-TOKEN") or "").strip()
+        fp = (request.headers.get("X-CLIENT-FP") or "").strip()
+    else:
+        data = request.get_json(force=True, silent=True) or {}
+        token = (data.get("token") or request.headers.get("X-CLIENT-TOKEN") or "").strip()
+        fp = (data.get("fingerprint") or request.headers.get("X-CLIENT-FP") or "").strip()
 
     if not token or not fp:
-        return jsonify({"ok": False}), 400
+        return jsonify({"ok": False, "msg": "token or fingerprint missing"}), 400
 
     conn = get_conn()
     cur = conn.cursor()
@@ -132,14 +148,22 @@ def verify():
     conn.close()
 
     if not row:
-        return jsonify({"ok": False}), 403
+        return jsonify({"ok": False, "msg": "invalid license"}), 403
 
     expires_at, revoked, bound_fp = row
 
-    if revoked or expires_at < now_utc():
-        return jsonify({"ok": False}), 403
+    if revoked:
+        return jsonify({"ok": False, "msg": "license revoked"}), 403
 
+    if expires_at < now_utc():
+        return jsonify({"ok": False, "msg": "license expired"}), 403
+
+    # not activated yet (exists but not bound)
+    if not bound_fp:
+        return jsonify({"ok": False, "code": "NOT_ACTIVATED", "msg": "not activated"}), 200
+
+    # bound mismatch
     if bound_fp != fp:
-        return jsonify({"ok": False}), 403
+        return jsonify({"ok": False, "msg": "license bound to another device"}), 403
 
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "expires_at": iso(expires_at)})
