@@ -18,19 +18,35 @@ app.config.update(
 )
 
 # ----------------------------
-# CORS (must match frontend origin exactly)
+# CORS (GLOBAL, not only /api/*)
 # ----------------------------
 cors_origins_env = (os.getenv("CORS_ORIGINS") or "").strip()
 origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+
+# 안전 기본값: 너는 지금 이 도메인에서 호출함
 if not origins:
-    # 안전 기본값 (너는 pathfinder.scenergy.co.kr 쓰고 있으니 이걸 기본으로 둠)
     origins = ["https://pathfinder.scenergy.co.kr"]
 
+# ✅ 전역으로 CORS 적용 (프리플라이트 OPTIONS 포함)
 CORS(
     app,
-    resources={r"/api/*": {"origins": origins}},
+    origins=origins,
     supports_credentials=True,
+    allow_headers=["Content-Type", "Authorization"],
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 )
+
+# (보험) 어떤 이유로든 CORS가 안 붙는 경우를 막는 fallback
+@app.after_request
+def add_cors_headers(resp):
+    origin = request.headers.get("Origin")
+    if origin and origin in origins:
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Vary"] = "Origin"
+        resp.headers["Access-Control-Allow-Credentials"] = "true"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+    return resp
 
 # ----------------------------
 # Demo user store (RAM)
@@ -83,7 +99,7 @@ def login():
             session["role"] = "user"
             session["username"] = username
             session.permanent = True
-            return jsonify({"ok": True, "status": "OK", "role": "user", "user": username}), 200
+            return jsonify({"ok": True, "status": "OK", "role": "user"}), 200
 
     return jsonify({"ok": False, "msg": "invalid credentials"}), 401
 
