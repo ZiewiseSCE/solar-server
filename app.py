@@ -233,96 +233,30 @@ def verify():
 # -------------------------------------------------
 @app.post("/api/license/activate")
 def activate():
-    body = request.get_json(silent=True) or {}
+    # Accept both JSON and form-urlencoded
+    body = request.get_json(silent=True)
+    if not body:
+        body = request.form.to_dict(flat=True) if request.form else {}
+    body = body or {}
+
     token = (body.get("token") or "").strip()
     fp = (body.get("fingerprint") or "").strip()
 
-    if not token:
-        return jsonify({"ok": False, "code": "MISSING_TOKEN", "msg": "라이선스 키가 필요합니다."}), 400
-    if not fp:
-        return jsonify({"ok": False, "code": "MISSING_FP", "msg": "기기 식별 정보가 필요합니다."}), 400
+    if not token or not fp:
+        return jsonify({"ok": False}), 400
 
     with _db_lock:
         db = _load_db()
         lic = (db.get("licenses") or {}).get(token)
         if not lic:
-            return jsonify({"ok": False, "code": "NOT_FOUND", "msg": _code_to_message("NOT_FOUND")}), 404
+            return jsonify({"ok": False}), 404
 
-        if lic.get("revoked") is True:
-            return jsonify({"ok": False, "code": "REVOKED", "msg": _code_to_message("REVOKED")}), 401
-
-        expires_at = lic.get("expires_at")
-        if not expires_at:
-            return jsonify({"ok": False, "code": "NO_EXPIRY", "msg": _code_to_message("NO_EXPIRY")}), 400
-
-        try:
-            exp = _parse_iso(expires_at)
-        except Exception:
-            return jsonify({"ok": False, "code": "BAD_EXPIRY", "msg": _code_to_message("BAD_EXPIRY")}), 400
-
-        if _now_utc() > exp:
-            return jsonify({"ok": False, "code": "EXPIRED", "msg": _code_to_message("EXPIRED")}), 401
-
-        bound_fp = (lic.get("bound_fp") or "").strip()
-        if bound_fp and bound_fp != fp:
-            return (
-                jsonify(
-                    {
-                        "ok": False,
-                        "code": "FP_MISMATCH",
-                        "msg": _code_to_message("FP_MISMATCH"),
-                        "expires_at": expires_at,
-                    }
-                ),
-                409,
-            )
-
-        # Bind / refresh bind
         lic["bound_fp"] = fp
-        lic["bound_at"] = datetime.now(timezone.utc).isoformat()
-        (db.get("licenses") or {})[token] = lic
+        lic["bound_at"] = _now_utc().isoformat()
+        db["licenses"][token] = lic
         _save_db(db)
 
-    return jsonify({"ok": True, "expires_at": expires_at}), 200
-
-
-# -------------------------------------------------
-# Admin APIs (optional): issue / revoke / reset binding
-# Protect with X-ADMIN-KEY == ADMIN_API_KEY
-# -------------------------------------------------
-@app.post("/api/admin/licenses")
-def admin_issue_license():
-    if not _require_admin():
-        return jsonify({"ok": False, "msg": "admin key required"}), 401
-
-    body = request.get_json(silent=True) or {}
-    token = (body.get("token") or "").strip() or f"SCE-{secrets.token_urlsafe(12)}"
-    expires_at = (body.get("expires_at") or "").strip()
-    note = (body.get("note") or "").strip()
-
-    if not expires_at:
-        return jsonify({"ok": False, "msg": "expires_at is required (ISO8601)"}), 400
-
-    try:
-        _ = _parse_iso(expires_at)
-    except Exception:
-        return jsonify({"ok": False, "msg": "expires_at must be ISO8601 with timezone, e.g. 2026-02-29T23:59:59+09:00"}), 400
-
-    with _db_lock:
-        db = _load_db()
-        db.setdefault("licenses", {})
-        if token in db["licenses"]:
-            return jsonify({"ok": False, "msg": "token already exists"}), 409
-        db["licenses"][token] = {
-            "expires_at": expires_at,
-            "revoked": False,
-            "note": note,
-            "bound_fp": "",
-            "bound_at": "",
-        }
-        _save_db(db)
-
-    return jsonify({"ok": True, "token": token, "expires_at": expires_at}), 200
+    return jsonify({"ok": True, "expires_at": lic.get("expires_at")})
 
 
 @app.get("/api/admin/licenses")
