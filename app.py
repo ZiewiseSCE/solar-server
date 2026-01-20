@@ -145,6 +145,9 @@ def _require_license_for_api():
     path = request.path or ""
     if not path.startswith("/api/"):
         return None
+    # Admin endpoints are protected by ADMIN_API_KEY, not end-user license.
+    if path.startswith("/api/admin/") or path == "/api/admin/licenses":
+        return None
     if path in PUBLIC_API_PATHS:
         return None
 
@@ -315,6 +318,38 @@ def admin_issue_license():
         _save_db(db)
 
     return jsonify({"ok": True, "token": token, "expires_at": expires_at}), 200
+
+
+@app.get("/api/admin/licenses")
+def admin_list_licenses():
+    """List all licenses (admin only)."""
+    if not _require_admin():
+        return jsonify({"ok": False, "msg": "admin key required"}), 401
+
+    with _db_lock:
+        db = _load_db()
+        items = []
+        for token, lic in (db.get("licenses") or {}).items():
+            items.append(
+                {
+                    "token": token,
+                    "expires_at": lic.get("expires_at"),
+                    "revoked": bool(lic.get("revoked")),
+                    "note": lic.get("note") or "",
+                    "bound": bool((lic.get("bound_fp") or "").strip()),
+                    "bound_at": lic.get("bound_at") or "",
+                }
+            )
+
+    # Sort by expiry then token for convenience
+    def _sort_key(x):
+        try:
+            return (_parse_iso(x.get("expires_at") or "1970-01-01T00:00:00+00:00"), x.get("token") or "")
+        except Exception:
+            return (datetime(1970, 1, 1, tzinfo=timezone.utc), x.get("token") or "")
+
+    items.sort(key=_sort_key)
+    return jsonify({"ok": True, "count": len(items), "licenses": items}), 200
 
 
 @app.post("/api/admin/licenses/<token>/revoke")
