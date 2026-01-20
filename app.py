@@ -1,196 +1,164 @@
 import os
-import datetime
-import psycopg2
-from flask import Flask, request, jsonify, session, render_template
+import uuid
+from datetime import datetime, timedelta
+
+from flask import Flask, request, jsonify, session
 from flask_cors import CORS
-from werkzeug.security import generate_password_hash, check_password_hash
 
-app = Flask(__name__, template_folder="templates")
-# CORS: allow only configured origins (comma-separated) or '*'
-raw_origins = os.environ.get('CORS_ORIGINS', '*') or '*'
-if raw_origins.strip() == '*':
-    cors_origins = '*'
-else:
-    cors_origins = [o.strip() for o in raw_origins.split(',') if o.strip()]
-CORS(app, supports_credentials=True, origins=cors_origins)
+app = Flask(__name__)
 
-# ===== env =====
-# Cloudtype에서 SECRET_KEY 또는 FLASK_SECRET_KEY 둘 중 하나로 설정한 경우를 모두 지원
-app.secret_key = os.environ.get("SECRET_KEY") or os.environ.get("FLASK_SECRET_KEY") or "dev-secret"
+# ----------------------------
+# 기본 설정
+# ----------------------------
+app.secret_key = os.getenv("SECRET_KEY", "dev-secret-key-change-me")
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
-ADMIN_ID = os.environ.get("ADMIN_ID", "admin")
-ADMIN_PW = os.environ.get("ADMIN_PW")
-
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL is required (Postgres)")
-
-# HTTPS 환경(Cloudtype)에서 세션 쿠키 안정성
+# 세션(쿠키) 설정: GitHub Pages/서브도메인 등 "다른 도메인"에서 API 호출 시 쿠키가 붙도록
 app.config.update(
-    SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=True,     # HTTPS 필수 (Cloudtype는 HTTPS라 OK)
+    SESSION_COOKIE_SAMESITE="None", # 핵심: cross-site fetch에서 쿠키 허용
 )
 
-# ===== pages =====
-@app.get("/")
-def home():
-    return render_template("index.html")
+# ----------------------------
+# CORS 설정 (credentials 포함)
+# ----------------------------
+cors_origins_env = os.getenv("CORS_ORIGINS", "").strip()
+origins = []
 
-@app.get("/report.html")
-def report_page():
-    return render_template("report.html")
+if cors_origins_env:
+    origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
 
-@app.get("/report")
-def report_page2():
-    return render_template("report.html")
+# 개발/테스트 편의(원하면 제거 가능)
+# origins가 비어있으면 모든 origin 허용하면 위험할 수 있어서,
+# 최소한 localhost만 허용하도록 기본값 지정
+if not origins:
+    origins = ["http://localhost:5500", "http://127.0.0.1:5500"]
 
-# ===== DB =====
-def get_conn():
-    # DATABASE_URL에 특수문자 포함 시 URL 인코딩이 필요합니다.
-    # (예: ! -> %21, @ -> %40, # -> %23)
-    return psycopg2.connect(DATABASE_URL)
+CORS(
+    app,
+    resources={r"/api/*": {"origins": origins}},
+    supports_credentials=True,
+)
 
-def init_db():
-    conn = get_conn()
-    cur = conn.cursor()
+# ----------------------------
+# In-memory user store (예시)
+# 실제 운영은 DB 권장
+# ----------------------------
+USERS = {}  # {user_id: {"id":..., "username":..., "password":..., "created_at":...}}
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            pw_hash TEXT NOT NULL,
-            role TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
-    conn.commit()
+# admin 계정(예시): 환경변수로 관리 권장
+ADMIN_USER = os.getenv("ADMIN_USER", "admin")
+ADMIN_PASS = os.getenv("ADMIN_PASS", "admin1234")
 
-    # 관리자 자동 생성/동기화 (ADMIN_PW가 설정된 경우에만)
-    if ADMIN_PW:
-        cur.execute("SELECT id FROM users WHERE id=%s", (ADMIN_ID,))
-        row = cur.fetchone()
-        pw_hash = generate_password_hash(ADMIN_PW)
 
-        if row is None:
-            cur.execute(
-                "INSERT INTO users (id, pw_hash, role, created_at) VALUES (%s,%s,%s,%s)",
-                (ADMIN_ID, pw_hash, "admin", datetime.datetime.utcnow().isoformat())
-            )
-        else:
-            # 비밀번호 변경 시 자동 갱신
-            cur.execute(
-                "UPDATE users SET pw_hash=%s, role='admin' WHERE id=%s",
-                (pw_hash, ADMIN_ID)
-            )
+def is_admin():
+    return session.get("role") == "admin"
 
-        conn.commit()
 
-    cur.close()
-    conn.close()
-
-# gunicorn 워커 시작 시점에 1회 초기화
-init_db()
-
-# ===== health =====
-@app.get("/health")
+@app.get("/api/health")
 def health():
-    return "ok", 200
+    return jsonify({"ok": True, "time": datetime.utcnow().isoformat()}), 200
 
-# ===== auth =====
+
 @app.post("/api/auth/login")
 def login():
-    data = request.json or {}
-    uid = data.get("id")
-    pw = data.get("pw")
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    password = (data.get("password") or "").strip()
 
-    if not uid or not pw:
-        return jsonify({"ok": False, "msg": "id/pw required"}), 400
+    if not username or not password:
+        return jsonify({"ok": False, "msg": "username/password required"}), 400
 
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT id, pw_hash, role FROM users WHERE id=%s", (uid,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
+    # admin 로그인
+    if username == ADMIN_USER and password == ADMIN_PASS:
+        session.clear()
+        session["role"] = "admin"
+        session["username"] = username
+        session.permanent = True
 
-    if not row or not check_password_hash(row[1], pw):
-        return jsonify({"ok": False, "msg": "invalid credentials"}), 401
+        # 프론트 호환성: ok + status 둘다 제공
+        return jsonify({"ok": True, "status": "OK", "role": "admin"}), 200
 
-    session["uid"] = row[0]
-    session["role"] = row[2]
-    return jsonify({"ok": True, "role": row[2]})
+    # 일반 유저 로그인(선택)
+    # 운영에서 필요 없으면 막아도 됨
+    for _, u in USERS.items():
+        if u["username"] == username and u["password"] == password:
+            session.clear()
+            session["role"] = "user"
+            session["username"] = username
+            session.permanent = True
+            return jsonify({"ok": True, "status": "OK", "role": "user"}), 200
+
+    return jsonify({"ok": False, "msg": "invalid credentials"}), 401
+
 
 @app.post("/api/auth/logout")
 def logout():
     session.clear()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "status": "OK"}), 200
 
-# ===== admin: list users =====
+
 @app.get("/api/admin/users")
-def list_users():
-    if session.get("role") != "admin":
+def admin_list_users():
+    if not is_admin():
         return jsonify({"ok": False, "msg": "forbidden"}), 403
 
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT id, role, created_at FROM users ORDER BY created_at DESC")
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    # 비밀번호는 내려주지 않는게 안전
+    safe_users = []
+    for u in USERS.values():
+        safe_users.append(
+            {
+                "id": u["id"],
+                "username": u["username"],
+                "created_at": u["created_at"],
+            }
+        )
 
-    users = [{"id": r[0], "role": r[1], "created_at": r[2]} for r in rows]
-    return jsonify({"ok": True, "users": users})
+    return jsonify({"ok": True, "status": "OK", "users": safe_users}), 200
 
-# ===== admin: create user =====
+
 @app.post("/api/admin/users")
-def create_user():
-    if session.get("role") != "admin":
+def admin_create_user():
+    if not is_admin():
         return jsonify({"ok": False, "msg": "forbidden"}), 403
 
-    data = request.json or {}
-    uid = data.get("id")
-    pw = data.get("pw")
-    role = data.get("role", "user")
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    password = (data.get("password") or "").strip()
 
-    if not uid or not pw:
-        return jsonify({"ok": False, "msg": "id/pw required"}), 400
+    if not username or not password:
+        return jsonify({"ok": False, "msg": "username/password required"}), 400
 
-    conn = get_conn()
-    cur = conn.cursor()
+    # 중복 체크
+    for u in USERS.values():
+        if u["username"] == username:
+            return jsonify({"ok": False, "msg": "username already exists"}), 409
 
-    cur.execute("SELECT id FROM users WHERE id=%s", (uid,))
-    if cur.fetchone():
-        cur.close()
-        conn.close()
-        return jsonify({"ok": False, "msg": "exists"}), 400
+    user_id = str(uuid.uuid4())
+    USERS[user_id] = {
+        "id": user_id,
+        "username": username,
+        "password": password,  # 데모용. 운영이면 해시로 저장.
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    return jsonify({"ok": True, "status": "OK", "id": user_id}), 201
 
-    cur.execute(
-        "INSERT INTO users (id, pw_hash, role, created_at) VALUES (%s,%s,%s,%s)",
-        (uid, generate_password_hash(pw), role, datetime.datetime.utcnow().isoformat())
-    )
-    conn.commit()
 
-    cur.close()
-    conn.close()
-    return jsonify({"ok": True})
-
-# ===== admin: delete user =====
-@app.delete("/api/admin/users/<uid>")
-def delete_user(uid):
-    if session.get("role") != "admin":
+@app.delete("/api/admin/users/<user_id>")
+def admin_delete_user(user_id):
+    if not is_admin():
         return jsonify({"ok": False, "msg": "forbidden"}), 403
 
-    # 자기 자신(관리자) 삭제 방지
-    if uid == ADMIN_ID:
-        return jsonify({"ok": False, "msg": "cannot delete admin"}), 400
-
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM users WHERE id=%s", (uid,))
-    deleted = cur.rowcount
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    if deleted == 0:
+    if user_id not in USERS:
         return jsonify({"ok": False, "msg": "not found"}), 404
-    return jsonify({"ok": True})
+
+    USERS.pop(user_id, None)
+    return jsonify({"ok": True, "status": "OK"}), 200
+
+
+# 세션 만료(원하면 조절)
+app.permanent_session_lifetime = timedelta(days=7)
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
