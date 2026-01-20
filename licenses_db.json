@@ -1,3 +1,46 @@
 {
-  "licenses": {}
+  "licenses": {
+    "SCE-E0FDCF0A16": {
+      "expires_at": "EXPIRES_AT",
+      "revoked": false,
+      "note": "Kenny Yang",
+      "bound_fp": "",
+      "bound_at": ""
+    },
+    "SCE-28E4527572": {
+      "expires_at": "EXPIRES_AT",
+      "revoked": false,
+      "note": "Chris Mo",
+      "bound_fp": "",
+      "bound_at": ""
+    },
+    "SCE-40B64F9373": {
+      "expires_at": "EXPIRES_AT",
+      "revoked": false,
+      "note": "SangMin Lee",
+      "bound_fp": "",
+      "bound_at": ""
+    },
+    "SCE-EF383C3086": {
+      "expires_at": "EXPIRES_AT",
+      "revoked": false,
+      "note": "SeungHyun Lee",
+      "bound_fp": "",
+      "bound_at": ""
+    },
+    "SCE-E38E884B29": {
+      "expires_at": "EXPIRES_AT",
+      "revoked": false,
+      "note": "MinSuk Park",
+      "bound_fp": "",
+      "bound_at": ""
+    },
+    "SCE-A03FF2C311": {
+      "expires_at": "EXPIRES_AT",
+      "revoked": false,
+      "note": "JungChul Kim",
+      "bound_fp": "",
+      "bound_at": ""
+    }
+  }
 }
