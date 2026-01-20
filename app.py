@@ -102,10 +102,19 @@ def _init_db() -> None:
     )
 
 
-@app.before_first_request
-def _startup():
-    _init_db()
+# Init DB once (Flask 3 removed before_first_request)
+_db_inited = False
+_db_init_lock = threading.Lock()
 
+def _ensure_db_inited() -> None:
+    global _db_inited
+    if _db_inited:
+        return
+    with _db_init_lock:
+        if _db_inited:
+            return
+        _init_db()
+        _db_inited = True
 
 # =================================================
 # Helpers
@@ -255,6 +264,9 @@ def _require_license_for_api():
         return None
 
     path = request.path or ""
+    # Initialize DB lazily (skip for health so it can work even if DB is down)
+    if path != "/api/health":
+        _ensure_db_inited()
     if not path.startswith("/api/"):
         return None
 
