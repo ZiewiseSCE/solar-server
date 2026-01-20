@@ -1,153 +1,196 @@
 import os
-from flask import Flask, request, jsonify, session
+import datetime
+import psycopg2
+from flask import Flask, request, jsonify, session, render_template
 from flask_cors import CORS
-from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+from werkzeug.security import generate_password_hash, check_password_hash
 
-# =========================
-# App / Config
-# =========================
-app = Flask(__name__)
-
-# Secret keys
-app.secret_key = os.getenv("SECRET_KEY") or os.getenv("FLASK_SECRET_KEY") or "scenergy-secret"
-
-serializer = URLSafeTimedSerializer(app.secret_key)
-
-# =========================
-# CORS (🔥 중요: None 절대 금지)
-# =========================
-raw_origins = os.getenv("CORS_ORIGINS", "*")
-
-if not raw_origins or raw_origins.strip() == "*":
-    cors_origins = "*"
+app = Flask(__name__, template_folder="templates")
+# CORS: allow only configured origins (comma-separated) or '*'
+raw_origins = os.environ.get('CORS_ORIGINS', '*') or '*'
+if raw_origins.strip() == '*':
+    cors_origins = '*'
 else:
-    cors_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+    cors_origins = [o.strip() for o in raw_origins.split(',') if o.strip()]
+CORS(app, supports_credentials=True, origins=cors_origins)
 
-CORS(
-    app,
-    supports_credentials=True,
-    origins=cors_origins
+# ===== env =====
+# Cloudtype에서 SECRET_KEY 또는 FLASK_SECRET_KEY 둘 중 하나로 설정한 경우를 모두 지원
+app.secret_key = os.environ.get("SECRET_KEY") or os.environ.get("FLASK_SECRET_KEY") or "dev-secret"
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+ADMIN_ID = os.environ.get("ADMIN_ID", "admin")
+ADMIN_PW = os.environ.get("ADMIN_PW")
+
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is required (Postgres)")
+
+# HTTPS 환경(Cloudtype)에서 세션 쿠키 안정성
+app.config.update(
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=True,
 )
 
-# =========================
-# Health check
-# =========================
-@app.route("/health")
+# ===== pages =====
+@app.get("/")
+def home():
+    return render_template("index.html")
+
+@app.get("/report.html")
+def report_page():
+    return render_template("report.html")
+
+@app.get("/report")
+def report_page2():
+    return render_template("report.html")
+
+# ===== DB =====
+def get_conn():
+    # DATABASE_URL에 특수문자 포함 시 URL 인코딩이 필요합니다.
+    # (예: ! -> %21, @ -> %40, # -> %23)
+    return psycopg2.connect(DATABASE_URL)
+
+def init_db():
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            pw_hash TEXT NOT NULL,
+            role TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+
+    # 관리자 자동 생성/동기화 (ADMIN_PW가 설정된 경우에만)
+    if ADMIN_PW:
+        cur.execute("SELECT id FROM users WHERE id=%s", (ADMIN_ID,))
+        row = cur.fetchone()
+        pw_hash = generate_password_hash(ADMIN_PW)
+
+        if row is None:
+            cur.execute(
+                "INSERT INTO users (id, pw_hash, role, created_at) VALUES (%s,%s,%s,%s)",
+                (ADMIN_ID, pw_hash, "admin", datetime.datetime.utcnow().isoformat())
+            )
+        else:
+            # 비밀번호 변경 시 자동 갱신
+            cur.execute(
+                "UPDATE users SET pw_hash=%s, role='admin' WHERE id=%s",
+                (pw_hash, ADMIN_ID)
+            )
+
+        conn.commit()
+
+    cur.close()
+    conn.close()
+
+# gunicorn 워커 시작 시점에 1회 초기화
+init_db()
+
+# ===== health =====
+@app.get("/health")
 def health():
-    return jsonify(ok=True, status="OK")
+    return "ok", 200
 
-# =========================
-# Auth
-# =========================
-ADMIN_ID = os.getenv("ADMIN_ID", "admin")
-ADMIN_PW = os.getenv("ADMIN_PW", "1234")
-
-def make_token(payload: dict, max_age=60 * 60 * 12):
-    return serializer.dumps(payload)
-
-def read_token(token: str):
-    return serializer.loads(token, max_age=60 * 60 * 12)
-
-@app.route("/api/auth/login", methods=["POST"])
+# ===== auth =====
+@app.post("/api/auth/login")
 def login():
-    data = request.get_json(force=True, silent=True) or {}
+    data = request.json or {}
     uid = data.get("id")
     pw = data.get("pw")
 
     if not uid or not pw:
-        return jsonify(ok=False, msg="Missing credentials"), 400
+        return jsonify({"ok": False, "msg": "id/pw required"}), 400
 
-    # 관리자
-    if uid == ADMIN_ID and pw == ADMIN_PW:
-        token = make_token({"id": uid, "role": "admin"})
-        session["user"] = uid
-        session["role"] = "admin"
-        return jsonify(
-            ok=True,
-            status="OK",
-            role="admin",
-            user=uid,
-            token=token
-        )
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, pw_hash, role FROM users WHERE id=%s", (uid,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
 
-    # 일반 유저 (예시: DB 연동 전 임시 허용)
-    token = make_token({"id": uid, "role": "user"})
-    session["user"] = uid
-    session["role"] = "user"
-    return jsonify(
-        ok=True,
-        status="OK",
-        role="user",
-        user=uid,
-        token=token
-    )
+    if not row or not check_password_hash(row[1], pw):
+        return jsonify({"ok": False, "msg": "invalid credentials"}), 401
 
-@app.route("/api/auth/logout", methods=["POST"])
+    session["uid"] = row[0]
+    session["role"] = row[2]
+    return jsonify({"ok": True, "role": row[2]})
+
+@app.post("/api/auth/logout")
 def logout():
     session.clear()
-    return jsonify(ok=True, status="OK")
+    return jsonify({"ok": True})
 
-# =========================
-# Admin APIs (임시 메모리)
-# =========================
-_USERS = [{"id": ADMIN_ID}]
-
-def require_admin():
-    role = session.get("role")
-    if role != "admin":
-        return False
-    return True
-
-@app.route("/api/admin/users", methods=["GET"])
+# ===== admin: list users =====
+@app.get("/api/admin/users")
 def list_users():
-    if not require_admin():
-        return jsonify(ok=False, msg="Forbidden"), 403
-    return jsonify(ok=True, status="OK", users=_USERS)
+    if session.get("role") != "admin":
+        return jsonify({"ok": False, "msg": "forbidden"}), 403
 
-@app.route("/api/admin/users", methods=["POST"])
-def add_user():
-    if not require_admin():
-        return jsonify(ok=False, msg="Forbidden"), 403
-    data = request.get_json(force=True) or {}
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, role, created_at FROM users ORDER BY created_at DESC")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    users = [{"id": r[0], "role": r[1], "created_at": r[2]} for r in rows]
+    return jsonify({"ok": True, "users": users})
+
+# ===== admin: create user =====
+@app.post("/api/admin/users")
+def create_user():
+    if session.get("role") != "admin":
+        return jsonify({"ok": False, "msg": "forbidden"}), 403
+
+    data = request.json or {}
     uid = data.get("id")
-    if not uid:
-        return jsonify(ok=False, msg="ID required"), 400
-    _USERS.append({"id": uid})
-    return jsonify(ok=True, status="OK")
+    pw = data.get("pw")
+    role = data.get("role", "user")
 
-@app.route("/api/admin/users/<uid>", methods=["DELETE"])
-def remove_user(uid):
-    if not require_admin():
-        return jsonify(ok=False, msg="Forbidden"), 403
-    global _USERS
-    _USERS = [u for u in _USERS if u["id"] != uid]
-    return jsonify(ok=True, status="OK")
+    if not uid or not pw:
+        return jsonify({"ok": False, "msg": "id/pw required"}), 400
 
-# =========================
-# Analyze Stub (프론트 대응)
-# =========================
-@app.route("/api/analyze/comprehensive", methods=["POST"])
-def analyze():
-    data = request.get_json(force=True) or {}
-    return jsonify(
-        status="OK",
-        zoning="준공업지역",
-        jimok="대",
-        eco_grade="3등급",
-        kepco_capacity="여유 있음",
-        sun_hours=3.8,
-        ai_score={"score": 62, "confidence": 78},
-        price_estimate="약 3.2억",
-        links={
-            "eum": "https://www.eum.go.kr",
-            "kepco": "https://online.kepco.co.kr",
-            "heritage": "https://www.nie-ecobank.kr"
-        },
-        ai_comment="법적 리스크는 낮으나 수익성은 보수적 접근 필요"
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("SELECT id FROM users WHERE id=%s", (uid,))
+    if cur.fetchone():
+        cur.close()
+        conn.close()
+        return jsonify({"ok": False, "msg": "exists"}), 400
+
+    cur.execute(
+        "INSERT INTO users (id, pw_hash, role, created_at) VALUES (%s,%s,%s,%s)",
+        (uid, generate_password_hash(pw), role, datetime.datetime.utcnow().isoformat())
     )
+    conn.commit()
 
-# =========================
-# Run
-# =========================
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    cur.close()
+    conn.close()
+    return jsonify({"ok": True})
+
+# ===== admin: delete user =====
+@app.delete("/api/admin/users/<uid>")
+def delete_user(uid):
+    if session.get("role") != "admin":
+        return jsonify({"ok": False, "msg": "forbidden"}), 403
+
+    # 자기 자신(관리자) 삭제 방지
+    if uid == ADMIN_ID:
+        return jsonify({"ok": False, "msg": "cannot delete admin"}), 400
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+    deleted = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    if deleted == 0:
+        return jsonify({"ok": False, "msg": "not found"}), 404
+    return jsonify({"ok": True})
