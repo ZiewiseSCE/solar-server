@@ -41,6 +41,20 @@
       "note": "JungChul Kim",
       "bound_fp": "",
       "bound_at": ""
+    },
+    "SCE-6A9D3C2F18": {
+      "expires_at": "2027-01-21T23:59:59+00:00",
+      "revoked": false,
+      "note": "Chris Mo_Tablet",
+      "bound_fp": "",
+      "bound_at": ""
+    },
+    "SCE-B47F91E8A4": {
+      "expires_at": "2027-01-21T23:59:59+00:00",
+      "revoked": false,
+      "note": "Kenny Yang_Laptop",
+      "bound_fp": "",
+      "bound_at": ""
     }
   }
 }
