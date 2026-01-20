@@ -7,10 +7,6 @@ from datetime import datetime, timezone
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-# Optional persistent storage
-import psycopg2
-from psycopg2.extras import RealDictCursor
-
 # -------------------------------------------------
 # Flask App
 # -------------------------------------------------
@@ -45,42 +41,8 @@ CORS(
 # -------------------------------------------------
 LICENSE_DB_PATH = os.getenv("LICENSE_DB_PATH", "./licenses_db.json")
 ADMIN_API_KEY = (os.getenv("ADMIN_API_KEY") or "").strip()
-DATABASE_URL = (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or "").strip()
 
 _db_lock = threading.Lock()
-
-
-def _use_postgres() -> bool:
-    return bool(DATABASE_URL)
-
-
-def _pg_conn():
-    # DATABASE_URL is typically like: postgresql://user:pass@host:port/db
-    return psycopg2.connect(DATABASE_URL, sslmode=os.getenv("PGSSLMODE", "prefer"))
-
-
-def _pg_init() -> None:
-    """Create table if not exists."""
-    if not _use_postgres():
-        return
-    with _pg_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS licenses (
-                    token TEXT PRIMARY KEY,
-                    expires_at TIMESTAMPTZ NOT NULL,
-                    revoked BOOLEAN NOT NULL DEFAULT FALSE,
-                    note TEXT NOT NULL DEFAULT '',
-                    bound_fp TEXT NOT NULL DEFAULT '',
-                    bound_at TIMESTAMPTZ
-                );
-                """
-            )
-        conn.commit()
-
-
-_pg_init()
 
 
 def _now_utc() -> datetime:
@@ -97,29 +59,6 @@ def _parse_iso(dt_str: str) -> datetime:
 
 
 def _load_db() -> dict:
-    """Loads licenses.
-
-    If DATABASE_URL is set, uses Postgres for persistence.
-    Otherwise, uses a local JSON file (may be ephemeral on some platforms).
-    """
-    if _use_postgres():
-        db = {"licenses": {}}
-        with _pg_conn() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    "SELECT token, expires_at, revoked, note, bound_fp, bound_at FROM licenses"
-                )
-                rows = cur.fetchall() or []
-        for r in rows:
-            db["licenses"][r["token"]] = {
-                "expires_at": (r["expires_at"].isoformat() if r.get("expires_at") else ""),
-                "revoked": bool(r.get("revoked")),
-                "note": r.get("note") or "",
-                "bound_fp": r.get("bound_fp") or "",
-                "bound_at": (r["bound_at"].isoformat() if r.get("bound_at") else ""),
-            }
-        return db
-
     if not os.path.exists(LICENSE_DB_PATH):
         return {"licenses": {}}
     with open(LICENSE_DB_PATH, "r", encoding="utf-8") as f:
@@ -127,37 +66,6 @@ def _load_db() -> dict:
 
 
 def _save_db(db: dict) -> None:
-    if _use_postgres():
-        # Upsert all licenses
-        with _pg_conn() as conn:
-            with conn.cursor() as cur:
-                for token, lic in (db.get("licenses") or {}).items():
-                    expires_at = lic.get("expires_at")
-                    if not expires_at:
-                        continue
-                    cur.execute(
-                        """
-                        INSERT INTO licenses (token, expires_at, revoked, note, bound_fp, bound_at)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (token) DO UPDATE SET
-                          expires_at = EXCLUDED.expires_at,
-                          revoked = EXCLUDED.revoked,
-                          note = EXCLUDED.note,
-                          bound_fp = EXCLUDED.bound_fp,
-                          bound_at = EXCLUDED.bound_at;
-                        """,
-                        (
-                            token,
-                            _parse_iso(expires_at),
-                            bool(lic.get("revoked")),
-                            lic.get("note") or "",
-                            lic.get("bound_fp") or "",
-                            (_parse_iso(lic["bound_at"]) if (lic.get("bound_at") or "").strip() else None),
-                        ),
-                    )
-            conn.commit()
-        return
-
     tmp_path = LICENSE_DB_PATH + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(db, f, ensure_ascii=False, indent=2)
@@ -236,9 +144,6 @@ PUBLIC_API_PATHS = {
 def _require_license_for_api():
     path = request.path or ""
     if not path.startswith("/api/"):
-        return None
-    # Admin endpoints are protected by ADMIN_API_KEY, not end-user license.
-    if path.startswith("/api/admin/") or path == "/api/admin/licenses":
         return None
     if path in PUBLIC_API_PATHS:
         return None
@@ -410,38 +315,6 @@ def admin_issue_license():
         _save_db(db)
 
     return jsonify({"ok": True, "token": token, "expires_at": expires_at}), 200
-
-
-@app.get("/api/admin/licenses")
-def admin_list_licenses():
-    """List all licenses (admin only)."""
-    if not _require_admin():
-        return jsonify({"ok": False, "msg": "admin key required"}), 401
-
-    with _db_lock:
-        db = _load_db()
-        items = []
-        for token, lic in (db.get("licenses") or {}).items():
-            items.append(
-                {
-                    "token": token,
-                    "expires_at": lic.get("expires_at"),
-                    "revoked": bool(lic.get("revoked")),
-                    "note": lic.get("note") or "",
-                    "bound": bool((lic.get("bound_fp") or "").strip()),
-                    "bound_at": lic.get("bound_at") or "",
-                }
-            )
-
-    # Sort by expiry then token for convenience
-    def _sort_key(x):
-        try:
-            return (_parse_iso(x.get("expires_at") or "1970-01-01T00:00:00+00:00"), x.get("token") or "")
-        except Exception:
-            return (datetime(1970, 1, 1, tzinfo=timezone.utc), x.get("token") or "")
-
-    items.sort(key=_sort_key)
-    return jsonify({"ok": True, "count": len(items), "licenses": items}), 200
 
 
 @app.post("/api/admin/licenses/<token>/revoke")
