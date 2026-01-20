@@ -5,8 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY app.py .
 
-EXPOSE 5000
-
-CMD ["sh","-c","gunicorn --bind 0.0.0.0:${PORT:-5000} app:app"]
+# Cloudtype, 로컬 어디서든 무조건 살아남게 만드는 핵심
+CMD ["sh", "-c", "gunicorn -b 0.0.0.0:5000 app:app"]
