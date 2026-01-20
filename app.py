@@ -14,7 +14,7 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "dev-secret-key-change-me")
 
 # -------------------------------------------------
-# CORS Config  ✅ FIXED
+# CORS Config ✅ FIXED + HARD PREFLIGHT FIX
 # -------------------------------------------------
 cors_origins_env = (os.getenv("CORS_ORIGINS", "") or "").strip()
 origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()] if cors_origins_env else []
@@ -25,6 +25,7 @@ if not origins:
         "https://www.scenergy.co.kr",
     ]
 
+# Flask-CORS (기본 CORS 처리)
 CORS(
     app,
     resources={r"/api/*": {"origins": origins}},
@@ -35,9 +36,39 @@ CORS(
         "X-CLIENT-FP",
         "X-ADMIN-KEY",
     ],
-    methods=["GET", "POST", "DELETE", "OPTIONS"],  # 🔥 이 줄이 핵심
+    methods=["GET", "POST", "DELETE", "OPTIONS"],
     max_age=86400,
 )
+
+# -------------------------------------------------
+# HARD CORS PREFLIGHT (브라우저가 막는 케이스 확정 대응)
+# - OPTIONS 프리플라이트는 무조건 204 + CORS 헤더
+# - 401/404 같은 에러 응답에도 CORS 헤더 강제 부착
+# -------------------------------------------------
+ALLOWED_ORIGINS = origins
+
+def _apply_cors_headers(resp):
+    origin = request.headers.get("Origin")
+    if origin and origin in ALLOWED_ORIGINS:
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Vary"] = "Origin"
+        resp.headers["Access-Control-Allow-Methods"] = "GET,POST,DELETE,OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-ADMIN-KEY, X-CLIENT-TOKEN, X-CLIENT-FP"
+        resp.headers["Access-Control-Max-Age"] = "86400"
+    return resp
+
+@app.before_request
+def _handle_preflight():
+    # 프리플라이트(OPTIONS)는 인증/라이선스 체크 전에 무조건 통과시켜야 함
+    if request.method == "OPTIONS" and (request.path or "").startswith("/api/"):
+        resp = app.make_response(("", 204))
+        return _apply_cors_headers(resp)
+    return None
+
+@app.after_request
+def _after(resp):
+    # 모든 응답(200/401/404 포함)에 CORS 헤더 강제 부착
+    return _apply_cors_headers(resp)
 
 # -------------------------------------------------
 # License DB
@@ -125,6 +156,8 @@ PUBLIC_API_PATHS = {
 
 @app.before_request
 def _require_license_for_api():
+    # OPTIONS는 위 _handle_preflight()에서 이미 처리되지만,
+    # 혹시라도 다른 경로로 들어오면 여기서도 한 번 더 안전하게 스킵
     if request.method == "OPTIONS":
         return None
 
@@ -215,7 +248,7 @@ def admin_list_licenses():
                 "expires_at": lic.get("expires_at"),
                 "revoked": lic.get("revoked", False),
                 "note": lic.get("note", ""),
-                "bound": bool(lic.get("bound_fp")),
+                "bound": bool((lic.get("bound_fp") or "").strip()),
             })
 
     return jsonify({"ok": True, "licenses": items})
@@ -226,21 +259,28 @@ def admin_issue_license():
         return jsonify({"ok": False}), 401
 
     body = request.get_json(silent=True) or {}
-    token = body.get("token") or f"SCE-{secrets.token_urlsafe(10)}"
-    expires_at = body.get("expires_at")
+    token = (body.get("token") or "").strip() or f"SCE-{secrets.token_urlsafe(10)}"
+    expires_at = (body.get("expires_at") or "").strip()
+    note = (body.get("note") or "").strip()
+
+    if not expires_at:
+        return jsonify({"ok": False, "msg": "expires_at is required (ISO8601)"}), 400
 
     with _db_lock:
         db = _load_db()
         db.setdefault("licenses", {})
+        if token in db["licenses"]:
+            return jsonify({"ok": False, "msg": "token already exists"}), 409
         db["licenses"][token] = {
             "expires_at": expires_at,
             "revoked": False,
-            "note": body.get("note", ""),
+            "note": note,
             "bound_fp": "",
+            "bound_at": "",
         }
         _save_db(db)
 
-    return jsonify({"ok": True, "token": token})
+    return jsonify({"ok": True, "token": token, "expires_at": expires_at})
 
 # -------------------------------------------------
 if __name__ == "__main__":
