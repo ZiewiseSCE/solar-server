@@ -520,7 +520,7 @@ def analyze_comprehensive():
         ai_score=ai_score,
         ai_comment="외부 규제/환경/용량 정보는 반드시 공식 시스템에서 재확인이 필요합니다.",
         kepco_capacity="정보 없음(확인필요)",
-    
+    )
 
 @app.route("/api/ai/analyze", methods=["POST", "OPTIONS"])
 def ai_analyze():
@@ -562,7 +562,6 @@ def ai_analyze():
         kepco_capacity=payload.get("kepco_capacity") or ""
     )
 
-)
 
 
 # ------------------------------------------------------------
@@ -578,28 +577,24 @@ FALLBACK_REPORT_TEMPLATE = r"""
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;color:#111}
     .wrap{max-width:980px;margin:0 auto}
-    h1{font-size:28px;margin:0 0 8px}
+    h1{margin:0 0 8px;font-size:28px}
     .sub{color:#555;margin:0 0 18px}
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-    .card{border:1px solid #ddd;border-radius:10px;padding:14px}
-    .kpi{display:flex;gap:14px;flex-wrap:wrap}
-    .kpi .box{border:1px solid #e2e2e2;border-radius:10px;padding:10px 12px;min-width:170px}
-    .muted{color:#666}
-    table{width:100%;border-collapse:collapse;font-size:14px}
-    td,th{border-bottom:1px solid #eee;padding:8px 6px;text-align:left}
-    .bar{height:12px;border:1px solid #ddd;border-radius:999px;overflow:hidden}
-    .bar>div{height:100%;background:#111}
-    .btn{display:inline-block;padding:9px 12px;border-radius:10px;border:1px solid #111;text-decoration:none;color:#111}
+    .card{border:1px solid #e6e6e6;border-radius:10px;padding:14px}
+    table{width:100%;border-collapse:collapse}
+    th,td{border-bottom:1px solid #eee;padding:8px;text-align:left;font-size:13px}
+    .bar{height:12px;background:#eee;border-radius:999px;overflow:hidden}
+    .bar>div{height:12px;background:#111}
+    .btn{display:inline-block;padding:10px 14px;border:1px solid #111;border-radius:10px;text-decoration:none;color:#111}
+    .muted{color:#666;font-size:13px}
   </style>
 </head>
 <body>
 <div class="wrap">
   <h1>태양광 정밀 리포트</h1>
-  <p class="sub">주소: <b>{{ data.address or "-" }}</b> · 날짜: {{ data.date or "-" }}</p>
+  <p class="sub">주소: <b>{{ data.address or "확인 필요" }}</b> · 날짜: {{ data.date or "-" }}</p>
 
-  <p>
-    <a class="btn" href="#" onclick="document.getElementById('pdfForm').submit();return false;">PDF 다운로드</a>
-  </p>
+  <p><a class="btn" href="#" onclick="document.getElementById('pdfForm').submit();return false;">PDF 다운로드</a></p>
 
   <form id="pdfForm" method="POST" action="/report/pdf" style="display:none">
     <input name="address" value="{{ data.address or '' }}">
@@ -608,30 +603,68 @@ FALLBACK_REPORT_TEMPLATE = r"""
     <input name="kepco" value="{{ data.kepco or '' }}">
     <input name="land_price" value="{{ data.land_price or '' }}">
     <input name="finance" value='{{ (data.finance or {})|tojson }}'>
-    <input name="ai_analysis" value='{{ (data.ai_analysis or {})|tojson }}'>
+    <input name="ai_analysis" value='{{ (data.ai_analysis or [])|tojson }}'>
     <input name="ai_score" value='{{ (data.ai_score or {})|tojson }}'>
   </form>
 
-  <div class="kpi">
-    <div class="box"><div class="muted">설치용량(AC)</div><div style="font-size:22px"><b>{{ data.finance.acCapacity if data.finance else (data.capacity or "-") }}</b></div></div>
-    <div class="box"><div class="muted">연간발전량</div><div style="font-size:22px"><b>{{ data.finance.annualKwh if data.finance else "-" }}</b></div></div>
-    <div class="box"><div class="muted">연간매출</div><div style="font-size:22px"><b>{{ data.finance.annualRev if data.finance else "-" }}</b></div></div>
-    <div class="box"><div class="muted">25년 누적매출</div><div style="font-size:22px"><b>{{ data.finance.totalRev25 if data.finance else "-" }}</b></div></div>
-  </div>
-
-  <div class="grid" style="margin-top:14px">
+  <div class="grid">
     <div class="card">
-      <h3 style="margin:0 0 10px">구매매력도 (보수적)</h3>
+      <h3 style="margin:0 0 10px">구매매력도</h3>
       {% set s = (data.ai_score.score if data.ai_score and data.ai_score.score is not none else 0) %}
-      <div style="font-size:34px"><b>{{ s }}</b><span class="muted">/100</span></div>
       <div class="bar" title="{{ s }}/100"><div style="width: {{ s }}%"></div></div>
       <p class="muted" style="margin:10px 0 0">{{ data.ai_score.ai_comment if data.ai_score else "" }}</p>
+      {% if data.ai_score and data.ai_score.reasons %}
+        <ul class="muted">
+          {% for r in data.ai_score.reasons %}
+            <li>{{ r }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
     </div>
+
     <div class="card">
-      <h3 style="margin:0 0 10px">AI 체크리스트 요약</h3>
+      <h3 style="margin:0 0 10px">재무 요약</h3>
+      {% if data.finance %}
+        <table>
+          <tr><th>항목</th><th>값</th></tr>
+          <tr><td>연간 발전량</td><td>{{ data.finance.annualKwh or "-" }}</td></tr>
+          <tr><td>연간 매출</td><td>{{ data.finance.annualRev or "-" }}</td></tr>
+          <tr><td>총 비용</td><td>{{ data.finance.totalCost or "-" }}</td></tr>
+          <tr><td>25년 총매출</td><td>{{ data.finance.totalRev25 or "-" }}</td></tr>
+          <tr><td>연간 대출상환</td><td>{{ data.finance.annualDebt or "-" }}</td></tr>
+          <tr><td>회수기간</td><td>{{ data.finance.payback or "-" }}</td></tr>
+        </table>
+      {% else %}
+        <p class="muted">재무 데이터가 없습니다.</p>
+      {% endif %}
+    </div>
+
+    <div class="card" style="grid-column:1 / -1">
+      <h3 style="margin:0 0 10px">AI 중대 체크사항(8대 항목)</h3>
       {% if data.ai_analysis %}
         <table>
-          <tr@app.route("/api/finance/pf", methods=["POST", "OPTIONS"])
+          <tr><th>항목</th><th>상태</th><th>링크</th></tr>
+          {% for c in data.ai_analysis %}
+            <tr>
+              <td>{{ c.title or c.name or "-" }}</td>
+              <td>{{ c.result or c.check or "확인필요" }}</td>
+              <td>{% if c.link %}<a href="{{ c.link }}" target="_blank">열기</a>{% else %}-{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </table>
+      {% else %}
+        <p class="muted">AI 분석 결과가 없습니다.</p>
+      {% endif %}
+      <p class="muted" style="margin-top:10px">※ 국토환경성평가지도/생태등급 등 일부 데이터는 정확도 이슈가 있을 수 있으니 반드시 공식 시스템에서 재확인하세요.</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>
+"""
+
+
+@app.route("/api/finance/pf", methods=["POST", "OPTIONS"])
 def finance_pf():
     """PF loan calculator (amortized / 원리금균등)."""
     if request.method == "OPTIONS":
@@ -663,40 +696,6 @@ def finance_pf():
         )
     except Exception as e:
         return json_err(f"invalid input: {e}")
-
-><th>항목</th><th>상태</th></tr>
-          {% for k,v in data.ai_analysis.items() %}
-            <tr><td>{{ k }}</td><td>{{ v }}</td></tr>
-          {% endfor %}
-        </table>
-      {% else %}
-        <p class="muted">분석 데이터가 없습니다.</p>
-      {% endif %}
-    </div>
-  </div>
-
-  <div class="card" style="margin-top:14px">
-    <h3 style="margin:0 0 10px">재무 요약</h3>
-    {% if data.finance %}
-      <table>
-        <tr><th>항목</th><th>값</th></tr>
-        <tr><td>총사업비</td><td>{{ data.finance.totalCost }}</td></tr>
-        <tr><td>대출</td><td>{{ data.finance.loan }}</td></tr>
-        <tr><td>자기자본</td><td>{{ data.finance.equity }}</td></tr>
-        <tr><td>연간 OPEX</td><td>{{ data.finance.annualOpex }}</td></tr>
-        <tr><td>연간 부채상환</td><td>{{ data.finance.annualDebt }}</td></tr>
-        <tr><td>회수기간</td><td>{{ data.finance.payback }}</td></tr>
-      </table>
-    {% else %}
-      <p class="muted">재무 데이터가 없습니다.</p>
-    {% endif %}
-  </div>
-
-</div>
-</body>
-</html>
-"""
-
 
 def _load_report_template() -> str:
     p = APP_DIR / "report.html"
