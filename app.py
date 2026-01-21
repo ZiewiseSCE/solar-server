@@ -16,7 +16,7 @@ except Exception:
     A4 = None
 
 # -----------------------------
-# App init (⚠️ app 먼저 생성)
+# App init
 # -----------------------------
 app = Flask(__name__)
 
@@ -29,13 +29,10 @@ ADMIN_API_KEY = (os.getenv("ADMIN_API_KEY") or "admin1234").strip()
 SECRET_KEY = (os.getenv("SECRET_KEY") or "dev-secret").strip()
 app.secret_key = SECRET_KEY
 
-# CORS_ORIGINS 예: "https://pathfinder.scenergy.co.kr,https://pathfinder2.scenergy.co.kr"
+# CORS
 _raw_origins = (os.getenv("CORS_ORIGINS") or "https://pathfinder.scenergy.co.kr,https://www.scenergy.co.kr").strip()
 CORS_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
-# -----------------------------
-# CORS (⚠️ app 만든 다음에 호출)
-# -----------------------------
 CORS(
     app,
     resources={r"/api/*": {"origins": CORS_ORIGINS}},
@@ -43,6 +40,9 @@ CORS(
     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Admin-Key"],
 )
+
+# DB
+DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
 
 # -----------------------------
 # Helpers
@@ -57,7 +57,15 @@ def json_bad(msg: str, code: int = 400, **kwargs):
     d.update(kwargs)
     return jsonify(d), code
 
+def _now_utc():
+    return datetime.now(timezone.utc)
 
+def _iso(dt: datetime):
+    return dt.astimezone(timezone.utc).isoformat()
+
+# -----------------------------
+# Admin session token (Bearer)
+# -----------------------------
 def _serializer():
     return URLSafeTimedSerializer(app.secret_key, salt="admin-session")
 
@@ -82,11 +90,57 @@ def _require_admin():
     key = (request.headers.get("X-Admin-Key") or request.args.get("admin_key") or "").strip()
     return key == ADMIN_API_KEY
 
-def _now_utc():
-    return datetime.now(timezone.utc)
+# -----------------------------
+# Storage layer (Postgres preferred)
+# -----------------------------
+def _use_postgres() -> bool:
+    return bool(DATABASE_URL)
 
-def _iso(dt: datetime):
-    return dt.astimezone(timezone.utc).isoformat()
+def _pg_connect():
+    import psycopg2
+    import psycopg2.extras
+    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+
+def _init_pg_schema():
+    # Create tables if not exist
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS licenses (
+                token TEXT PRIMARY KEY,
+                note TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                expires_at TIMESTAMPTZ,
+                status TEXT DEFAULT 'active'
+            );
+            """)
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS bindings (
+                token TEXT REFERENCES licenses(token) ON DELETE CASCADE,
+                fingerprint TEXT NOT NULL,
+                bound_at TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (token, fingerprint)
+            );
+            """)
+        conn.commit()
+
+# Fallback file path (only used if DATABASE_URL missing)
+def _pick_license_db_path():
+    env = (os.getenv("LICENSE_DB_FILE") or os.getenv("LICENSE_DB_PATH") or "").strip()
+    if env:
+        return Path(env)
+    # Try /data if available (may not persist on free)
+    p_data = Path("/data/licenses_db.json")
+    try:
+        p_data.parent.mkdir(parents=True, exist_ok=True)
+        with open(p_data, "a", encoding="utf-8"):
+            pass
+        return p_data
+    except Exception:
+        pass
+    return APP_DIR / "licenses_db.json"
+
+LICENSE_DB_FILE = _pick_license_db_path()
 
 def _load_json(path: Path, default):
     try:
@@ -100,9 +154,155 @@ def _save_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
+def _file_load_licenses():
+    return _load_json(LICENSE_DB_FILE, [])
+
+def _file_save_licenses(items):
+    _save_json(LICENSE_DB_FILE, items)
+
+def _file_find_license(items, token):
+    for it in items:
+        if it.get("token") == token:
+            return it
+    return None
+
+# Unified operations
+def list_licenses():
+    if _use_postgres():
+        _init_pg_schema()
+        with _pg_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        l.token,
+                        l.expires_at,
+                        l.created_at,
+                        l.note,
+                        l.status,
+                        COALESCE(
+                            json_agg(b.fingerprint ORDER BY b.bound_at) FILTER (WHERE b.fingerprint IS NOT NULL),
+                            '[]'::json
+                        ) AS fingerprints
+                    FROM licenses l
+                    LEFT JOIN bindings b ON b.token = l.token
+                    GROUP BY l.token, l.expires_at, l.created_at, l.note, l.status
+                    ORDER BY l.created_at DESC NULLS LAST;
+                """)
+                rows = cur.fetchall()
+        # ensure plain python types
+        for r in rows:
+            # psycopg2 may return list already; keep
+            pass
+        return rows
+
+    return _file_load_licenses()
+
+def create_license(note: str, days: int):
+    token = "SCE-" + secrets.token_hex(5).upper()
+    now = _now_utc()
+    expires_at = now + timedelta(days=days)
+
+    if _use_postgres():
+        _init_pg_schema()
+        with _pg_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO licenses(token, note, created_at, expires_at, status)
+                    VALUES (%s, %s, NOW(), %s, 'active')
+                """, (token, note, expires_at))
+            conn.commit()
+        return {
+            "token": token,
+            "created_at": _iso(now),
+            "expires_at": _iso(expires_at),
+            "note": note,
+            "fingerprints": [],
+            "status": "active",
+        }
+
+    item = {
+        "token": token,
+        "created_at": _iso(now),
+        "expires_at": _iso(expires_at),
+        "note": note,
+        "fingerprints": [],
+    }
+    items = _file_load_licenses()
+    items.append(item)
+    _file_save_licenses(items)
+    return item
+
+def reset_license(token: str):
+    if _use_postgres():
+        _init_pg_schema()
+        with _pg_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM bindings WHERE token=%s", (token,))
+            conn.commit()
+        return True
+
+    items = _file_load_licenses()
+    it = _file_find_license(items, token)
+    if not it:
+        return False
+    it["fingerprints"] = []
+    _file_save_licenses(items)
+    return True
+
+def extend_license(token: str, days: int):
+    if _use_postgres():
+        _init_pg_schema()
+        with _pg_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE licenses
+                    SET expires_at = COALESCE(expires_at, NOW()) + (%s || ' days')::interval
+                    WHERE token=%s
+                    RETURNING token, note, created_at, expires_at, status
+                """, (days, token))
+                row = cur.fetchone()
+            conn.commit()
+        return row
+
+    items = _file_load_licenses()
+    it = _file_find_license(items, token)
+    if not it:
+        return None
+    try:
+        old = datetime.fromisoformat(it.get("expires_at"))
+    except Exception:
+        old = _now_utc()
+    it["expires_at"] = _iso(old + timedelta(days=days))
+    _file_save_licenses(items)
+    return it
+
+def delete_license(token: str):
+    if _use_postgres():
+        _init_pg_schema()
+        with _pg_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM licenses WHERE token=%s", (token,))
+            conn.commit()
+        return True
+
+    items = [x for x in _file_load_licenses() if x.get("token") != token]
+    _file_save_licenses(items)
+    return True
+
 # -----------------------------
-# ✅ whoami (admin.html이 여기 때리니까 반드시 필요)
+# Admin/auth endpoints
 # -----------------------------
+@app.route("/api/admin/login", methods=["POST", "OPTIONS"])
+def admin_login():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    data = request.get_json(force=True, silent=True) or {}
+    admin_key = (data.get("admin_key") or "").strip()
+    if admin_key != ADMIN_API_KEY:
+        return json_bad("unauthorized", 401)
+    token = _issue_admin_token()
+    return json_ok(token=token, role="admin")
+
 @app.route("/api/auth/whoami", methods=["GET", "OPTIONS"])
 def whoami():
     if request.method == "OPTIONS":
@@ -111,65 +311,13 @@ def whoami():
         return json_bad("unauthorized", 401)
     return json_ok(role="admin")
 
-# -----------------------------
-# License DB path (파일 기반: 볼륨 없으면 유지 안 됨)
-# -----------------------------
-def _pick_license_db_path():
-    env = (os.getenv("LICENSE_DB_FILE") or "").strip()
-    if env:
-        return Path(env)
-
-    # (유료/볼륨 있을 때) /data
-    p_data = Path("/data/licenses_db.json")
-    try:
-        p_data.parent.mkdir(parents=True, exist_ok=True)
-        with open(p_data, "a", encoding="utf-8"):
-            pass
-        return p_data
-    except Exception:
-        pass
-
-    # 기본: 프로젝트 디렉토리
-    return APP_DIR / "licenses_db.json"
-
-LICENSE_DB_FILE = _pick_license_db_path()
-
-# -----------------------------
-# License DB (admin)
-# -----------------------------
-def load_licenses():
-    return _load_json(LICENSE_DB_FILE, [])
-
-def save_licenses(items):
-    _save_json(LICENSE_DB_FILE, items)
-
-def _find_license(items, token):
-    for it in items:
-        if it.get("token") == token:
-            return it
-    return None
-
-
-@app.route("/api/admin/login", methods=["POST", "OPTIONS"])
-def admin_login():
-    if request.method == "OPTIONS":
-        return ("", 204)
-
-    data = request.get_json(force=True, silent=True) or {}
-    admin_key = (data.get("admin_key") or "").strip()
-    if admin_key != ADMIN_API_KEY:
-        return json_bad("unauthorized", 401)
-
-    token = _issue_admin_token()
-    return json_ok(token=token, role="admin")
-
 @app.route("/api/admin/licenses", methods=["GET", "OPTIONS"])
 def admin_list_licenses():
     if request.method == "OPTIONS":
         return ("", 204)
     if not _require_admin():
         return json_bad("unauthorized", 401)
-    return json_ok(items=load_licenses())
+    return json_ok(items=list_licenses())
 
 @app.route("/api/admin/license/create", methods=["POST", "OPTIONS"])
 def admin_create_license():
@@ -180,18 +328,7 @@ def admin_create_license():
     data = request.get_json(force=True, silent=True) or {}
     note = (data.get("note") or "").strip()
     days = int(data.get("days") or 365)
-    token = "SCE-" + secrets.token_hex(5).upper()
-    now = _now_utc()
-    item = {
-        "token": token,
-        "created_at": _iso(now),
-        "expires_at": _iso(now + timedelta(days=days)),
-        "note": note,
-        "fingerprints": [],
-    }
-    items = load_licenses()
-    items.append(item)
-    save_licenses(items)
+    item = create_license(note, days)
     return json_ok(item=item)
 
 @app.route("/api/admin/license/reset", methods=["POST", "OPTIONS"])
@@ -202,12 +339,9 @@ def admin_license_reset():
         return json_bad("unauthorized", 401)
     data = request.get_json(force=True, silent=True) or {}
     token = (data.get("token") or "").strip()
-    items = load_licenses()
-    it = _find_license(items, token)
-    if not it:
+    ok = reset_license(token)
+    if not ok:
         return json_bad("not found", 404)
-    it["fingerprints"] = []
-    save_licenses(items)
     return json_ok()
 
 @app.route("/api/admin/license/extend", methods=["POST", "OPTIONS"])
@@ -219,17 +353,10 @@ def admin_license_extend():
     data = request.get_json(force=True, silent=True) or {}
     token = (data.get("token") or "").strip()
     days = int(data.get("days") or 30)
-    items = load_licenses()
-    it = _find_license(items, token)
-    if not it:
+    item = extend_license(token, days)
+    if not item:
         return json_bad("not found", 404)
-    try:
-        old = datetime.fromisoformat(it["expires_at"])
-    except Exception:
-        old = _now_utc()
-    it["expires_at"] = _iso(old + timedelta(days=days))
-    save_licenses(items)
-    return json_ok(item=it)
+    return json_ok(item=item)
 
 @app.route("/api/admin/license/delete", methods=["POST", "OPTIONS"])
 def admin_license_delete():
@@ -239,12 +366,11 @@ def admin_license_delete():
         return json_bad("unauthorized", 401)
     data = request.get_json(force=True, silent=True) or {}
     token = (data.get("token") or "").strip()
-    items = [x for x in load_licenses() if x.get("token") != token]
-    save_licenses(items)
+    delete_license(token)
     return json_ok()
 
 # -----------------------------
-# AI Analysis
+# AI Analysis (mocked)
 # -----------------------------
 def _build_ai_result(lat: float, lng: float, address: str, mode: str = "", area_m2: float = 0.0):
     checks = [
@@ -483,9 +609,18 @@ def api_report_pdf():
     pdf = _render_pdf(data)
     return send_file(BytesIO(pdf), mimetype="application/pdf", as_attachment=True, download_name="solar_report.pdf")
 
+# -----------------------------
+# Health
+# -----------------------------
 @app.route("/api/health", methods=["GET"])
 def health():
-    return json_ok(ts=_iso(_now_utc()), license_db=str(LICENSE_DB_FILE))
+    return json_ok(
+        ts=_iso(_now_utc()),
+        storage=("postgres" if _use_postgres() else "file"),
+        database_url_set=bool(DATABASE_URL),
+        license_db=str(LICENSE_DB_FILE),
+        cors_origins=CORS_ORIGINS,
+    )
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT") or 5000))
