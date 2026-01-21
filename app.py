@@ -31,50 +31,8 @@ ADMIN_API_KEY = (os.getenv("ADMIN_API_KEY") or "admin1234").strip()
 PUBLIC_VWORLD_KEY = (os.getenv("VWORLD_KEY") or "").strip()
 PUBLIC_KEPCO_KEY = (os.getenv("KEPCO_KEY") or "").strip()
 
-# License DB path
-def _resolve_license_db_path() -> Path:
-    """Resolve a writable license DB path.
-    Priority:
-      1) env LICENSE_DB_FILE (absolute or relative to APP_DIR)
-      2) /data/licenses_db.json (if /data exists & writable)
-      3) APP_DIR/licenses_db.json
-      4) /tmp/licenses_db.json
-    If /data path is selected and APP_DIR db exists but /data db doesn't, migrate.
-    """
-    env_path = (os.getenv("LICENSE_DB_FILE") or "").strip()
-    if env_path:
-        p = Path(env_path)
-        if not p.is_absolute():
-            p = (APP_DIR / p).resolve()
-        return p
-
-    candidates = [Path("/data/licenses_db.json"), (APP_DIR / "licenses_db.json").resolve(), Path("/tmp/licenses_db.json")]
-    for p in candidates:
-        try:
-            p.parent.mkdir(parents=True, exist_ok=True)
-            # test write permission
-            if p.exists():
-                p.open("a", encoding="utf-8").close()
-                return p
-            else:
-                p.write_text("", encoding="utf-8")
-                return p
-        except Exception:
-            continue
-    # last resort (shouldn't happen)
-    return (APP_DIR / "licenses_db.json").resolve()
-
-
-LICENSE_DB_PATH = _resolve_license_db_path()
-
-# migrate: if we are using /data and it is empty but project db exists, copy it once
-try:
-    project_db = (APP_DIR / "licenses_db.json").resolve()
-    if str(LICENSE_DB_PATH).startswith("/data") and (not LICENSE_DB_PATH.exists() or LICENSE_DB_PATH.stat().st_size == 0) and project_db.exists() and project_db.stat().st_size > 0:
-        LICENSE_DB_PATH.write_text(project_db.read_text(encoding="utf-8"), encoding="utf-8")
-except Exception:
-    pass
-
+LICENSE_DB_FILE = (os.getenv("LICENSE_DB_FILE") or "licenses_db.json").strip()
+LICENSE_DB_PATH = (APP_DIR / LICENSE_DB_FILE).resolve()
 
 _db_lock = threading.Lock()
 
@@ -148,11 +106,8 @@ def json_bad(msg: str, code: int = 400, **kwargs):
 # JSON DB (licenses_db.json)
 # ------------------------------------------------------------
 def _ensure_db_file():
-    try:
-        if LICENSE_DB_PATH.exists() and LICENSE_DB_PATH.stat().st_size > 10:
-            return
-    except Exception:
-        pass
+    if LICENSE_DB_PATH.exists():
+        return
     LICENSE_DB_PATH.write_text(json.dumps({"licenses": {}, "bindings": {}}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -565,7 +520,49 @@ def analyze_comprehensive():
         ai_score=ai_score,
         ai_comment="외부 규제/환경/용량 정보는 반드시 공식 시스템에서 재확인이 필요합니다.",
         kepco_capacity="정보 없음(확인필요)",
+    
+
+@app.route("/api/ai/analyze", methods=["POST", "OPTIONS"])
+def ai_analyze():
+    """Alias endpoint for AI compliance checklist + conservative attractiveness score."""
+    if request.method == "OPTIONS":
+        return ("", 204)
+    # Reuse comprehensive analyzer to keep behavior consistent
+    # Accept both {lat,lon} and {lat,lng} keys
+    data = request.get_json(force=True, silent=True) or {}
+    if "lon" not in data and "lng" in data:
+        data["lon"] = data.get("lng")
+    # Call existing logic by invoking function directly
+    resp = analyze_comprehensive()
+    # analyze_comprehensive returns a Flask response via json_ok(...)
+    # Convert to dict for remapping keys
+    try:
+        payload = resp.get_json() if hasattr(resp, "get_json") else None
+    except Exception:
+        payload = None
+    if not isinstance(payload, dict):
+        return resp
+    # Map fields to the new spec contract
+    checks = payload.get("checks") or []
+    checklist = []
+    for c in checks:
+        checklist.append({
+            "category": c.get("title") or c.get("name") or "",
+            "link": c.get("link") or "",
+            "status": c.get("result") or c.get("check") or "확인필요",
+            "needs_confirmation": "확인필요" in str(c.get("result") or c.get("check") or "")
+        })
+    ai_score = payload.get("ai_score") or {}
+    score_val = ai_score.get("score") if isinstance(ai_score, dict) else None
+    return json_ok(
+        checklist=checklist,
+        attractiveness_score=score_val if score_val is not None else 0,
+        reasons=(ai_score.get("reasons") if isinstance(ai_score, dict) else []),
+        ai_comment=payload.get("ai_comment") or "",
+        kepco_capacity=payload.get("kepco_capacity") or ""
     )
+
+)
 
 
 # ------------------------------------------------------------
@@ -634,7 +631,40 @@ FALLBACK_REPORT_TEMPLATE = r"""
       <h3 style="margin:0 0 10px">AI 체크리스트 요약</h3>
       {% if data.ai_analysis %}
         <table>
-          <tr><th>항목</th><th>상태</th></tr>
+          <tr@app.route("/api/finance/pf", methods=["POST", "OPTIONS"])
+def finance_pf():
+    """PF loan calculator (amortized / 원리금균등)."""
+    if request.method == "OPTIONS":
+        return ("", 204)
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        principal = float(data.get("principal") or 0)
+        annual_rate = float(data.get("rate") or 0) / 100.0
+        years = int(float(data.get("years") or 0))
+        if principal <= 0 or years <= 0:
+            return json_err("principal/years must be positive")
+        n = years * 12
+        r = annual_rate / 12.0
+        if r == 0:
+            monthly = principal / n
+        else:
+            monthly = principal * (r * (1 + r) ** n) / ((1 + r) ** n - 1)
+        total_payment = monthly * n
+        total_interest = total_payment - principal
+        return json_ok(
+            monthly=round(monthly),
+            total_interest=round(total_interest),
+            total_payment=round(total_payment),
+            months=n,
+            principal=principal,
+            rate=annual_rate,
+            years=years,
+            method="원리금균등"
+        )
+    except Exception as e:
+        return json_err(f"invalid input: {e}")
+
+><th>항목</th><th>상태</th></tr>
           {% for k,v in data.ai_analysis.items() %}
             <tr><td>{{ k }}</td><td>{{ v }}</td></tr>
           {% endfor %}
@@ -769,6 +799,68 @@ def report_pdf():
     resp.headers["Content-Disposition"] = 'attachment; filename="solar_report.pdf"'
     return resp
 
+
+@app.route("/api/report/pdf", methods=["POST", "OPTIONS"])
+def api_report_pdf():
+    """JSON-based PDF generation endpoint (alias)."""
+    if request.method == "OPTIONS":
+        return ("", 204)
+    data = request.get_json(force=True, silent=True) or {}
+    # Convert to a fake form dict compatible with existing PDF generator expectations
+    # We call report_pdf() by temporarily populating request.form is not trivial; instead,
+    # we generate here by reusing the same internal logic as /report/pdf.
+    # Minimal PDF content mirrors report_pdf.
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    w, h = A4
+
+    def _t(s): 
+        return str(s) if s is not None else ""
+
+    y = h - 60
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(40, y, "태양광 발전사업 리포트")
+    y -= 26
+    c.setFont("Helvetica", 11)
+    c.drawString(40, y, f"주소: {_t(data.get('address','확인 필요'))}")
+    y -= 16
+    c.drawString(40, y, f"용량: {_t(data.get('capacity','-'))}")
+    y -= 16
+    c.drawString(40, y, f"날짜: {_t(data.get('date','-'))}")
+    y -= 22
+
+    # AI score
+    score = data.get("attractiveness_score")
+    if score is None and isinstance(data.get("ai_score"), dict):
+        score = data["ai_score"].get("score")
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(40, y, f"구매매력도: {_t(score)}/100")
+    y -= 18
+
+    checklist = data.get("checklist") or data.get("checks") or []
+    if checklist:
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(40, y, "8대 체크 항목")
+        y -= 14
+        c.setFont("Helvetica", 10)
+        for item in checklist[:12]:
+            title = item.get("category") or item.get("title") or item.get("name") or ""
+            status = item.get("status") or item.get("result") or item.get("check") or ""
+            c.drawString(46, y, f"• {title}: {status}")
+            y -= 12
+            if y < 60:
+                c.showPage()
+                y = h - 60
+                c.setFont("Helvetica", 10)
+
+    c.showPage()
+    c.save()
+
+    pdf = buf.getvalue()
+    resp = make_response(pdf)
+    resp.headers["Content-Type"] = "application/pdf"
+    resp.headers["Content-Disposition"] = 'attachment; filename="solar_report.pdf"'
+    return resp
 
 if __name__ == "__main__":
     # default: http://127.0.0.1:5000
