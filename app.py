@@ -25,7 +25,10 @@ app = Flask(__name__)
 # -----------------------------
 APP_DIR = Path(__file__).resolve().parent
 
-ADMIN_API_KEY = (os.getenv("ADMIN_API_KEY") or "admin1234").strip()
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
+if not ADMIN_API_KEY:
+    raise RuntimeError("ADMIN_API_KEY is required")
+
 SECRET_KEY = (os.getenv("SECRET_KEY") or "dev-secret").strip()
 app.secret_key = SECRET_KEY
 
@@ -624,3 +627,4 @@ def health():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT") or 5000))
+
