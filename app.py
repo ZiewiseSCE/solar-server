@@ -215,6 +215,95 @@ def admin_license_create():
 
 
 @app.route("/api/admin/licenses", methods=["GET"])
+
+@app.route("/api/admin/license/reset", methods=["POST", "OPTIONS"])
+def admin_license_reset():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    if not require_admin():
+        return json_bad("unauthorized", 401)
+    data = request.get_json(force=True, silent=True) or {}
+    token = (data.get("token") or "").strip()
+    if not token:
+        return json_bad("missing token", 400)
+    with _db_lock:
+        db = _load_db()
+        if token not in (db.get("licenses") or {}):
+            return json_bad("token not found", 404)
+        bindings = db.get("bindings") or {}
+        removed = 0
+        for fp in list(bindings.keys()):
+            b = bindings.get(fp) or {}
+            if isinstance(b, dict) and b.get("token") == token:
+                bindings.pop(fp, None)
+                removed += 1
+        db["bindings"] = bindings
+        _save_db(db)
+    return json_ok(removed=removed)
+
+
+@app.route("/api/admin/license/delete", methods=["POST", "OPTIONS"])
+def admin_license_delete():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    if not require_admin():
+        return json_bad("unauthorized", 401)
+    data = request.get_json(force=True, silent=True) or {}
+    token = (data.get("token") or "").strip()
+    if not token:
+        return json_bad("missing token", 400)
+    with _db_lock:
+        db = _load_db()
+        licenses = db.get("licenses") or {}
+        if token not in licenses:
+            return json_bad("token not found", 404)
+        licenses.pop(token, None)
+        bindings = db.get("bindings") or {}
+        removed_bindings = 0
+        for fp in list(bindings.keys()):
+            b = bindings.get(fp) or {}
+            if isinstance(b, dict) and b.get("token") == token:
+                bindings.pop(fp, None)
+                removed_bindings += 1
+        db["licenses"] = licenses
+        db["bindings"] = bindings
+        _save_db(db)
+    return json_ok(deleted=True, removed_bindings=removed_bindings)
+
+
+@app.route("/api/admin/license/extend", methods=["POST", "OPTIONS"])
+def admin_license_extend():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    if not require_admin():
+        return json_bad("unauthorized", 401)
+    data = request.get_json(force=True, silent=True) or {}
+    token = (data.get("token") or "").strip()
+    days = int(data.get("days") or 30)
+    if not token:
+        return json_bad("missing token", 400)
+    if days <= 0 or days > 3650:
+        return json_bad("invalid days", 400)
+    with _db_lock:
+        db = _load_db()
+        licenses = db.get("licenses") or {}
+        rec = licenses.get(token)
+        if not isinstance(rec, dict):
+            return json_bad("token not found", 404)
+        # extend from current expiry if in future, else from now
+        try:
+            exp = datetime.fromisoformat((rec.get("expires_at") or "").replace("Z", "+00:00"))
+        except Exception:
+            exp = now_utc()
+        base_dt = exp if exp > now_utc() else now_utc()
+        new_exp = base_dt + timedelta(days=days)
+        rec["expires_at"] = new_exp.isoformat().replace("+00:00", "Z")
+        licenses[token] = rec
+        db["licenses"] = licenses
+        _save_db(db)
+    return json_ok(token=token, expires_at=rec["expires_at"])
+
+
 def admin_list_licenses():
     if not require_admin():
         return json_bad("unauthorized", 401)
@@ -435,45 +524,127 @@ def analyze_comprehensive():
 # ------------------------------------------------------------
 # Report rendering (HTML + PDF)
 # ------------------------------------------------------------
+FALLBACK_REPORT_TEMPLATE = r"""
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Solar Pathfinder Report</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;color:#111}
+    .wrap{max-width:980px;margin:0 auto}
+    h1{font-size:28px;margin:0 0 8px}
+    .sub{color:#555;margin:0 0 18px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    .card{border:1px solid #ddd;border-radius:10px;padding:14px}
+    .kpi{display:flex;gap:14px;flex-wrap:wrap}
+    .kpi .box{border:1px solid #e2e2e2;border-radius:10px;padding:10px 12px;min-width:170px}
+    .muted{color:#666}
+    table{width:100%;border-collapse:collapse;font-size:14px}
+    td,th{border-bottom:1px solid #eee;padding:8px 6px;text-align:left}
+    .bar{height:12px;border:1px solid #ddd;border-radius:999px;overflow:hidden}
+    .bar>div{height:100%;background:#111}
+    .btn{display:inline-block;padding:9px 12px;border-radius:10px;border:1px solid #111;text-decoration:none;color:#111}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>태양광 정밀 리포트</h1>
+  <p class="sub">주소: <b>{{ data.address or "-" }}</b> · 날짜: {{ data.date or "-" }}</p>
+
+  <p>
+    <a class="btn" href="#" onclick="document.getElementById('pdfForm').submit();return false;">PDF 다운로드</a>
+  </p>
+
+  <form id="pdfForm" method="POST" action="/report/pdf" style="display:none">
+    <input name="address" value="{{ data.address or '' }}">
+    <input name="capacity" value="{{ data.capacity or '' }}">
+    <input name="date" value="{{ data.date or '' }}">
+    <input name="kepco" value="{{ data.kepco or '' }}">
+    <input name="land_price" value="{{ data.land_price or '' }}">
+    <input name="finance" value='{{ (data.finance or {})|tojson }}'>
+    <input name="ai_analysis" value='{{ (data.ai_analysis or {})|tojson }}'>
+    <input name="ai_score" value='{{ (data.ai_score or {})|tojson }}'>
+  </form>
+
+  <div class="kpi">
+    <div class="box"><div class="muted">설치용량(AC)</div><div style="font-size:22px"><b>{{ data.finance.acCapacity if data.finance else (data.capacity or "-") }}</b></div></div>
+    <div class="box"><div class="muted">연간발전량</div><div style="font-size:22px"><b>{{ data.finance.annualKwh if data.finance else "-" }}</b></div></div>
+    <div class="box"><div class="muted">연간매출</div><div style="font-size:22px"><b>{{ data.finance.annualRev if data.finance else "-" }}</b></div></div>
+    <div class="box"><div class="muted">25년 누적매출</div><div style="font-size:22px"><b>{{ data.finance.totalRev25 if data.finance else "-" }}</b></div></div>
+  </div>
+
+  <div class="grid" style="margin-top:14px">
+    <div class="card">
+      <h3 style="margin:0 0 10px">구매매력도 (보수적)</h3>
+      {% set s = (data.ai_score.score if data.ai_score and data.ai_score.score is not none else 0) %}
+      <div style="font-size:34px"><b>{{ s }}</b><span class="muted">/100</span></div>
+      <div class="bar" title="{{ s }}/100"><div style="width: {{ s }}%"></div></div>
+      <p class="muted" style="margin:10px 0 0">{{ data.ai_score.ai_comment if data.ai_score else "" }}</p>
+    </div>
+    <div class="card">
+      <h3 style="margin:0 0 10px">AI 체크리스트 요약</h3>
+      {% if data.ai_analysis %}
+        <table>
+          <tr><th>항목</th><th>상태</th></tr>
+          {% for k,v in data.ai_analysis.items() %}
+            <tr><td>{{ k }}</td><td>{{ v }}</td></tr>
+          {% endfor %}
+        </table>
+      {% else %}
+        <p class="muted">분석 데이터가 없습니다.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <h3 style="margin:0 0 10px">재무 요약</h3>
+    {% if data.finance %}
+      <table>
+        <tr><th>항목</th><th>값</th></tr>
+        <tr><td>총사업비</td><td>{{ data.finance.totalCost }}</td></tr>
+        <tr><td>대출</td><td>{{ data.finance.loan }}</td></tr>
+        <tr><td>자기자본</td><td>{{ data.finance.equity }}</td></tr>
+        <tr><td>연간 OPEX</td><td>{{ data.finance.annualOpex }}</td></tr>
+        <tr><td>연간 부채상환</td><td>{{ data.finance.annualDebt }}</td></tr>
+        <tr><td>회수기간</td><td>{{ data.finance.payback }}</td></tr>
+      </table>
+    {% else %}
+      <p class="muted">재무 데이터가 없습니다.</p>
+    {% endif %}
+  </div>
+
+</div>
+</body>
+</html>
+"""
+
+
 def _load_report_template() -> str:
     p = APP_DIR / "report.html"
     if p.exists():
         return p.read_text(encoding="utf-8", errors="ignore")
-    return "<html><body><h1>report.html not found</h1></body></html>"
+    return FALLBACK_REPORT_TEMPLATE
 
 
 def _parse_report_form(form) -> dict:
-    def _json_field(*names: str):
-        # accept multiple possible field names (backward/forward compatibility)
-        for name in names:
-            if not name:
-                continue
-            raw = form.get(name)
-            if raw is None:
-                continue
-            raw = raw.strip() if isinstance(raw, str) else raw
-            if raw in ("", None):
-                continue
-            try:
-                return json.loads(raw)
-            except Exception:
-                # if it's already a dict-like or invalid json, ignore
-                pass
-        return {}
+    def _json_field(name: str):
+        try:
+            return json.loads(form.get(name) or "{}")
+        except Exception:
+            return {}
 
     return {
         "address": form.get("address") or "",
         "capacity": form.get("capacity") or "",
-        # old/new field names support
-        "kepco": (form.get("kepco") or form.get("kepco_capacity") or ""),
+        "kepco": form.get("kepco") or "",
         "date": form.get("date") or "",
         "finance": _json_field("finance"),
-        # support solar_pathfinder.html hidden fields: ai / ai_analysis
-        "ai_analysis": _json_field("ai_analysis", "ai"),
-        "ai_score": _json_field("ai_score", "score"),
-        "land_price": (form.get("land_price") or form.get("price") or ""),
+        "ai_analysis": _json_field("ai_analysis"),
+        "ai_score": _json_field("ai_score"),
+        "land_price": form.get("land_price") or "",
     }
-
 
 
 @app.route("/report", methods=["GET", "POST"])
