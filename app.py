@@ -214,7 +214,6 @@ def admin_license_create():
     return json_ok(token=token, expires_at=expires.isoformat(), days=days)
 
 
-@app.route("/api/admin/licenses", methods=["GET"])
 
 @app.route("/api/admin/license/reset", methods=["POST", "OPTIONS"])
 def admin_license_reset():
@@ -304,7 +303,10 @@ def admin_license_extend():
     return json_ok(token=token, expires_at=rec["expires_at"])
 
 
+@app.route("/api/admin/licenses", methods=["GET", "OPTIONS"])
 def admin_list_licenses():
+    if request.method == "OPTIONS":
+        return json_ok()
     if not require_admin():
         return json_bad("unauthorized", 401)
 
