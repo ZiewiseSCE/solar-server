@@ -3,147 +3,166 @@ import hmac
 import hashlib
 import base64
 import secrets
-from datetime import datetime, timedelta, timezone
-
-import psycopg2
-from flask import Flask, request, jsonify, render_template_string, make_response
 import json
+import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from io import BytesIO
+
+from flask import Flask, request, jsonify, render_template_string, make_response, redirect
 from flask_cors import CORS
 
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
-from reportlab.lib import colors
-from reportlab.platypus import Table, TableStyle
 
 
+# ------------------------------------------------------------
+# App setup
+# ------------------------------------------------------------
 app = Flask(__name__)
+CORS(app)
 
-def _cors_origins():
-    v = os.getenv("CORS_ORIGINS", "").strip()
-    if not v:
-        return ["*"]
-    return [x.strip() for x in v.split(",") if x.strip()]
+APP_DIR = Path(__file__).resolve().parent
 
-CORS(
-    app,
-    resources={r"/api/*": {"origins": _cors_origins()}},
-    allow_headers=["Content-Type", "Authorization", "X-CLIENT-TOKEN", "X-CLIENT-FP"],
-    methods=["GET", "POST", "OPTIONS"],
-)
-
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL not set")
-
-ADMIN_API_KEY = (os.getenv("ADMIN_API_KEY") or "").strip()
-if not ADMIN_API_KEY:
-    raise RuntimeError("ADMIN_API_KEY not set")
-
-SECRET_KEY = (os.getenv("SECRET_KEY") or "").encode("utf-8")
-if not SECRET_KEY:
-    raise RuntimeError("SECRET_KEY not set")
+# Admin key: set ADMIN_API_KEY env var in production
+ADMIN_API_KEY = (os.getenv("ADMIN_API_KEY") or "admin1234").strip()
 
 PUBLIC_VWORLD_KEY = (os.getenv("VWORLD_KEY") or "").strip()
 PUBLIC_KEPCO_KEY = (os.getenv("KEPCO_KEY") or "").strip()
 
-def now_utc():
+LICENSE_DB_FILE = (os.getenv("LICENSE_DB_FILE") or "licenses_db.json").strip()
+LICENSE_DB_PATH = (APP_DIR / LICENSE_DB_FILE).resolve()
+
+_db_lock = threading.Lock()
+
+
+# ------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------
+def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
-def get_conn():
-    return psycopg2.connect(DATABASE_URL)
-
-def ensure_schema():
-    ddl = """
-    CREATE TABLE IF NOT EXISTS licenses (
-        token TEXT PRIMARY KEY,
-        expires_at TIMESTAMPTZ NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        note TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS bindings (
-        id BIGSERIAL PRIMARY KEY,
-        token TEXT NOT NULL REFERENCES licenses(token) ON DELETE CASCADE,
-        fingerprint TEXT NOT NULL,
-        bound_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        expires_at TIMESTAMPTZ NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_bindings_fp ON bindings(fingerprint);
-    CREATE INDEX IF NOT EXISTS idx_bindings_token ON bindings(token);
-    """
-    conn = get_conn()
-    try:
-        with conn, conn.cursor() as cur:
-            cur.execute(ddl)
-    finally:
-        conn.close()
-
-ensure_schema()
 
 def _b64url(b: bytes) -> str:
     return base64.urlsafe_b64encode(b).decode("utf-8").rstrip("=")
 
-def _b64url_dec(s: str) -> bytes:
-    pad = "=" * (-len(s) % 4)
-    return base64.urlsafe_b64decode(s + pad)
 
-def sign_admin_session(ttl_hours: int = 8) -> str:
-    exp = int((now_utc() + timedelta(hours=ttl_hours)).timestamp())
-    nonce = secrets.token_urlsafe(12)
-    payload = f"exp={exp}&nonce={nonce}".encode("utf-8")
-    sig = hmac.new(SECRET_KEY, payload, hashlib.sha256).digest()
-    return _b64url(payload) + "." + _b64url(sig)
+def _b64urldecode(s: str) -> bytes:
+    pad = "=" * (-len(s) % 4)
+    return base64.urlsafe_b64decode((s + pad).encode("utf-8"))
+
+
+def sign_admin_session() -> str:
+    """
+    Small stateless token for admin session.
+    NOTE: not a full auth system; matches existing admin.html behavior.
+    """
+    ts = int(now_utc().timestamp())
+    nonce = secrets.token_hex(16)
+    payload = f"{ts}.{nonce}".encode("utf-8")
+    sig = hmac.new(ADMIN_API_KEY.encode("utf-8"), payload, hashlib.sha256).digest()
+    return f"{_b64url(payload)}.{_b64url(sig)}"
+
 
 def verify_admin_session(token: str) -> bool:
     try:
-        payload_b64, sig_b64 = token.split(".", 1)
-        payload = _b64url_dec(payload_b64)
-        sig = _b64url_dec(sig_b64)
-        expect = hmac.new(SECRET_KEY, payload, hashlib.sha256).digest()
-        if not hmac.compare_digest(sig, expect):
+        p_b64, s_b64 = token.split(".", 1)
+        payload = _b64urldecode(p_b64)
+        sig = _b64urldecode(s_b64)
+        expected = hmac.new(ADMIN_API_KEY.encode("utf-8"), payload, hashlib.sha256).digest()
+        if not hmac.compare_digest(sig, expected):
             return False
-        parts = dict(x.split("=", 1) for x in payload.decode("utf-8").split("&"))
-        exp = int(parts.get("exp", "0"))
-        return int(now_utc().timestamp()) < exp
+        ts_s, _nonce = payload.decode("utf-8").split(".", 1)
+        ts = int(ts_s)
+        # 7 days validity
+        return (now_utc().timestamp() - ts) <= (7 * 24 * 3600)
     except Exception:
         return False
 
-def require_admin():
+
+def require_admin() -> bool:
+    # admin.html sends "Authorization: Bearer <session>"
     auth = (request.headers.get("Authorization") or "").strip()
-    if not auth.lower().startswith("bearer "):
-        return False
-    tok = auth.split(" ", 1)[1].strip()
-    return verify_admin_session(tok)
+    if auth.lower().startswith("bearer "):
+        token = auth.split(" ", 1)[1].strip()
+        return verify_admin_session(token)
+    return False
 
-def gen_license_token(prefix="SCE", nbytes=8) -> str:
-    return f"{prefix}-" + secrets.token_hex(nbytes).upper()
 
-def json_ok(**kw):
+def json_ok(**kwargs):
     d = {"ok": True}
-    d.update(kw)
+    d.update(kwargs)
     return jsonify(d)
 
-def json_bad(msg, status=400, **kw):
-    d = {"ok": False, "msg": msg}
-    d.update(kw)
-    return jsonify(d), status
 
+def json_bad(msg: str, code: int = 400, **kwargs):
+    d = {"ok": False, "msg": msg}
+    d.update(kwargs)
+    return jsonify(d), code
+
+
+# ------------------------------------------------------------
+# JSON DB (licenses_db.json)
+# ------------------------------------------------------------
+def _ensure_db_file():
+    if LICENSE_DB_PATH.exists():
+        return
+    LICENSE_DB_PATH.write_text(json.dumps({"licenses": {}, "bindings": {}}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _load_db() -> dict:
+    _ensure_db_file()
+    try:
+        return json.loads(LICENSE_DB_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        # if corrupted, keep a safe empty db
+        return {"licenses": {}, "bindings": {}}
+
+
+def _save_db(db: dict) -> None:
+    tmp = LICENSE_DB_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(db, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(LICENSE_DB_PATH)
+
+
+def gen_license_token() -> str:
+    # readable-ish token
+    return "LIC-" + secrets.token_urlsafe(18).replace("-", "").replace("_", "")[:24]
+
+
+def _license_status(expires_at_iso: str) -> str:
+    try:
+        exp = datetime.fromisoformat(expires_at_iso.replace("Z", "+00:00"))
+        return "expired" if exp <= now_utc() else "active"
+    except Exception:
+        return "unknown"
+
+
+def _get_binding(db: dict, fp: str):
+    b = (db.get("bindings") or {}).get(fp)
+    return b if isinstance(b, dict) else None
+
+
+# ------------------------------------------------------------
+# Basic endpoints
+# ------------------------------------------------------------
 @app.route("/api/health", methods=["GET"])
 def health():
-    return json_ok()
+    return json_ok(ts=now_utc().isoformat())
+
 
 @app.route("/api/config/public", methods=["GET"])
-def public_config():
-    return jsonify({
-        "ok": True,
-        "vworld_key": PUBLIC_VWORLD_KEY,
-        "kepco_key": PUBLIC_KEPCO_KEY,
-    })
+def config_public():
+    return json_ok(
+        vworld_key=PUBLIC_VWORLD_KEY,
+        kepco_key=PUBLIC_KEPCO_KEY,
+    )
 
+
+# ------------------------------------------------------------
+# Admin endpoints (for admin.html)
+# ------------------------------------------------------------
 @app.route("/api/admin/login", methods=["POST", "OPTIONS"])
 def admin_login():
     if request.method == "OPTIONS":
@@ -154,6 +173,7 @@ def admin_login():
         return json_bad("invalid credential", 401)
     return json_ok(session_token=sign_admin_session())
 
+
 @app.route("/api/auth/whoami", methods=["GET", "OPTIONS"])
 def whoami():
     if request.method == "OPTIONS":
@@ -161,6 +181,7 @@ def whoami():
     if not require_admin():
         return json_bad("unauthorized", 401)
     return json_ok(role="admin")
+
 
 @app.route("/api/admin/license/create", methods=["POST", "OPTIONS"])
 def admin_license_create():
@@ -171,50 +192,77 @@ def admin_license_create():
 
     data = request.get_json(force=True, silent=True) or {}
     days = int(data.get("days") or 30)
-    if days not in (30, 60, 90, 180, 365) and not (1 <= days <= 3650):
+    if days <= 0 or days > 3650:
         return json_bad("invalid days", 400)
 
     note = (data.get("note") or "").strip()[:500]
     token = gen_license_token()
-    expires = now_utc() + timedelta(days=days)
+    created = now_utc()
+    expires = created + timedelta(days=days)
 
-    conn = get_conn()
-    try:
-        with conn, conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO licenses(token, expires_at, note) VALUES(%s,%s,%s)",
-                (token, expires, note),
-            )
-    finally:
-        conn.close()
+    with _db_lock:
+        db = _load_db()
+        db.setdefault("licenses", {})
+        db["licenses"][token] = {
+            "token": token,
+            "created_at": created.isoformat(),
+            "expires_at": expires.isoformat(),
+            "note": note,
+        }
+        _save_db(db)
 
     return json_ok(token=token, expires_at=expires.isoformat(), days=days)
 
+
 @app.route("/api/admin/licenses", methods=["GET"])
-def admin_licenses():
+def admin_list_licenses():
     if not require_admin():
         return json_bad("unauthorized", 401)
-    conn = get_conn()
-    try:
-        with conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT token, expires_at, created_at, note FROM licenses ORDER BY created_at DESC LIMIT 200"
-            )
-            rows = cur.fetchall()
-    finally:
-        conn.close()
-    return jsonify({
-        "ok": True,
-        "items": [
-            {
-                "token": r[0],
-                "expires_at": r[1].isoformat(),
-                "created_at": r[2].isoformat(),
-                "note": r[3] or "",
-            } for r in rows
-        ],
-    })
 
+    with _db_lock:
+        db = _load_db()
+        lic = db.get("licenses") or {}
+        bindings = db.get("bindings") or {}
+
+    # map token -> bound_count and latest fingerprint
+    bound_map = {}
+    for fp, b in bindings.items():
+        if not isinstance(b, dict):
+            continue
+        t = b.get("token")
+        if not t:
+            continue
+        bound_map.setdefault(t, {"count": 0, "fps": []})
+        bound_map[t]["count"] += 1
+        bound_map[t]["fps"].append(fp)
+
+    items = []
+    for token, row in lic.items():
+        if not isinstance(row, dict):
+            continue
+        expires_at = row.get("expires_at") or ""
+        status = _license_status(expires_at)
+        info = bound_map.get(token) or {"count": 0, "fps": []}
+        items.append(
+            {
+                "token": token,
+                "created_at": row.get("created_at"),
+                "expires_at": expires_at,
+                "note": row.get("note") or "",
+                "status": status,
+                "bound_count": info["count"],
+                "fingerprints": info["fps"][:5],
+            }
+        )
+
+    # newest first
+    items.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    return json_ok(items=items)
+
+
+# ------------------------------------------------------------
+# Client licensing endpoints
+# ------------------------------------------------------------
 @app.route("/api/license/activate", methods=["POST", "OPTIONS"])
 def activate_license():
     if request.method == "OPTIONS":
@@ -227,25 +275,28 @@ def activate_license():
     if not token or not fp:
         return json_bad("token and fingerprint required", 400)
 
-    conn = get_conn()
-    try:
-        with conn, conn.cursor() as cur:
-            cur.execute("SELECT expires_at FROM licenses WHERE token=%s", (token,))
-            row = cur.fetchone()
-            if not row:
-                return json_bad("invalid token", 404)
-            expires_at = row[0]
-            if expires_at <= now_utc():
-                return json_bad("expired token", 403, expires_at=expires_at.isoformat())
+    with _db_lock:
+        db = _load_db()
+        lic = (db.get("licenses") or {}).get(token)
+        if not lic:
+            return json_bad("invalid token", 403)
 
-            cur.execute(
-                "INSERT INTO bindings(token, fingerprint, expires_at) VALUES(%s,%s,%s)",
-                (token, fp, expires_at),
-            )
-    finally:
-        conn.close()
+        expires_at = lic.get("expires_at")
+        if _license_status(expires_at) != "active":
+            return json_bad("expired", 403, expires_at=expires_at)
 
-    return json_ok(expires_at=expires_at.isoformat())
+        # bind fp to token
+        db.setdefault("bindings", {})
+        db["bindings"][fp] = {
+            "fingerprint": fp,
+            "token": token,
+            "bound_at": now_utc().isoformat(),
+            "expires_at": expires_at,
+        }
+        _save_db(db)
+
+    return json_ok(token=token, expires_at=expires_at)
+
 
 @app.route("/api/auth/verify", methods=["POST", "OPTIONS"])
 def verify_license():
@@ -259,50 +310,39 @@ def verify_license():
     if not token or not fp:
         return json_bad("token and fingerprint required", 400)
 
-    conn = get_conn()
-    try:
-        with conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT expires_at FROM bindings WHERE token=%s AND fingerprint=%s ORDER BY bound_at DESC LIMIT 1",
-                (token, fp),
-            )
-            row = cur.fetchone()
-            if not row:
-                return json_bad("not bound", 403)
-            expires_at = row[0]
-            if expires_at <= now_utc():
-                return json_bad("expired", 403, expires_at=expires_at.isoformat())
-    finally:
-        conn.close()
+    with _db_lock:
+        db = _load_db()
+        b = _get_binding(db, fp)
+        if not b or b.get("token") != token:
+            return json_bad("not bound", 403)
+        expires_at = b.get("expires_at")
+        if _license_status(expires_at) != "active":
+            return json_bad("expired", 403, expires_at=expires_at)
 
-    return json_ok(expires_at=expires_at.isoformat())
+    return json_ok(expires_at=expires_at)
+
 
 @app.route("/api/auth/auto", methods=["POST", "OPTIONS"])
 def auto_auth():
     if request.method == "OPTIONS":
         return ("", 204)
+
     data = request.get_json(force=True, silent=True) or {}
     fp = (data.get("fingerprint") or request.headers.get("X-CLIENT-FP") or "").strip()
     if not fp:
         return json_bad("fingerprint required", 400)
 
-    conn = get_conn()
-    try:
-        with conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT token, expires_at FROM bindings WHERE fingerprint=%s ORDER BY bound_at DESC LIMIT 1",
-                (fp,),
-            )
-            row = cur.fetchone()
-            if not row:
-                return json_bad("no binding", 403)
-            token, expires_at = row
-            if expires_at <= now_utc():
-                return json_bad("expired", 403, expires_at=expires_at.isoformat())
-    finally:
-        conn.close()
+    with _db_lock:
+        db = _load_db()
+        b = _get_binding(db, fp)
+        if not b:
+            return json_bad("not bound", 403)
+        expires_at = b.get("expires_at")
+        if _license_status(expires_at) != "active":
+            return json_bad("expired", 403, expires_at=expires_at)
+        token = b.get("token")
 
-    return json_ok(token=token, expires_at=expires_at.isoformat())
+    return json_ok(token=token, expires_at=expires_at)
 
 
 # -----------------------------
@@ -310,134 +350,142 @@ def auto_auth():
 # -----------------------------
 def _mock_sun_hours(lat: float) -> float:
     # rough annual average PSH in Korea-like latitudes: 3.3~4.4
-    base = 4.2 - abs(lat - 36.5) * 0.05
-    return float(max(3.2, min(4.5, base)))
+    base = 4.0
+    # very rough adjustment by latitude
+    if lat and lat > 37.5:
+        base -= 0.15
+    if lat and lat < 35.5:
+        base += 0.1
+    return max(3.0, min(4.6, base))
 
-def _conservative_score(payload: dict) -> dict:
-    # conservative scoring: start from 60 then subtract risks
-    score = 60
+
+def _score_conservative(payload: dict) -> dict:
+    # Conservative scoring: start at 70 and subtract risks.
+    score = 70
     reasons = []
-    addr = (payload.get("address") or "").lower()
+    # slope / eco / heritage unknown => subtract
+    unknown_penalty = 10
+    for k in ("land_use", "eco_grade", "heritage", "env_map", "local_ordinance", "kepco_capacity"):
+        v = (payload.get(k) or "").strip()
+        if not v or "확인필요" in v or "정보 없음" in v:
+            score -= unknown_penalty
+            reasons.append(f"{k}: 확인필요(-{unknown_penalty})")
 
-    # risk heuristics
-    if "pnu" in addr or "토지" in addr:
-        score -= 3
-        reasons.append("토지는 인허가/환경 리스크가 상대적으로 큼")
-    if any(k in addr for k in ["농", "임야", "보전", "문화재"]):
-        score -= 10
-        reasons.append("규제 가능성이 있는 키워드(농/임야/보전/문화재) 포함")
+    # oversize / capacity etc
+    cap = payload.get("kepco_over") is True
+    if cap:
+        score -= 15
+        reasons.append("한전 용량 초과 가능(-15)")
 
-    # kepco capacity missing -> penalize
-    kepco = payload.get("kepco_capacity") or ""
-    if not kepco or "정보" in kepco or "확인" in kepco or "DB" in kepco:
-        score -= 12
-        reasons.append("한전 연계 가능용량 확인 필요")
-
-    # keep within 0~100
-    score = int(max(0, min(100, score)))
-    if score >= 75:
-        grade = "매력도 상"
-    elif score >= 55:
-        grade = "매력도 중"
-    elif score >= 35:
-        grade = "매력도 하"
+    # clamp
+    score = max(0, min(100, score))
+    if score >= 80:
+        grade = "A"
+    elif score >= 65:
+        grade = "B"
+    elif score >= 50:
+        grade = "C"
     else:
-        grade = "투자 비추천"
-
-    if not reasons:
-        reasons = ["주요 리스크 항목 추가 확인 필요"]
+        grade = "D"
     return {"score": score, "grade": grade, "reasons": reasons}
+
 
 @app.route("/api/analyze/comprehensive", methods=["POST", "OPTIONS"])
 def analyze_comprehensive():
     if request.method == "OPTIONS":
         return ("", 204)
 
-    payload = request.get_json(force=True, silent=True) or {}
-    try:
-        lat = float(payload.get("lat") or 0)
-        lng = float(payload.get("lng") or 0)
-    except Exception:
-        lat, lng = 0.0, 0.0
+    data = request.get_json(force=True, silent=True) or {}
+    lat = float(data.get("lat") or 0) if str(data.get("lat") or "").strip() else 0.0
+    lon = float(data.get("lon") or 0) if str(data.get("lon") or "").strip() else 0.0
 
-    address = (payload.get("address") or "").strip()
+    # Stub info + references for the 8 key checks
+    checks = [
+        {"title": "도시별 조례정보 확인", "link": "https://www.elis.go.kr/", "result": "확인필요"},
+        {"title": "토지이음(국토계획/용도지역) 확인", "link": "https://www.eum.go.kr/web/am/amMain.jsp", "result": "확인필요"},
+        {"title": "법제처(상위법: 환경법/농지법 등) 규제 확인", "link": "https://www.law.go.kr/", "result": "확인필요"},
+        {"title": "자연/생태 등급 확인(환경부 지침)", "link": "https://aid.mcee.go.kr/", "result": "확인필요"},
+        {"title": "문화재(국가유산) 공간정보/보존관리지도 확인", "link": "https://www.nie-ecobank.kr/cmmn/Index.do", "result": "확인필요"},
+        {"title": "국토환경성평가지도(경사도/지적/환경)", "link": "https://webgis.neins.go.kr/map.do", "result": "평균 경사도만 제시(확인필요)"},
+        {"title": "소규모 환경영향평가 대상 여부", "link": "https://www.law.go.kr/", "result": "확인필요(용도/면적 기준)"},
+        {"title": "한전온(허용용량/가능시점)", "link": "https://online.kepco.co.kr/", "result": "확인필요"},
+    ]
 
-    sun = _mock_sun_hours(lat) if lat else 4.0
-
-    # KEPCO: real integration not included in this template; return placeholder
-    kepco_cap = "확인필요 (한전온/내부DB 연동 필요)"
-
-    data = {
-        "status": "OK",
-        "address": address,
-        "lat": lat,
-        "lng": lng,
-        "zoning": "확인필요 (토지이음/지자체 조례)",
-        "env_assessment": "확인필요 (소규모 환경영향평가 대상 여부)",
-        "eco_grade": "확인필요 (자연/생태 등급)",
-        "heritage": "확인필요 (문화재/국가유산 규제)",
-        "slope_note": "경사도/생태등급은 오차 가능 → 평균 경사도만 참고 후 '확인필요'",
-        "kepco_capacity": kepco_cap,
-        "sun_hours": round(sun, 2),
-        "links": {
-            "elis": "https://www.elis.go.kr/",
-            "eum": "https://www.eum.go.kr/web/am/amMain.jsp",
-            "law": "https://www.law.go.kr/",
-            "aid": "https://aid.mcee.go.kr/",
-            "heritage": "https://www.nie-ecobank.kr/cmmn/Index.do?",
-            "neins": "https://webgis.neins.go.kr/map.do",
-            "kepco": "https://online.kepco.co.kr/",
-        },
+    # compute conservative score inputs
+    score_payload = {
+        "land_use": "확인필요",
+        "eco_grade": "확인필요",
+        "heritage": "확인필요",
+        "env_map": "확인필요",
+        "local_ordinance": "확인필요",
+        "kepco_capacity": "정보 없음",
+        "kepco_over": False,
     }
+    ai_score = _score_conservative(score_payload)
 
-    data["ai_score"] = _conservative_score({**payload, "kepco_capacity": data["kepco_capacity"]})
-    data["ai_comment"] = (
-        f"일사량(추정): {data['sun_hours']}h/day. "
-        f"규제/인허가(조례·상위법·환경·문화재) 및 한전 연계용량은 링크에서 반드시 재확인하세요."
+    return json_ok(
+        checks=checks,
+        sun_hours=_mock_sun_hours(lat),
+        ai_score=ai_score,
+        ai_comment="외부 규제/환경/용량 정보는 반드시 공식 시스템에서 재확인이 필요합니다.",
+        kepco_capacity="정보 없음(확인필요)",
     )
-    return jsonify(data)
 
-# -----------------------------
-# Report rendering (HTML) + PDF download
-# -----------------------------
-_REPORT_HTML = Path(__file__).with_name("report.html")
 
+# ------------------------------------------------------------
+# Report rendering (HTML + PDF)
+# ------------------------------------------------------------
 def _load_report_template() -> str:
-    try:
-        return _REPORT_HTML.read_text(encoding="utf-8")
-    except Exception:
-        # fallback: minimal template
-        return "<html><body><pre>{{ data|tojson }}</pre></body></html>"
+    p = APP_DIR / "report.html"
+    if p.exists():
+        return p.read_text(encoding="utf-8", errors="ignore")
+    return "<html><body><h1>report.html not found</h1></body></html>"
+
 
 def _parse_report_form(form) -> dict:
-    address = (form.get("address") or "").strip()
-    date = (form.get("date") or "").strip() or datetime.now().strftime("%Y-%m-%d")
-    kepco = (form.get("kepco") or "").strip()
+    def _json_field(*names: str):
+        # accept multiple possible field names (backward/forward compatibility)
+        for name in names:
+            if not name:
+                continue
+            raw = form.get(name)
+            if raw is None:
+                continue
+            raw = raw.strip() if isinstance(raw, str) else raw
+            if raw in ("", None):
+                continue
+            try:
+                return json.loads(raw)
+            except Exception:
+                # if it's already a dict-like or invalid json, ignore
+                pass
+        return {}
 
-    finance_raw = form.get("finance") or "{}"
-    ai_raw = form.get("ai") or "{}"
-
-    try:
-        finance = json.loads(finance_raw)
-    except Exception:
-        finance = {}
-    try:
-        ai = json.loads(ai_raw)
-    except Exception:
-        ai = {}
-
-    # keep compatibility fields
-    data = {
-        "address": address,
-        "date": date,
-        "kepco_capacity": kepco or ai.get("kepco_capacity") or "",
-        "finance": finance,
-        "ai_analysis": ai,
+    return {
+        "address": form.get("address") or "",
+        "capacity": form.get("capacity") or "",
+        # old/new field names support
+        "kepco": (form.get("kepco") or form.get("kepco_capacity") or ""),
+        "date": form.get("date") or "",
+        "finance": _json_field("finance"),
+        # support solar_pathfinder.html hidden fields: ai / ai_analysis
+        "ai_analysis": _json_field("ai_analysis", "ai"),
+        "ai_score": _json_field("ai_score", "score"),
+        "land_price": (form.get("land_price") or form.get("price") or ""),
     }
-    return data
 
-@app.route("/report", methods=["POST"])
+
+
+@app.route("/report", methods=["GET", "POST"])
 def report_html():
+    # GET: allow user to open link without POST (shows empty template)
+    if request.method == "GET":
+        tpl = _load_report_template()
+        html = render_template_string(tpl, data=_parse_report_form({}))
+        resp = make_response(html)
+        resp.headers["Content-Type"] = "text/html; charset=utf-8"
+        return resp
+
     data = _parse_report_form(request.form)
     tpl = _load_report_template()
     html = render_template_string(tpl, data=data)
@@ -445,67 +493,65 @@ def report_html():
     resp.headers["Content-Type"] = "text/html; charset=utf-8"
     return resp
 
+
+@app.route("/report.html", methods=["GET"])
+def report_html_alias():
+    return redirect("/report", code=302)
+
+
 @app.route("/report/pdf", methods=["POST"])
 def report_pdf():
     data = _parse_report_form(request.form)
+
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     w, h = A4
 
-    def t(x, y, s, size=11, bold=False):
-        c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
-        c.drawString(x, y, s)
+    x0 = 18 * mm
+    y = h - 18 * mm
+    lh = 6.5 * mm
 
-    y = h - 20*mm
-    t(20*mm, y, "SCEnergy 태양광 분석 리포트", 16, True); y -= 10*mm
-    t(20*mm, y, f"주소: {data.get('address','-')}", 11); y -= 6*mm
-    t(20*mm, y, f"작성일: {data.get('date','-')}", 11); y -= 10*mm
+    def draw_line(txt, size=11, bold=False):
+        nonlocal y
+        c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
+        c.drawString(x0, y, txt)
+        y -= lh
+
+    draw_line("Solar Pathfinder Report", 16, True)
+    draw_line(f"Date: {data.get('date') or '-'}", 11, False)
+    draw_line(f"Address: {data.get('address') or '-'}", 11, False)
+    draw_line(f"Capacity: {data.get('capacity') or '-'}", 11, False)
+    draw_line(f"KEPCO: {data.get('kepco') or '-'}", 11, False)
+    y -= lh
 
     fin = data.get("finance") or {}
-    ai = data.get("ai_analysis") or {}
-    score = (ai.get("ai_score") or {}).get("score")
-    grade = (ai.get("ai_score") or {}).get("grade")
+    ai_score = data.get("ai_score") or {}
+    draw_line("Financial Summary", 13, True)
+    for k in ["annualKwh", "annualRev", "totalCost", "totalRev25", "annualDebt", "payback"]:
+        v = fin.get(k)
+        if v is None:
+            continue
+        draw_line(f"- {k}: {v}", 10, False)
 
-    rows = [
-        ["항목", "값"],
-        ["AC 용량", fin.get("acCapacity") or fin.get("capacity") or "-"],
-        ["연 발전량", fin.get("annualKwh") or "-"],
-        ["연 매출", fin.get("annualRev") or "-"],
-        ["총 사업비", fin.get("totalCost") or "-"],
-        ["25년 총매출", fin.get("totalRev25") or "-"],
-        ["PF 상환(연)", fin.get("annualDebt") or "-"],
-        ["회수기간", fin.get("payback") or "-"],
-        ["한전 연계용량", ai.get("kepco_capacity") or data.get("kepco_capacity") or "-"],
-        ["일사량(추정)", f"{ai.get('sun_hours','-')} h/day"],
-        ["구매매력도", f"{score}점 ({grade})" if score is not None else "-"],
-    ]
-    table = Table(rows, colWidths=[35*mm, 140*mm])
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#0f172a")),
-        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
-        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-        ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
-        ("VALIGN", (0,0), (-1,-1), "TOP"),
-        ("FONTSIZE", (0,0), (-1,-1), 9),
-        ("BACKGROUND", (0,1), (-1,-1), colors.whitesmoke),
-    ]))
-    table.wrapOn(c, w, h)
-    table.drawOn(c, 20*mm, y-85*mm)
-    y -= 95*mm
-
-    # reasons
-    reasons = (ai.get("ai_score") or {}).get("reasons") or []
-    t(20*mm, y, "주요 확인/리스크", 12, True); y -= 6*mm
-    c.setFont("Helvetica", 9)
-    for r in reasons[:8]:
-        c.drawString(23*mm, y, f"• {str(r)[:120]}")
-        y -= 5*mm
+    y -= lh
+    draw_line("AI Score", 13, True)
+    draw_line(f"Score: {ai_score.get('score', '-')}/100  Grade: {ai_score.get('grade','-')}", 11, True)
+    reasons = ai_score.get("reasons") or []
+    if reasons:
+        draw_line("Reasons:", 11, False)
+        for r in reasons[:12]:
+            draw_line(f"  • {r}", 9, False)
 
     c.showPage()
     c.save()
-    buf.seek(0)
+
     pdf = buf.getvalue()
     resp = make_response(pdf)
     resp.headers["Content-Type"] = "application/pdf"
-    resp.headers["Content-Disposition"] = "attachment; filename=solar_report.pdf"
+    resp.headers["Content-Disposition"] = 'attachment; filename="solar_report.pdf"'
     return resp
+
+
+if __name__ == "__main__":
+    # default: http://127.0.0.1:5000
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT") or 5000), debug=True)
