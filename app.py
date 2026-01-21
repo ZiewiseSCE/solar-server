@@ -1,4 +1,8 @@
-import os, json, secrets
+import os
+import secrets
+import json
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from io import BytesIO
@@ -25,31 +29,79 @@ app = Flask(__name__)
 # -----------------------------
 APP_DIR = Path(__file__).resolve().parent
 
-ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
+# [보안] ADMIN 키 설정
+ADMIN_API_KEY = (os.getenv("ADMIN_API_KEY") or "").strip()
 if not ADMIN_API_KEY:
-    raise RuntimeError("ADMIN_API_KEY is required")
+    generated_key = secrets.token_urlsafe(32)
+    print(f"\n[WARNING] ADMIN_API_KEY is not set! Using random key: {generated_key}\n")
+    ADMIN_API_KEY = generated_key
 
 SECRET_KEY = (os.getenv("SECRET_KEY") or "dev-secret").strip()
 app.secret_key = SECRET_KEY
 
-# CORS
-_raw_origins = (os.getenv("CORS_ORIGINS") or "https://pathfinder.scenergy.co.kr,https://www.scenergy.co.kr").strip()
+# [DB] PostgreSQL 연결 정보
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# CORS (중복 제거 및 통합)
+_raw_origins = (os.getenv("CORS_ORIGINS") or "https://pathfinder.scenergy.co.kr").strip()
 CORS_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
+# 모든 경로에 대해 CORS 허용 (Credentials 포함)
 CORS(
     app,
-    resources={r"/api/*": {"origins": CORS_ORIGINS}},
+    resources={r"/*": {"origins": CORS_ORIGINS}},
     supports_credentials=True,
-    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-Admin-Key"],
+    allow_headers=["Content-Type", "Authorization", "X-Admin-Key"]
 )
 
-# DB
-DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
+# -----------------------------
+# Database Helpers (PostgreSQL)
+# -----------------------------
+def get_db_connection():
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not set.")
+    conn = psycopg2.connect(DATABASE_URL)
+    return conn
+
+def init_db():
+    if not DATABASE_URL:
+        print("[DB] DATABASE_URL not set. Running in stateless mode.")
+        return
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS licenses (
+                token TEXT PRIMARY KEY,
+                expires_at TIMESTAMPTZ NOT NULL,
+                revoked BOOLEAN NOT NULL DEFAULT FALSE,
+                note TEXT NOT NULL DEFAULT '',
+                bound_fp TEXT NOT NULL DEFAULT '',
+                bound_at TIMESTAMPTZ NULL
+            );
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("[DB] Initialized.")
+    except Exception as e:
+        print(f"[DB] Initialization failed: {e}")
+
+with app.app_context():
+    init_db()
 
 # -----------------------------
-# Helpers
+# Auth & Helpers
 # -----------------------------
+def _serializer():
+    return URLSafeTimedSerializer(app.secret_key, salt="admin-session")
+
+def _issue_admin_token():
+    return _serializer().dumps({"role": "admin"})
+
+def _verify_admin_token(token, max_age=60*60*24*7):
+    return _serializer().loads(token, max_age=max_age)
+
 def json_ok(**kwargs):
     d = {"ok": True, "status": "OK"}
     d.update(kwargs)
@@ -60,6 +112,23 @@ def json_bad(msg: str, code: int = 400, **kwargs):
     d.update(kwargs)
     return jsonify(d), code
 
+def _require_admin():
+    # 1. Check Bearer Token
+    auth = (request.headers.get("Authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        token = auth.split(" ", 1)[1].strip()
+        try:
+            payload = _verify_admin_token(token)
+            if payload.get("role") == "admin":
+                return True
+        except Exception as e:
+            print(f"[Auth] Token verify failed: {e}")
+            pass
+
+    # 2. Check Admin Key (Direct)
+    key = (request.headers.get("X-Admin-Key") or request.args.get("admin_key") or "").strip()
+    return key == ADMIN_API_KEY
+
 def _now_utc():
     return datetime.now(timezone.utc)
 
@@ -67,313 +136,178 @@ def _iso(dt: datetime):
     return dt.astimezone(timezone.utc).isoformat()
 
 # -----------------------------
-# Admin session token (Bearer)
+# Admin Page Route
 # -----------------------------
-def _serializer():
-    return URLSafeTimedSerializer(app.secret_key, salt="admin-session")
-
-def _issue_admin_token():
-    return _serializer().dumps({"role": "admin"})
-
-def _verify_admin_token(token: str, max_age: int = 60 * 60 * 24 * 7):
-    return _serializer().loads(token, max_age=max_age)
-
-def _require_admin():
-    # 1) Authorization: Bearer <token>
-    auth = (request.headers.get("Authorization") or "").strip()
-    if auth.lower().startswith("bearer "):
-        token = auth.split(" ", 1)[1].strip()
-        try:
-            payload = _verify_admin_token(token)
-            return payload.get("role") == "admin"
-        except Exception:
-            return False
-
-    # 2) fallback (X-Admin-Key / admin_key)
-    key = (request.headers.get("X-Admin-Key") or request.args.get("admin_key") or "").strip()
-    return key == ADMIN_API_KEY
+@app.route("/admin", methods=["GET"])
+def admin_page():
+    p = APP_DIR / "admin.html"
+    if p.exists():
+        return p.read_text(encoding="utf-8", errors="ignore")
+    return "<h1>Admin file not found</h1>", 404
 
 # -----------------------------
-# Storage layer (Postgres preferred)
+# Admin Auth Endpoints
 # -----------------------------
-def _use_postgres() -> bool:
-    return bool(DATABASE_URL)
+@app.route("/api/auth/whoami", methods=["GET", "OPTIONS"])
+def whoami():
+    if request.method == "OPTIONS": return ("", 204)
+    if not _require_admin(): return json_bad("unauthorized", 401)
+    return json_ok(role="admin")
 
-def _pg_connect():
-    import psycopg2
-    import psycopg2.extras
-    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+@app.route("/api/admin/login", methods=["POST", "OPTIONS"])
+def admin_login():
+    if request.method == "OPTIONS": return ("", 204)
+    data = request.get_json(force=True, silent=True) or {}
+    admin_key = (data.get("admin_key") or "").strip()
 
-def _init_pg_schema():
-    # Create tables if not exist
-    with _pg_connect() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS licenses (
-                token TEXT PRIMARY KEY,
-                note TEXT,
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                expires_at TIMESTAMPTZ,
-                status TEXT DEFAULT 'active'
-            );
-            """)
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS bindings (
-                token TEXT REFERENCES licenses(token) ON DELETE CASCADE,
-                fingerprint TEXT NOT NULL,
-                bound_at TIMESTAMPTZ DEFAULT NOW(),
-                PRIMARY KEY (token, fingerprint)
-            );
-            """)
-        conn.commit()
+    if admin_key != ADMIN_API_KEY:
+        return json_bad("unauthorized", 401)
 
-# Fallback file path (only used if DATABASE_URL missing)
-def _pick_license_db_path():
-    env = (os.getenv("LICENSE_DB_FILE") or os.getenv("LICENSE_DB_PATH") or "").strip()
-    if env:
-        return Path(env)
-    # Try /data if available (may not persist on free)
-    p_data = Path("/data/licenses_db.json")
+    token = _issue_admin_token()
+    return json_ok(token=token, role="admin")
+
+# -----------------------------
+# License Management (DB Connected)
+# -----------------------------
+@app.route("/api/admin/licenses", methods=["GET", "OPTIONS"])
+def admin_list_licenses():
+    if request.method == "OPTIONS": return ("", 204)
+    if not _require_admin(): return json_bad("unauthorized", 401)
+
     try:
-        p_data.parent.mkdir(parents=True, exist_ok=True)
-        with open(p_data, "a", encoding="utf-8"):
-            pass
-        return p_data
-    except Exception:
-        pass
-    return APP_DIR / "licenses_db.json"
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM licenses ORDER BY expires_at DESC")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
 
-LICENSE_DB_FILE = _pick_license_db_path()
+        results = []
+        for row in rows:
+            item = dict(row)
+            if item.get('expires_at'): item['expires_at'] = _iso(item['expires_at'])
+            if item.get('bound_at'): item['bound_at'] = _iso(item['bound_at'])
+            item['fingerprints'] = [item['bound_fp']] if item['bound_fp'] else []
+            results.append(item)
 
-def _load_json(path: Path, default):
-    try:
-        if not path.exists():
-            return default
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return default
+        return json_ok(items=results)
+    except Exception as e:
+        return json_bad("DB Error", 500, detail=str(e))
 
-def _save_json(path: Path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+@app.route("/api/admin/license/create", methods=["POST", "OPTIONS"])
+def admin_create_license():
+    if request.method == "OPTIONS": return ("", 204)
+    if not _require_admin(): return json_bad("unauthorized", 401)
 
-def _file_load_licenses():
-    return _load_json(LICENSE_DB_FILE, [])
-
-def _file_save_licenses(items):
-    _save_json(LICENSE_DB_FILE, items)
-
-def _file_find_license(items, token):
-    for it in items:
-        if it.get("token") == token:
-            return it
-    return None
-
-# Unified operations
-def list_licenses():
-    if _use_postgres():
-        _init_pg_schema()
-        with _pg_connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT
-                        l.token,
-                        l.expires_at,
-                        l.created_at,
-                        l.note,
-                        l.status,
-                        COALESCE(
-                            json_agg(b.fingerprint ORDER BY b.bound_at) FILTER (WHERE b.fingerprint IS NOT NULL),
-                            '[]'::json
-                        ) AS fingerprints
-                    FROM licenses l
-                    LEFT JOIN bindings b ON b.token = l.token
-                    GROUP BY l.token, l.expires_at, l.created_at, l.note, l.status
-                    ORDER BY l.created_at DESC NULLS LAST;
-                """)
-                rows = cur.fetchall()
-        # ensure plain python types
-        for r in rows:
-            # psycopg2 may return list already; keep
-            pass
-        return rows
-
-    return _file_load_licenses()
-
-def create_license(note: str, days: int):
+    data = request.get_json(force=True, silent=True) or {}
+    note = (data.get("note") or "").strip()
+    days = int(data.get("days") or 365)
+    
     token = "SCE-" + secrets.token_hex(5).upper()
     now = _now_utc()
     expires_at = now + timedelta(days=days)
 
-    if _use_postgres():
-        _init_pg_schema()
-        with _pg_connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO licenses(token, note, created_at, expires_at, status)
-                    VALUES (%s, %s, NOW(), %s, 'active')
-                """, (token, note, expires_at))
-            conn.commit()
-        return {
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO licenses (token, expires_at, note, revoked, bound_fp)
+            VALUES (%s, %s, %s, FALSE, '')
+            RETURNING token
+        """, (token, expires_at, note))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        item = {
             "token": token,
             "created_at": _iso(now),
             "expires_at": _iso(expires_at),
             "note": note,
-            "fingerprints": [],
-            "status": "active",
+            "fingerprints": []
         }
-
-    item = {
-        "token": token,
-        "created_at": _iso(now),
-        "expires_at": _iso(expires_at),
-        "note": note,
-        "fingerprints": [],
-    }
-    items = _file_load_licenses()
-    items.append(item)
-    _file_save_licenses(items)
-    return item
-
-def reset_license(token: str):
-    if _use_postgres():
-        _init_pg_schema()
-        with _pg_connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM bindings WHERE token=%s", (token,))
-            conn.commit()
-        return True
-
-    items = _file_load_licenses()
-    it = _file_find_license(items, token)
-    if not it:
-        return False
-    it["fingerprints"] = []
-    _file_save_licenses(items)
-    return True
-
-def extend_license(token: str, days: int):
-    if _use_postgres():
-        _init_pg_schema()
-        with _pg_connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    UPDATE licenses
-                    SET expires_at = COALESCE(expires_at, NOW()) + (%s || ' days')::interval
-                    WHERE token=%s
-                    RETURNING token, note, created_at, expires_at, status
-                """, (days, token))
-                row = cur.fetchone()
-            conn.commit()
-        return row
-
-    items = _file_load_licenses()
-    it = _file_find_license(items, token)
-    if not it:
-        return None
-    try:
-        old = datetime.fromisoformat(it.get("expires_at"))
-    except Exception:
-        old = _now_utc()
-    it["expires_at"] = _iso(old + timedelta(days=days))
-    _file_save_licenses(items)
-    return it
-
-def delete_license(token: str):
-    if _use_postgres():
-        _init_pg_schema()
-        with _pg_connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM licenses WHERE token=%s", (token,))
-            conn.commit()
-        return True
-
-    items = [x for x in _file_load_licenses() if x.get("token") != token]
-    _file_save_licenses(items)
-    return True
-
-# -----------------------------
-# Admin/auth endpoints
-# -----------------------------
-@app.route("/api/admin/login", methods=["POST", "OPTIONS"])
-def admin_login():
-    if request.method == "OPTIONS":
-        return ("", 204)
-    data = request.get_json(force=True, silent=True) or {}
-    admin_key = (data.get("admin_key") or "").strip()
-    if admin_key != ADMIN_API_KEY:
-        return json_bad("unauthorized", 401)
-    token = _issue_admin_token()
-    return json_ok(token=token, role="admin")
-
-@app.route("/api/auth/whoami", methods=["GET", "OPTIONS"])
-def whoami():
-    if request.method == "OPTIONS":
-        return ("", 204)
-    if not _require_admin():
-        return json_bad("unauthorized", 401)
-    return json_ok(role="admin")
-
-@app.route("/api/admin/licenses", methods=["GET", "OPTIONS"])
-def admin_list_licenses():
-    if request.method == "OPTIONS":
-        return ("", 204)
-    if not _require_admin():
-        return json_bad("unauthorized", 401)
-    return json_ok(items=list_licenses())
-
-@app.route("/api/admin/license/create", methods=["POST", "OPTIONS"])
-def admin_create_license():
-    if request.method == "OPTIONS":
-        return ("", 204)
-    if not _require_admin():
-        return json_bad("unauthorized", 401)
-    data = request.get_json(force=True, silent=True) or {}
-    note = (data.get("note") or "").strip()
-    days = int(data.get("days") or 365)
-    item = create_license(note, days)
-    return json_ok(item=item)
+        return json_ok(item=item)
+    except Exception as e:
+        return json_bad("DB Insert Failed", 500, detail=str(e))
 
 @app.route("/api/admin/license/reset", methods=["POST", "OPTIONS"])
 def admin_license_reset():
-    if request.method == "OPTIONS":
-        return ("", 204)
-    if not _require_admin():
-        return json_bad("unauthorized", 401)
+    if request.method == "OPTIONS": return ("", 204)
+    if not _require_admin(): return json_bad("unauthorized", 401)
+    
     data = request.get_json(force=True, silent=True) or {}
     token = (data.get("token") or "").strip()
-    ok = reset_license(token)
-    if not ok:
-        return json_bad("not found", 404)
-    return json_ok()
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("UPDATE licenses SET bound_fp = '', bound_at = NULL WHERE token = %s RETURNING token", (token,))
+        updated = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        if not updated:
+            return json_bad("not found", 404)
+        return json_ok(removed=1)
+    except Exception as e:
+        return json_bad("DB Error", 500, detail=str(e))
 
 @app.route("/api/admin/license/extend", methods=["POST", "OPTIONS"])
 def admin_license_extend():
-    if request.method == "OPTIONS":
-        return ("", 204)
-    if not _require_admin():
-        return json_bad("unauthorized", 401)
+    if request.method == "OPTIONS": return ("", 204)
+    if not _require_admin(): return json_bad("unauthorized", 401)
+    
     data = request.get_json(force=True, silent=True) or {}
     token = (data.get("token") or "").strip()
     days = int(data.get("days") or 30)
-    item = extend_license(token, days)
-    if not item:
-        return json_bad("not found", 404)
-    return json_ok(item=item)
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT expires_at FROM licenses WHERE token = %s", (token,))
+        row = cur.fetchone()
+        if not row:
+            return json_bad("not found", 404)
+        
+        current_expiry = row[0]
+        if current_expiry < _now_utc():
+            new_expiry = _now_utc() + timedelta(days=days)
+        else:
+            new_expiry = current_expiry + timedelta(days=days)
+            
+        cur.execute("UPDATE licenses SET expires_at = %s WHERE token = %s RETURNING expires_at", (new_expiry, token))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return json_ok(expires_at=_iso(new_expiry))
+    except Exception as e:
+        return json_bad("DB Error", 500, detail=str(e))
 
 @app.route("/api/admin/license/delete", methods=["POST", "OPTIONS"])
 def admin_license_delete():
-    if request.method == "OPTIONS":
-        return ("", 204)
-    if not _require_admin():
-        return json_bad("unauthorized", 401)
+    if request.method == "OPTIONS": return ("", 204)
+    if not _require_admin(): return json_bad("unauthorized", 401)
+    
     data = request.get_json(force=True, silent=True) or {}
     token = (data.get("token") or "").strip()
-    delete_license(token)
-    return json_ok()
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM licenses WHERE token = %s RETURNING token", (token,))
+        deleted = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+        if not deleted:
+            return json_bad("not found", 404)
+        return json_ok()
+    except Exception as e:
+        return json_bad("DB Error", 500, detail=str(e))
 
 # -----------------------------
-# AI Analysis (mocked)
+# AI Analysis & Report (유지)
 # -----------------------------
 def _build_ai_result(lat: float, lng: float, address: str, mode: str = "", area_m2: float = 0.0):
     checks = [
@@ -414,29 +348,28 @@ def _build_ai_result(lat: float, lng: float, address: str, mode: str = "", area_
 
 @app.route("/api/analyze/comprehensive", methods=["POST","OPTIONS"])
 def analyze_comprehensive():
-    if request.method == "OPTIONS":
-        return ("", 204)
+    if request.method == "OPTIONS": return ("", 204)
     data = request.get_json(force=True, silent=True) or {}
-    lat = float(data.get("lat") or 0)
-    lng = float(data.get("lng") or 0)
-    address = (data.get("address") or "").strip()
-    mode = (data.get("mode") or "").strip()
-    area_m2 = float(data.get("area_m2") or 0)
-    result = _build_ai_result(lat, lng, address, mode, area_m2)
+    result = _build_ai_result(
+        float(data.get("lat") or 0),
+        float(data.get("lng") or 0),
+        (data.get("address") or "").strip(),
+        (data.get("mode") or "").strip(),
+        float(data.get("area_m2") or 0)
+    )
     return json_ok(**result)
 
 @app.route("/api/ai/analyze", methods=["POST","OPTIONS"])
 def ai_analyze():
-    if request.method == "OPTIONS":
-        return ("", 204)
+    if request.method == "OPTIONS": return ("", 204)
     data = request.get_json(force=True, silent=True) or {}
-    lat = float(data.get("lat") or 0)
-    lng = float(data.get("lng") or 0)
-    address = (data.get("address") or "").strip()
-    mode = (data.get("mode") or "").strip()
-    area_m2 = float(data.get("area_m2") or 0)
-    result = _build_ai_result(lat, lng, address, mode, area_m2)
-
+    result = _build_ai_result(
+        float(data.get("lat") or 0),
+        float(data.get("lng") or 0),
+        (data.get("address") or "").strip(),
+        (data.get("mode") or "").strip(),
+        float(data.get("area_m2") or 0)
+    )
     checklist = []
     for c in result["checks"]:
         checklist.append({
@@ -455,25 +388,20 @@ def ai_analyze():
     })
 
 # -----------------------------
-# Finance (PF)
+# Finance & Report
 # -----------------------------
 @app.route("/api/finance/pf", methods=["POST","OPTIONS"])
 def finance_pf():
-    if request.method == "OPTIONS":
-        return ("", 204)
+    if request.method == "OPTIONS": return ("", 204)
     data = request.get_json(force=True, silent=True) or {}
     try:
         principal = float(data.get("principal") or 0)
         rate = float(data.get("rate") or 0) / 100.0
         years = int(data.get("years") or 0)
-        if principal <= 0 or rate < 0 or years <= 0:
-            return json_bad("invalid inputs", 400)
+        if principal <= 0 or rate < 0 or years <= 0: return json_bad("invalid inputs", 400)
         n = years * 12
         r = rate / 12.0
-        if r == 0:
-            monthly = principal / n
-        else:
-            monthly = principal * (r * (1+r)**n) / ((1+r)**n - 1)
+        monthly = principal / n if r == 0 else principal * (r * (1+r)**n) / ((1+r)**n - 1)
         total_payment = monthly * n
         total_interest = total_payment - principal
         return json_ok(
@@ -485,33 +413,18 @@ def finance_pf():
     except Exception as e:
         return json_bad("calc failed", 500, detail=str(e))
 
-# -----------------------------
-# Report HTML/PDF
-# -----------------------------
 def _load_report_template() -> str:
     p = APP_DIR / "report.html"
-    if p.exists():
-        return p.read_text(encoding="utf-8", errors="ignore")
-    return """<!doctype html><html lang='ko'><meta charset='utf-8'>
-    <body style='font-family:Arial'>
-    <h1>태양광 상세 리포트</h1>
-    <pre id='d'></pre>
-    <script>
-      const data = window.data || {};
-      document.getElementById('d').innerText = JSON.stringify(data, null, 2);
-    </script>
-    </body></html>"""
+    if p.exists(): return p.read_text(encoding="utf-8", errors="ignore")
+    return "<h1>Report Template Missing</h1>"
 
 def _parse_report_form(form) -> dict:
     def _json_field(*names):
         for name in names:
             v = form.get(name)
-            if not v:
-                continue
-            try:
-                return json.loads(v)
-            except Exception:
-                continue
+            if not v: continue
+            try: return json.loads(v)
+            except Exception: continue
         return {}
 
     return {
@@ -533,7 +446,6 @@ def report_html():
         resp = make_response(html)
         resp.headers["Content-Type"] = "text/html; charset=utf-8"
         return resp
-
     data = _parse_report_form(request.form)
     tpl = _load_report_template()
     html = render_template_string(tpl, data=data)
@@ -546,8 +458,7 @@ def report_alias():
     return redirect("/report")
 
 def _render_pdf(data: dict) -> bytes:
-    if A4 is None:
-        return b""
+    if A4 is None: return b""
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     w, h = A4
@@ -558,7 +469,7 @@ def _render_pdf(data: dict) -> bytes:
     c.setFont("Helvetica-Bold", 16)
     c.drawString(x0, y, "Solar PV Analysis Report")
     y -= lh*2
-
+    
     c.setFont("Helvetica", 10)
     c.drawString(x0, y, f"Address: {data.get('address','')}")
     y -= lh
@@ -574,21 +485,7 @@ def _render_pdf(data: dict) -> bytes:
         c.drawString(x0+10, y, f"{k}: {fin.get(k,'-')}")
         y -= lh
     y -= lh
-
-    ai = data.get("ai_analysis") or {}
-    score = (data.get("ai_score") or {}).get("score")
-    if score is None and isinstance(ai, dict):
-        score = (ai.get("ai_score") or {}).get("score")
-
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(x0, y, "[AI Analysis]")
-    y -= lh
-    c.setFont("Helvetica", 10)
-    c.drawString(x0+10, y, f"AI Score: {score if score is not None else '-'} / 100")
-    y -= lh
-    c.drawString(x0+10, y, f"KEPCO: {data.get('kepco_capacity','') or '확인 필요'}")
-    y -= lh
-
+    
     c.showPage()
     c.save()
     pdf = buf.getvalue()
@@ -606,25 +503,20 @@ def report_pdf():
 
 @app.route("/api/report/pdf", methods=["POST","OPTIONS"])
 def api_report_pdf():
-    if request.method == "OPTIONS":
-        return ("", 204)
+    if request.method == "OPTIONS": return ("", 204)
     data = request.get_json(force=True, silent=True) or {}
     pdf = _render_pdf(data)
     return send_file(BytesIO(pdf), mimetype="application/pdf", as_attachment=True, download_name="solar_report.pdf")
 
-# -----------------------------
-# Health
-# -----------------------------
 @app.route("/api/health", methods=["GET"])
 def health():
-    return json_ok(
-        ts=_iso(_now_utc()),
-        storage=("postgres" if _use_postgres() else "file"),
-        database_url_set=bool(DATABASE_URL),
-        license_db=str(LICENSE_DB_FILE),
-        cors_origins=CORS_ORIGINS,
-    )
+    db_status = "ok"
+    try:
+        conn = get_db_connection()
+        conn.close()
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+    return json_ok(ts=_iso(_now_utc()), db=db_status)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT") or 5000))
-
