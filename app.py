@@ -14,39 +14,34 @@ try:
 except Exception:
     A4 = None
 
+# -----------------------------
+# App init (⚠️ app 먼저 생성)
+# -----------------------------
 app = Flask(__name__)
 
-# CORS
-CORS(app, supports_credentials=True)
-
+# -----------------------------
+# Config (env)
+# -----------------------------
 APP_DIR = Path(__file__).resolve().parent
 
-# -----------------------------
-# Config
-# -----------------------------
 ADMIN_API_KEY = (os.getenv("ADMIN_API_KEY") or "admin1234").strip()
+SECRET_KEY = (os.getenv("SECRET_KEY") or "dev-secret").strip()
+app.secret_key = SECRET_KEY
 
-def _pick_license_db_path():
-    # Persist-friendly path order:
-    # 1) LICENSE_DB_FILE env
-    # 2) /data/licenses_db.json (if writable)
-    # 3) ./licenses_db.json
-    # 4) /tmp/licenses_db.json
-    env = (os.getenv("LICENSE_DB_FILE") or "").strip()
-    if env:
-        return Path(env)
-    p_data = Path("/data/licenses_db.json")
-    try:
-        p_data.parent.mkdir(parents=True, exist_ok=True)
-        # test writable
-        with open(p_data, "a", encoding="utf-8"):
-            pass
-        return p_data
-    except Exception:
-        pass
-    return APP_DIR / "licenses_db.json"
+# CORS_ORIGINS 예: "https://pathfinder.scenergy.co.kr,https://pathfinder2.scenergy.co.kr"
+_raw_origins = (os.getenv("CORS_ORIGINS") or "https://pathfinder.scenergy.co.kr").strip()
+CORS_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
-LICENSE_DB_FILE = _pick_license_db_path()
+# -----------------------------
+# CORS (⚠️ app 만든 다음에 호출)
+# -----------------------------
+CORS(
+    app,
+    resources={r"/api/*": {"origins": CORS_ORIGINS}},
+    supports_credentials=True,
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Admin-Key"],
+)
 
 # -----------------------------
 # Helpers
@@ -62,9 +57,14 @@ def json_bad(msg: str, code: int = 400, **kwargs):
     return jsonify(d), code
 
 def _require_admin():
-    # allow header or query
     key = (request.headers.get("X-Admin-Key") or request.args.get("admin_key") or "").strip()
     return key == ADMIN_API_KEY
+
+def _now_utc():
+    return datetime.now(timezone.utc)
+
+def _iso(dt: datetime):
+    return dt.astimezone(timezone.utc).isoformat()
 
 def _load_json(path: Path, default):
     try:
@@ -78,11 +78,39 @@ def _save_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-def _now_utc():
-    return datetime.now(timezone.utc)
+# -----------------------------
+# ✅ whoami (admin.html이 여기 때리니까 반드시 필요)
+# -----------------------------
+@app.route("/api/auth/whoami", methods=["GET", "OPTIONS"])
+def whoami():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    if not _require_admin():
+        return json_bad("unauthorized", 401)
+    return json_ok(role="admin")
 
-def _iso(dt: datetime):
-    return dt.astimezone(timezone.utc).isoformat()
+# -----------------------------
+# License DB path (파일 기반: 볼륨 없으면 유지 안 됨)
+# -----------------------------
+def _pick_license_db_path():
+    env = (os.getenv("LICENSE_DB_FILE") or "").strip()
+    if env:
+        return Path(env)
+
+    # (유료/볼륨 있을 때) /data
+    p_data = Path("/data/licenses_db.json")
+    try:
+        p_data.parent.mkdir(parents=True, exist_ok=True)
+        with open(p_data, "a", encoding="utf-8"):
+            pass
+        return p_data
+    except Exception:
+        pass
+
+    # 기본: 프로젝트 디렉토리
+    return APP_DIR / "licenses_db.json"
+
+LICENSE_DB_FILE = _pick_license_db_path()
 
 # -----------------------------
 # License DB (admin)
@@ -183,7 +211,6 @@ def admin_license_delete():
 # AI Analysis
 # -----------------------------
 def _build_ai_result(lat: float, lng: float, address: str, mode: str = "", area_m2: float = 0.0):
-    # Mocked checklist (data source 확정 시 교체)
     checks = [
         {"title":"1. 도시/자치 조례 (이격거리)", "result":"확인 필요 (지자체 조례 참조)", "link":"https://www.elis.go.kr/"},
         {"title":"2. 용도지역 (토지이음)", "result":"확인 필요", "link":"https://www.eum.go.kr/web/am/amMain.jsp"},
@@ -195,10 +222,8 @@ def _build_ai_result(lat: float, lng: float, address: str, mode: str = "", area_
         {"title":"8. 한전 선로 용량", "result":"확인 필요 (한전ON)", "link":"https://online.kepco.co.kr/"},
     ]
 
-    # conservative scoring
     score = 70
     reasons = []
-    # penalize uncertainties
     uncertain = sum(1 for c in checks if "확인 필요" in (c.get("result") or ""))
     score -= min(35, uncertain * 4)
     if area_m2 and area_m2 < 300:
@@ -235,7 +260,6 @@ def analyze_comprehensive():
     result = _build_ai_result(lat, lng, address, mode, area_m2)
     return json_ok(**result)
 
-# Spec endpoint alias: /api/ai/analyze
 @app.route("/api/ai/analyze", methods=["POST","OPTIONS"])
 def ai_analyze():
     if request.method == "OPTIONS":
@@ -248,7 +272,6 @@ def ai_analyze():
     area_m2 = float(data.get("area_m2") or 0)
     result = _build_ai_result(lat, lng, address, mode, area_m2)
 
-    # spec-friendly shape + backward compatible fields
     checklist = []
     for c in result["checks"]:
         checklist.append({
@@ -263,7 +286,6 @@ def ai_analyze():
         "checklist": checklist,
         "attractiveness_score": result["ai_score"]["score"],
         "reasons": result["ai_score"].get("reasons", []),
-        # compatibility
         **result
     })
 
@@ -305,7 +327,6 @@ def _load_report_template() -> str:
     p = APP_DIR / "report.html"
     if p.exists():
         return p.read_text(encoding="utf-8", errors="ignore")
-    # embedded fallback (never 404)
     return """<!doctype html><html lang='ko'><meta charset='utf-8'>
     <body style='font-family:Arial'>
     <h1>태양광 상세 리포트</h1>
@@ -342,7 +363,6 @@ def _parse_report_form(form) -> dict:
 @app.route("/report", methods=["GET","POST"])
 def report_html():
     if request.method == "GET":
-        # allow direct open
         tpl = _load_report_template()
         html = render_template_string(tpl, data={})
         resp = make_response(html)
@@ -362,7 +382,6 @@ def report_alias():
 
 def _render_pdf(data: dict) -> bytes:
     if A4 is None:
-        # ReportLab missing
         return b""
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
@@ -395,6 +414,7 @@ def _render_pdf(data: dict) -> bytes:
     score = (data.get("ai_score") or {}).get("score")
     if score is None and isinstance(ai, dict):
         score = (ai.get("ai_score") or {}).get("score")
+
     c.setFont("Helvetica-Bold", 12)
     c.drawString(x0, y, "[AI Analysis]")
     y -= lh
@@ -419,7 +439,6 @@ def report_pdf():
     resp.headers["Content-Disposition"] = 'attachment; filename="solar_report.pdf"'
     return resp
 
-# Spec alias endpoint: /api/report/pdf (JSON body)
 @app.route("/api/report/pdf", methods=["POST","OPTIONS"])
 def api_report_pdf():
     if request.method == "OPTIONS":
@@ -428,9 +447,6 @@ def api_report_pdf():
     pdf = _render_pdf(data)
     return send_file(BytesIO(pdf), mimetype="application/pdf", as_attachment=True, download_name="solar_report.pdf")
 
-# -----------------------------
-# Health
-# -----------------------------
 @app.route("/api/health", methods=["GET"])
 def health():
     return json_ok(ts=_iso(_now_utc()), license_db=str(LICENSE_DB_FILE))
