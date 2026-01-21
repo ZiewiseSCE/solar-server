@@ -31,8 +31,50 @@ ADMIN_API_KEY = (os.getenv("ADMIN_API_KEY") or "admin1234").strip()
 PUBLIC_VWORLD_KEY = (os.getenv("VWORLD_KEY") or "").strip()
 PUBLIC_KEPCO_KEY = (os.getenv("KEPCO_KEY") or "").strip()
 
-LICENSE_DB_FILE = (os.getenv("LICENSE_DB_FILE") or "licenses_db.json").strip()
-LICENSE_DB_PATH = (APP_DIR / LICENSE_DB_FILE).resolve()
+# License DB path
+def _resolve_license_db_path() -> Path:
+    """Resolve a writable license DB path.
+    Priority:
+      1) env LICENSE_DB_FILE (absolute or relative to APP_DIR)
+      2) /data/licenses_db.json (if /data exists & writable)
+      3) APP_DIR/licenses_db.json
+      4) /tmp/licenses_db.json
+    If /data path is selected and APP_DIR db exists but /data db doesn't, migrate.
+    """
+    env_path = (os.getenv("LICENSE_DB_FILE") or "").strip()
+    if env_path:
+        p = Path(env_path)
+        if not p.is_absolute():
+            p = (APP_DIR / p).resolve()
+        return p
+
+    candidates = [Path("/data/licenses_db.json"), (APP_DIR / "licenses_db.json").resolve(), Path("/tmp/licenses_db.json")]
+    for p in candidates:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            # test write permission
+            if p.exists():
+                p.open("a", encoding="utf-8").close()
+                return p
+            else:
+                p.write_text("", encoding="utf-8")
+                return p
+        except Exception:
+            continue
+    # last resort (shouldn't happen)
+    return (APP_DIR / "licenses_db.json").resolve()
+
+
+LICENSE_DB_PATH = _resolve_license_db_path()
+
+# migrate: if we are using /data and it is empty but project db exists, copy it once
+try:
+    project_db = (APP_DIR / "licenses_db.json").resolve()
+    if str(LICENSE_DB_PATH).startswith("/data") and (not LICENSE_DB_PATH.exists() or LICENSE_DB_PATH.stat().st_size == 0) and project_db.exists() and project_db.stat().st_size > 0:
+        LICENSE_DB_PATH.write_text(project_db.read_text(encoding="utf-8"), encoding="utf-8")
+except Exception:
+    pass
+
 
 _db_lock = threading.Lock()
 
@@ -106,8 +148,11 @@ def json_bad(msg: str, code: int = 400, **kwargs):
 # JSON DB (licenses_db.json)
 # ------------------------------------------------------------
 def _ensure_db_file():
-    if LICENSE_DB_PATH.exists():
-        return
+    try:
+        if LICENSE_DB_PATH.exists() and LICENSE_DB_PATH.stat().st_size > 10:
+            return
+    except Exception:
+        pass
     LICENSE_DB_PATH.write_text(json.dumps({"licenses": {}, "bindings": {}}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
