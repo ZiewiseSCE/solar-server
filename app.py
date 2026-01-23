@@ -37,6 +37,7 @@ def _preflight_ok():
     if request.method == "OPTIONS" and request.path.startswith("/api/"):
         return make_response("", 200)
 
+
 # ------------------------------------------------------------
 # ENV
 # ------------------------------------------------------------
@@ -51,11 +52,16 @@ LAW_API_ID = (os.getenv("LAW_API_ID") or "").strip()
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL not set")
 
+
+# ------------------------------------------------------------
+# Time / DB
+# ------------------------------------------------------------
 def now_utc():
     return datetime.now(timezone.utc)
 
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
+
 
 # ------------------------------------------------------------
 # JSON helpers
@@ -69,6 +75,7 @@ def json_bad(msg, code=400, **kwargs):
     d = {"ok": False, "msg": msg}
     d.update(kwargs)
     return jsonify(d), code
+
 
 # ------------------------------------------------------------
 # base64url + HMAC admin session
@@ -96,9 +103,16 @@ def verify_admin_session(token: str) -> bool:
         p_b64, s_b64 = token.split(".", 1)
         payload = _b64urldecode(p_b64)
         sig = _b64urldecode(s_b64)
-        expected = hmac.new(ADMIN_API_KEY.encode("utf-8"), payload, hashlib.sha256).digest()
+
+        expected = hmac.new(
+            ADMIN_API_KEY.encode("utf-8"),
+            payload,
+            hashlib.sha256
+        ).digest()
+
         if not hmac.compare_digest(sig, expected):
             return False
+
         ts_s, _nonce = payload.decode("utf-8").split(".", 1)
         ts = int(ts_s)
         return (now_utc().timestamp() - ts) <= (7 * 24 * 3600)
@@ -108,17 +122,24 @@ def verify_admin_session(token: str) -> bool:
 def require_admin() -> bool:
     auth = (request.headers.get("Authorization") or "").strip()
     if auth.lower().startswith("bearer "):
-        return verify_admin_session(auth.split(" ", 1)[1].strip())
+        token = auth.split(" ", 1)[1].strip()
+        return verify_admin_session(token)
     return False
 
+
 # ------------------------------------------------------------
-# DB init + queries
+# DB: init + CRUD (public schema forced)
 # ------------------------------------------------------------
 def init_db():
+    # public 스키마에 고정 (schema 혼선 제거)
     with get_conn() as conn:
         with conn.cursor() as cur:
+            cur.execute("CREATE SCHEMA IF NOT EXISTS public;")
+            cur.execute("SET search_path TO public;")
+
+            # 테이블 생성
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS licenses (
+                CREATE TABLE IF NOT EXISTS public.licenses (
                     token TEXT PRIMARY KEY,
                     note TEXT,
                     created_at TIMESTAMPTZ NOT NULL,
@@ -128,77 +149,122 @@ def init_db():
                     registered BOOLEAN NOT NULL DEFAULT FALSE
                 )
             """)
+
+            # 혹시 예전 잘못된 스키마였던 경우를 위해 컬럼 보정(안전)
+            cur.execute("ALTER TABLE public.licenses ADD COLUMN IF NOT EXISTS note TEXT")
+            cur.execute("ALTER TABLE public.licenses ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ")
+            cur.execute("ALTER TABLE public.licenses ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ")
+            cur.execute("ALTER TABLE public.licenses ADD COLUMN IF NOT EXISTS bound_at TIMESTAMPTZ")
+            cur.execute("ALTER TABLE public.licenses ADD COLUMN IF NOT EXISTS bound_fp TEXT")
+            cur.execute("ALTER TABLE public.licenses ADD COLUMN IF NOT EXISTS registered BOOLEAN DEFAULT FALSE")
+
+            # NULL 값 있으면 채우기(기존 row가 있었다면)
+            cur.execute("UPDATE public.licenses SET created_at = COALESCE(created_at, NOW()) WHERE created_at IS NULL")
+            cur.execute("UPDATE public.licenses SET expires_at = COALESCE(expires_at, NOW() + INTERVAL '30 days') WHERE expires_at IS NULL")
+            cur.execute("UPDATE public.licenses SET registered = COALESCE(registered, FALSE) WHERE registered IS NULL")
+
+            # NOT NULL 강제
+            cur.execute("ALTER TABLE public.licenses ALTER COLUMN created_at SET NOT NULL")
+            cur.execute("ALTER TABLE public.licenses ALTER COLUMN expires_at SET NOT NULL")
+
             conn.commit()
 
 def db_diag():
-    # “DB는 붙어야 한다” 요구를 확인할 수 있게 실제 접속 DB를 보여줌
     with get_conn() as conn:
         with conn.cursor() as cur:
+            cur.execute("SET search_path TO public;")
             cur.execute("SELECT current_database()")
             dbname = cur.fetchone()[0]
             cur.execute("SELECT inet_server_addr()::text, inet_server_port()")
             host, port = cur.fetchone()
+
             cur.execute("SELECT to_regclass('public.licenses') IS NOT NULL")
             table_exists = bool(cur.fetchone()[0])
-            count = None
+            cnt = None
             if table_exists:
-                cur.execute("SELECT COUNT(*) FROM licenses")
-                count = int(cur.fetchone()[0])
+                cur.execute("SELECT COUNT(*) FROM public.licenses")
+                cnt = int(cur.fetchone()[0])
+
             return {
                 "db_ok": True,
                 "current_database": dbname,
                 "server_addr": host,
                 "server_port": port,
                 "licenses_table_exists": table_exists,
-                "licenses_count": count,
+                "licenses_count": cnt,
             }
 
 def get_all_licenses():
     with get_conn() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT * FROM licenses ORDER BY created_at DESC")
+            cur.execute("SET search_path TO public;")
+            cur.execute("SELECT * FROM public.licenses ORDER BY created_at DESC")
             return cur.fetchall()
 
-def insert_license(token, note, created_at, expires_at):
+def insert_license(token: str, note: str, created_at, expires_at):
     with get_conn() as conn:
         with conn.cursor() as cur:
+            cur.execute("SET search_path TO public;")
             cur.execute("""
-                INSERT INTO licenses (token, note, created_at, expires_at, registered)
+                INSERT INTO public.licenses (token, note, created_at, expires_at, registered)
                 VALUES (%s, %s, %s, %s, FALSE)
             """, (token, note, created_at, expires_at))
             conn.commit()
 
-def delete_license(token):
+def delete_license(token: str) -> int:
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM licenses WHERE token=%s", (token,))
+            cur.execute("SET search_path TO public;")
+            cur.execute("DELETE FROM public.licenses WHERE token=%s", (token,))
             conn.commit()
             return cur.rowcount
 
-def reset_license(token):
+def reset_license(token: str) -> int:
     with get_conn() as conn:
         with conn.cursor() as cur:
+            cur.execute("SET search_path TO public;")
             cur.execute("""
-                UPDATE licenses
+                UPDATE public.licenses
                 SET bound_fp=NULL, bound_at=NULL, registered=FALSE
                 WHERE token=%s
             """, (token,))
             conn.commit()
             return cur.rowcount
 
-def extend_license(token, new_expiry):
+def extend_license(token: str, new_expiry) -> int:
     with get_conn() as conn:
         with conn.cursor() as cur:
+            cur.execute("SET search_path TO public;")
             cur.execute("""
-                UPDATE licenses
+                UPDATE public.licenses
                 SET expires_at=%s
                 WHERE token=%s
             """, (new_expiry, token))
             conn.commit()
             return cur.rowcount
 
+def find_license(token: str):
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SET search_path TO public;")
+            cur.execute("SELECT * FROM public.licenses WHERE token=%s", (token,))
+            return cur.fetchone()
+
+def bind_license(token: str, fingerprint: str):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SET search_path TO public;")
+            cur.execute("""
+                UPDATE public.licenses
+                SET bound_fp=%s, bound_at=%s, registered=TRUE
+                WHERE token=%s
+            """, (fingerprint, now_utc(), token))
+            conn.commit()
+            return cur.rowcount
+
+
 # ------------------------------------------------------------
-# Routes required by admin.html
+# Routes
 # ------------------------------------------------------------
 @app.route("/api/auth/whoami", methods=["GET"])
 def whoami():
@@ -213,109 +279,115 @@ def whoami():
 def admin_login():
     if not ADMIN_API_KEY:
         return json_bad("admin disabled (ADMIN_API_KEY not set)", 503)
+
     data = request.get_json(silent=True) or {}
     k = (data.get("admin_key") or "").strip()
     if k != ADMIN_API_KEY:
         return json_bad("invalid credential", 401)
+
     return json_ok(session_token=sign_admin_session())
 
 @app.route("/api/admin/licenses", methods=["GET"])
 def admin_licenses():
     if not require_admin():
         return json_bad("unauthorized", 401)
-    try:
-        diag = db_diag()
-        if not diag["licenses_table_exists"]:
-            return json_bad("licenses table missing", 500, diag=diag)
-        return json_ok(items=get_all_licenses(), diag=diag)
-    except Exception as e:
-        err = repr(e)
-        print("[ERROR] /api/admin/licenses:", err)
-        return json_bad("internal error", 500, error=err)
+    return json_ok(items=get_all_licenses(), diag=db_diag())
 
 @app.route("/api/admin/license/create", methods=["POST"])
 def admin_license_create():
     if not require_admin():
         return json_bad("unauthorized", 401)
-    try:
-        data = request.get_json(silent=True) or {}
-        days = int(data.get("days") or 30)
-        note = (data.get("note") or "").strip()
 
-        token = "LIC-" + secrets.token_urlsafe(18)
-        created = now_utc()
-        expires = created + timedelta(days=days)
+    data = request.get_json(silent=True) or {}
+    days = int(data.get("days") or 30)
+    note = (data.get("note") or "").strip()
 
-        insert_license(token, note, created, expires)
-        return json_ok(token=token, expires_at=expires.isoformat())
-    except Exception as e:
-        err = repr(e)
-        print("[ERROR] /api/admin/license/create:", err)
-        return json_bad("internal error", 500, error=err)
+    token = "LIC-" + secrets.token_urlsafe(18)
+    created = now_utc()
+    expires = created + timedelta(days=days)
+
+    insert_license(token, note, created, expires)
+    return json_ok(token=token, expires_at=expires.isoformat())
 
 @app.route("/api/admin/license/delete", methods=["POST"])
 def admin_license_delete():
     if not require_admin():
         return json_bad("unauthorized", 401)
-    try:
-        data = request.get_json(silent=True) or {}
-        token = (data.get("token") or "").strip()
-        if not token:
-            return json_bad("token required", 400)
-        n = delete_license(token)
-        return json_ok(deleted=(n > 0))
-    except Exception as e:
-        err = repr(e)
-        print("[ERROR] /api/admin/license/delete:", err)
-        return json_bad("internal error", 500, error=err)
+
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    if not token:
+        return json_bad("token required", 400)
+
+    n = delete_license(token)
+    return json_ok(deleted=(n > 0))
 
 @app.route("/api/admin/license/reset", methods=["POST"])
 def admin_license_reset():
     if not require_admin():
         return json_bad("unauthorized", 401)
-    try:
-        data = request.get_json(silent=True) or {}
-        token = (data.get("token") or "").strip()
-        if not token:
-            return json_bad("token required", 400)
-        n = reset_license(token)
-        return json_ok(reset=(n > 0))
-    except Exception as e:
-        err = repr(e)
-        print("[ERROR] /api/admin/license/reset:", err)
-        return json_bad("internal error", 500, error=err)
+
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    if not token:
+        return json_bad("token required", 400)
+
+    n = reset_license(token)
+    return json_ok(reset=(n > 0))
 
 @app.route("/api/admin/license/extend", methods=["POST"])
 def admin_license_extend():
     if not require_admin():
         return json_bad("unauthorized", 401)
-    try:
-        data = request.get_json(silent=True) or {}
-        token = (data.get("token") or "").strip()
-        days = int(data.get("days") or 30)
-        if not token:
-            return json_bad("token required", 400)
-        new_expiry = now_utc() + timedelta(days=days)
-        n = extend_license(token, new_expiry)
-        return json_ok(expires_at=new_expiry.isoformat(), extended=(n > 0))
-    except Exception as e:
-        err = repr(e)
-        print("[ERROR] /api/admin/license/extend:", err)
-        return json_bad("internal error", 500, error=err)
 
-# 진단용 (운영 중에도 문제 확인 쉬움)
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    days = int(data.get("days") or 30)
+    if not token:
+        return json_bad("token required", 400)
+
+    new_expiry = now_utc() + timedelta(days=days)
+    n = extend_license(token, new_expiry)
+    return json_ok(extended=(n > 0), expires_at=new_expiry.isoformat())
+
+@app.route("/api/license/activate", methods=["POST"])
+def license_activate():
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    fp = (data.get("fingerprint") or "").strip()
+
+    if not token or not fp:
+        return json_bad("token and fingerprint required", 400)
+
+    row = find_license(token)
+    if not row:
+        return json_bad("invalid token", 404)
+
+    # 이미 바인딩된 토큰인데 다른 fingerprint이면 차단
+    if row.get("registered") and (row.get("bound_fp") or "") != fp:
+        return json_bad("token already bound to another device", 409)
+
+    bind_license(token, fp)
+    return json_ok(token=token, expires_at=row["expires_at"].isoformat())
+
 @app.route("/api/diag", methods=["GET"])
 def diag():
-    try:
-        return json_ok(diag=db_diag(), ts=now_utc().isoformat())
-    except Exception as e:
-        err = repr(e)
-        print("[ERROR] /api/diag:", err)
-        return json_bad("db diag failed", 500, error=err)
+    return json_ok(diag=db_diag(), ts=now_utc().isoformat())
 
 @app.route("/api/health", methods=["GET"])
 def health():
     return json_ok(ts=now_utc().isoformat())
+
+
+# ------------------------------------------------------------
+# Global exception handler (500에서도 원인 JSON으로 반환)
+# ------------------------------------------------------------
+@app.errorhandler(Exception)
+def handle_any_exception(e):
+    err = repr(e)
+    print("[FATAL]", err)
+    return jsonify({"ok": False, "msg": "internal error", "error": err}), 500
+
 
 # ------------------------------------------------------------
 # Ensure DB table exists under gunicorn too
