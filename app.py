@@ -19,10 +19,10 @@ from reportlab.lib.units import mm
 # App setup
 # ------------------------------------------------------------
 app = Flask(__name__)
-CORS(app)
+CORS(app, supports_credentials=True)
 
 # Admin key: set ADMIN_API_KEY env var in production
-ADMIN_API_KEY = (os.getenv("ADMIN_API_KEY") or "admin1234").strip()
+ADMIN_API_KEY = (os.getenv("ADMIN_API_KEY")
 
 PUBLIC_VWORLD_KEY = (os.getenv("VWORLD_KEY") or "").strip()
 PUBLIC_KEPCO_KEY = (os.getenv("KEPCO_KEY") or "").strip()
@@ -222,3 +222,4 @@ def health():
 if __name__ == "__main__":
     init_db()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT") or 5000), debug=True)
+
