@@ -22,7 +22,7 @@ app = Flask(__name__)
 CORS(app, supports_credentials=True)
 
 # Admin key: set ADMIN_API_KEY env var in production
-ADMIN_API_KEY = (os.getenv("ADMIN_API_KEY")
+ADMIN_API_KEY = (os.getenv("ADMIN_API_KEY") or "").strip()
 
 PUBLIC_VWORLD_KEY = (os.getenv("VWORLD_KEY") or "").strip()
 PUBLIC_KEPCO_KEY = (os.getenv("KEPCO_KEY") or "").strip()
@@ -586,3 +586,4 @@ Okay, there’s a CORS issue blocking access and causing 500
 No file chosenNo file chosen
 ChatGPT can make mistakes. Check important info. See Cookie Preferences.
 ChatGPT is still generating a response...
+
