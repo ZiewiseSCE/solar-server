@@ -477,21 +477,15 @@ def admin_login():
     - 이후: 같은 admin_key로만 인증 가능
     - 성공 시: JSON 응답 + HttpOnly 쿠키 세팅(스토리지 차단 대응)
     """
-    try:
-        try:
-        data = request.get_json(silent=True) or {}
-        k = (data.get("admin_key") or "").strip()
-        if not _check_admin_key(k):
-            # 아직 키가 등록되지 않았고 빈 값이면 그냥 실패 처리
-            return json_bad("invalid credential", 401)
+    data = request.get_json(silent=True) or {}
+    k = (data.get("admin_key") or "").strip()
+    if not _check_admin_key(k):
+        # 아직 키가 등록되지 않았고 빈 값이면 그냥 실패 처리
+        return json_bad("invalid credential", 401)
 
-        token = sign_admin_session()
-        resp = make_response(jsonify({"ok": True, "session_token": token}))
-  
-    except Exception as e:
-        return json_bad(f"admin login error: {e}", 500, diag=db_diag())
-
-      return set_admin_cookie(resp, token)
+    token = sign_admin_session()
+    resp = make_response(jsonify({"ok": True, "session_token": token}))
+    return set_admin_cookie(resp, token)
 
 
 @app.route("/api/admin/licenses", methods=["GET"])
