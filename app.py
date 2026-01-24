@@ -446,14 +446,28 @@ def clear_admin_cookie(resp):
 
 
 @app.route("/api/auth/whoami", methods=["GET"])
+@app.route("/api/admin/status", methods=["GET"])  # admin.html 호환
 def whoami():
-    # admin.html 상태 체크용: 항상 200
-    return json_ok(
-        ts=now_utc().isoformat(),
-        admin_enabled=True,
-        admin_needs_setup=(_get_admin_key_hash() is None),
-        is_admin=require_admin()
-    )
+    # 상태 체크용: 항상 200을 목표로 (DB 문제도 JSON으로 리턴)
+    try:
+        needs_setup = (_get_admin_key_hash() is None)
+        is_admin = require_admin()
+        return json_ok(
+            ts=now_utc().isoformat(),
+            admin_enabled=True,
+            admin_needs_setup=needs_setup,
+            is_admin=is_admin,
+            diag=db_diag(),
+        )
+    except Exception as e:
+        # DB가 아직 준비 안 된 경우 등
+        return json_ok(
+            ts=now_utc().isoformat(),
+            admin_enabled=True,
+            admin_needs_setup=True,
+            is_admin=False,
+            diag={"ok": False, "error": repr(e), **db_diag()},
+        )
 
 @app.route("/api/admin/login", methods=["POST"])
 def admin_login():
@@ -463,15 +477,21 @@ def admin_login():
     - 이후: 같은 admin_key로만 인증 가능
     - 성공 시: JSON 응답 + HttpOnly 쿠키 세팅(스토리지 차단 대응)
     """
-    data = request.get_json(silent=True) or {}
-    k = (data.get("admin_key") or "").strip()
-    if not _check_admin_key(k):
-        # 아직 키가 등록되지 않았고 빈 값이면 그냥 실패 처리
-        return json_bad("invalid credential", 401)
+    try:
+        try:
+        data = request.get_json(silent=True) or {}
+        k = (data.get("admin_key") or "").strip()
+        if not _check_admin_key(k):
+            # 아직 키가 등록되지 않았고 빈 값이면 그냥 실패 처리
+            return json_bad("invalid credential", 401)
 
-    token = sign_admin_session()
-    resp = make_response(jsonify({"ok": True, "session_token": token}))
-    return set_admin_cookie(resp, token)
+        token = sign_admin_session()
+        resp = make_response(jsonify({"ok": True, "session_token": token}))
+  
+    except Exception as e:
+        return json_bad(f"admin login error: {e}", 500, diag=db_diag())
+
+      return set_admin_cookie(resp, token)
 
 
 @app.route("/api/admin/licenses", methods=["GET"])
