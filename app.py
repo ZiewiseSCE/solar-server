@@ -383,6 +383,14 @@ def _check_admin_key(raw_key: str) -> bool:
         return False
     return _sha256_hex(_get_admin_secret() + raw_key) == key_hash
 
+def _b64url(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).decode("utf-8").rstrip("=")
+
+def _b64urldecode(s: str) -> bytes:
+    s = (s or "").strip()
+    pad = "=" * (-len(s) % 4)
+    return base64.urlsafe_b64decode(s + pad)
+
 def sign_admin_session() -> str:
     """Returns a signed token string (HMAC with SECRET_KEY)."""
     if not SECRET_KEY:
