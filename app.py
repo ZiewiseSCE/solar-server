@@ -629,123 +629,199 @@ REPORT_HTML = """
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
-<body class="bg-slate-50 text-slate-800">
-  <div class="max-w-5xl mx-auto p-6">
-    <div class="bg-white rounded-xl shadow border border-slate-200 p-5">
-      <div class="flex items-start justify-between gap-4">
-        <div>
-          <h1 class="text-xl font-extrabold">상세 리포트</h1>
-          <div class="text-xs text-slate-500 mt-1">{{ date }}</div>
-          <div class="mt-3 text-sm">
-            <div class="font-bold text-slate-700">주소</div>
-            <div class="text-slate-600 break-words">{{ address }}</div>
-          </div>
-        </div>
-        <div class="text-right">
-          <div class="text-xs text-slate-500">용량</div>
-          <div class="text-lg font-bold text-cyan-700">{{ capacity }}</div>
-          <div class="text-xs text-slate-500 mt-1">한전 용량</div>
-          <div class="font-mono text-sm text-amber-600">{{ kepco_capacity }}</div>
-        </div>
-      </div>
-
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-6">
-        <div class="bg-slate-900 text-white rounded-lg p-4">
-          <div class="text-xs text-slate-300">총 사업비</div>
-          <div class="text-lg font-bold mt-1">{{ finance.totalCostWon|default(0) | int | format_won }}</div>
-          <div class="text-xs text-slate-400 mt-2">연 수익</div>
-          <div class="font-bold text-amber-300">{{ finance.annualRevenueWon|default(0) | int | format_won }}</div>
-        </div>
-        <div class="bg-indigo-900 text-white rounded-lg p-4">
-          <div class="text-xs text-indigo-200">월 상환액(PF)</div>
-          <div class="text-lg font-bold mt-1">{{ finance.monthlyDebtWon|default(0) | int | format_won }}</div>
-          <div class="text-xs text-indigo-200 mt-2">총 이자</div>
-          <div class="font-bold">{{ finance.totalInterestWon|default(0) | int | format_won }}</div>
-        </div>
-        <div class="bg-emerald-800 text-white rounded-lg p-4">
-          <div class="text-xs text-emerald-100">자본회수기간</div>
-          <div class="text-lg font-bold mt-1">{{ finance.paybackYears if finance.paybackYears else "> 25" }} 년</div>
-          <div class="text-xs text-emerald-100 mt-2">구매매력도(AI)</div>
-          <div class="font-bold">{{ ai_score }} 점</div>
-        </div>
-      </div>
-
-      <div class="bg-white rounded-lg border border-slate-200 p-4 mt-4">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="font-bold text-sm">ROI/NPV/IRR (25년)</div>
-          <div class="flex items-center gap-2 text-xs">
-            <span class="text-slate-500">할인율</span>
-            <input id="discountRate" type="number" step="0.1" value="6.0" class="w-20 px-2 py-1 border border-slate-300 rounded" />
-            <span class="text-slate-500">%</span>
-            <button id="recalcRoi" class="px-3 py-1 rounded bg-slate-900 text-white font-bold">재계산</button>
-          </div>
-        </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-          <div class="bg-slate-50 rounded border border-slate-200 p-3">
-            <div class="text-xs font-bold text-slate-600 mb-2">토지비 제외</div>
-            <div class="text-sm">NPV: <span id="npvNo" class="font-bold"></span></div>
-            <div class="text-sm">IRR: <span id="irrNo" class="font-bold"></span></div>
-          </div>
-          <div class="bg-slate-50 rounded border border-slate-200 p-3">
-            <div class="text-xs font-bold text-slate-600 mb-2">토지비 포함</div>
-            <div class="text-sm">NPV: <span id="npvWith" class="font-bold"></span></div>
-            <div class="text-sm">IRR: <span id="irrWith" class="font-bold"></span></div>
-          </div>
-        </div>
-      </div>
-
-
-      <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div class="bg-white rounded-lg border border-slate-200 p-4">
-          <div class="font-bold text-sm mb-2">25년 현금흐름(토지비 제외)</div>
-          <canvas id="cfChartNoLand" height="160"></canvas>
-        </div>
-        <div class="bg-white rounded-lg border border-slate-200 p-4">
-          <div class="font-bold text-sm mb-2">25년 현금흐름(토지비 포함)</div>
-          <div class="text-[10px] text-slate-500 mb-2">※ 토지가격 데이터가 없으면 제외/포함 차이가 없을 수 있습니다.</div>
-          <canvas id="cfChartWithLand" height="160"></canvas>
-        </div>
-      </div>
-
-      <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div class="bg-white rounded-lg border border-slate-200 p-4">
-          <div class="font-bold text-sm mb-2">추정 가정(무데이터 보정 포함)</div>
-          <div class="text-xs text-slate-600 space-y-1">
-            <div><span class="font-bold">일사량:</span> {{ solar.sun_hours or "확인 필요" }} h/일</div>
-            <div><span class="font-bold">방위/경사:</span> {{ solar.azimuth_deg or "확인 필요" }}° / {{ solar.tilt_deg or "확인 필요" }}°</div>
-            <div><span class="font-bold">방위/경사 보정:</span> {{ solar.ori_factor or "확인 필요" }}</div>
-            <div><span class="font-bold">토지가격:</span> {{ land_price }}</div>
-            <div class="text-[10px] text-amber-600 font-bold">※ 데이터 소스 확정 전: 보수적 추정이며 "확인 필요"입니다.</div>
-          </div>
-        </div>
-        <div class="bg-white rounded-lg border border-slate-200 p-4">
-          <div class="font-bold text-sm mb-2">8대 중대 체크사항</div>
-          <div class="space-y-2 text-xs">
-            {% for c in ai_analysis.checks or [] %}
-              <div class="p-2 rounded border border-slate-200 flex items-center justify-between gap-3">
-                <div>
-                  <div class="font-bold text-slate-700">{{ c.title or c.category }}</div>
-                  <div class="text-slate-600">{{ c.result }}</div>
-                </div>
-                {% if c.link %}
-                  <a class="text-blue-600 font-bold" href="{{ c.link }}" target="_blank">링크</a>
-                {% endif %}
+<body class="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 text-slate-100">
+  <div class="max-w-6xl mx-auto p-6">
+    <!-- Header -->
+    <div class="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_0_0_1px_rgba(255,255,255,0.05),0_20px_60px_rgba(0,0,0,0.35)] overflow-hidden">
+      <div class="p-6">
+        <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+          <div>
+            <div class="flex items-center gap-2">
+              <div class="h-10 w-10 rounded-xl bg-gradient-to-br from-cyan-400/20 to-indigo-400/20 border border-white/10 flex items-center justify-center">
+                <span class="text-lg font-black">SP</span>
               </div>
-            {% endfor %}
-            {% if (ai_analysis.checks or [])|length == 0 %}
-              <div class="text-slate-400">AI 분석 데이터가 없습니다.</div>
-            {% endif %}
+              <div>
+                <div class="text-xl font-extrabold tracking-tight">상세 리포트</div>
+                <div class="text-xs text-slate-300/80 mt-0.5">{{ date }}</div>
+              </div>
+            </div>
+            <div class="mt-4">
+              <div class="text-xs text-slate-300/80 font-bold">주소</div>
+              <div class="text-sm text-slate-100/90 break-words mt-1">{{ address }}</div>
+            </div>
+          </div>
+
+          <div class="flex flex-col items-start md:items-end gap-3">
+            <div class="flex items-center gap-2">
+              <div class="px-3 py-1 rounded-full bg-emerald-400/10 border border-emerald-400/25 text-emerald-200 text-xs font-bold">
+                구매매력도 <span class="ml-1 text-base text-emerald-100">{{ ai_score }}</span>
+              </div>
+              <div class="px-3 py-1 rounded-full bg-amber-400/10 border border-amber-400/25 text-amber-200 text-xs font-bold">
+                한전 용량: <span class="ml-1 text-amber-100">{{ kepco_capacity }}</span>
+              </div>
+            </div>
+
+            <div class="text-right">
+              <div class="text-xs text-slate-300/80">용량</div>
+              <div class="text-2xl font-extrabold text-cyan-200 tracking-tight">{{ capacity }}</div>
+            </div>
+
+            <!-- Controls -->
+            <div class="flex flex-wrap gap-2 justify-end">
+              <div class="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10">
+                <div class="text-[11px] text-slate-200/80 font-bold">토지</div>
+                <button id="landOwnBtn" class="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/10 text-xs font-bold">보유</button>
+                <button id="landBuyBtn" class="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/10 text-xs font-bold">구매</button>
+              </div>
+
+              <div class="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10">
+                <div class="text-[11px] text-slate-200/80 font-bold">시나리오</div>
+                <select id="scenarioSel" class="bg-slate-900/60 border border-white/10 rounded-lg px-2 py-1 text-xs">
+                  <option value="0.90">보수</option>
+                  <option value="1.00" selected>기본</option>
+                  <option value="1.10">낙관</option>
+                </select>
+              </div>
+
+              <div class="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10">
+                <div class="text-[11px] text-slate-200/80 font-bold">할인율</div>
+                <input id="discountRate" type="number" step="0.1" value="6.0" class="w-20 px-2 py-1 bg-slate-900/60 border border-white/10 rounded-lg text-xs" />
+                <span class="text-[11px] text-slate-300/80">%</span>
+                <button id="recalcRoi" class="px-3 py-1 rounded-lg bg-slate-100 text-slate-900 font-extrabold text-xs hover:bg-white">재계산</button>
+              </div>
+            </div>
+
           </div>
         </div>
-      </div>
 
-      <div class="flex flex-wrap gap-2 mt-6">
-        <form method="POST" action="/api/report/pdf">
-          <input type="hidden" name="payload" value="{{ payload_json|e }}">
-          <button class="px-4 py-2 rounded bg-slate-900 text-white font-bold hover:bg-slate-800" type="submit">PDF 즉시 출력</button>
-        </form>
-        <a class="px-4 py-2 rounded bg-white border border-slate-300 font-bold hover:bg-slate-50" href="javascript:window.print()">브라우저 인쇄</a>
+        <!-- KPI cards -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mt-6">
+          <div class="rounded-2xl bg-gradient-to-br from-slate-900/60 to-slate-900/20 border border-white/10 p-4">
+            <div class="text-xs text-slate-300/80 font-bold">총 사업비</div>
+            <div class="text-lg font-extrabold mt-1">{{ finance.totalCostWon|default(0) | int | format_won }}</div>
+            <div class="text-[11px] text-slate-400/80 mt-2">※ 추정치</div>
+          </div>
+
+          <div class="rounded-2xl bg-gradient-to-br from-indigo-900/50 to-indigo-900/20 border border-white/10 p-4">
+            <div class="text-xs text-indigo-200/90 font-bold">연 수익(기본)</div>
+            <div class="text-lg font-extrabold mt-1">{{ finance.annualRevenueWon|default(0) | int | format_won }}</div>
+            <div class="text-[11px] text-indigo-200/70 mt-2">시나리오로 변동</div>
+          </div>
+
+          <div class="rounded-2xl bg-gradient-to-br from-emerald-900/50 to-emerald-900/20 border border-white/10 p-4">
+            <div class="text-xs text-emerald-200/90 font-bold">월 상환액(PF)</div>
+            <div class="text-lg font-extrabold mt-1">{{ finance.monthlyDebtWon|default(0) | int | format_won }}</div>
+            <div class="text-[11px] text-emerald-200/70 mt-2">총이자 {{ finance.totalInterestWon|default(0) | int | format_won }}</div>
+          </div>
+
+          <div class="rounded-2xl bg-gradient-to-br from-amber-900/50 to-amber-900/20 border border-white/10 p-4">
+            <div class="text-xs text-amber-200/90 font-bold">자본회수기간</div>
+            <div class="text-lg font-extrabold mt-1">{{ finance.paybackYears if finance.paybackYears else "> 25" }} 년</div>
+            <div class="text-[11px] text-amber-200/70 mt-2">※ 보수적 추정</div>
+          </div>
+        </div>
+
+        <!-- NPV/IRR -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+          <div class="rounded-2xl bg-white/5 border border-white/10 p-4">
+            <div class="text-xs font-extrabold text-slate-200/90 mb-2">NPV / IRR (토지비 제외)</div>
+            <div class="flex items-end justify-between">
+              <div>
+                <div class="text-[11px] text-slate-300/70">NPV</div>
+                <div id="npvNo" class="text-lg font-extrabold">-</div>
+              </div>
+              <div class="text-right">
+                <div class="text-[11px] text-slate-300/70">IRR</div>
+                <div id="irrNo" class="text-lg font-extrabold">-</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="rounded-2xl bg-white/5 border border-white/10 p-4">
+            <div class="text-xs font-extrabold text-slate-200/90 mb-2">NPV / IRR (토지비 포함)</div>
+            <div class="flex items-end justify-between">
+              <div>
+                <div class="text-[11px] text-slate-300/70">NPV</div>
+                <div id="npvWith" class="text-lg font-extrabold">-</div>
+              </div>
+              <div class="text-right">
+                <div class="text-[11px] text-slate-300/70">IRR</div>
+                <div id="irrWith" class="text-lg font-extrabold">-</div>
+              </div>
+            </div>
+            <div id="landNote" class="text-[10px] text-amber-200/80 mt-2">※ 토지가격 데이터가 없으면 포함/제외 차이가 없을 수 있습니다.</div>
+          </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+          <div class="rounded-2xl bg-white/5 border border-white/10 p-4">
+            <div class="font-extrabold text-sm mb-2">25년 현금흐름(토지비 제외)</div>
+            <canvas id="cfChartNoLand" height="170"></canvas>
+          </div>
+          <div class="rounded-2xl bg-white/5 border border-white/10 p-4">
+            <div class="font-extrabold text-sm mb-2">25년 현금흐름(토지비 포함)</div>
+            <canvas id="cfChartWithLand" height="170"></canvas>
+          </div>
+        </div>
+
+        <!-- Assumptions + Checklist -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+          <div class="rounded-2xl bg-white/5 border border-white/10 p-4">
+            <div class="font-extrabold text-sm mb-2">추정 가정(무데이터 보정 포함)</div>
+            <div class="text-xs text-slate-200/80 space-y-2">
+              <div class="flex justify-between gap-3">
+                <div class="text-slate-300/70">일사량</div>
+                <div class="font-bold">{{ solar.sun_hours or "확인 필요" }} h/일</div>
+              </div>
+              <div class="flex justify-between gap-3">
+                <div class="text-slate-300/70">방위/경사</div>
+                <div class="font-bold">{{ solar.azimuth_deg or "확인 필요" }}° / {{ solar.tilt_deg or "확인 필요" }}°</div>
+              </div>
+              <div class="flex justify-between gap-3">
+                <div class="text-slate-300/70">보정 계수</div>
+                <div class="font-bold">{{ solar.ori_factor or "확인 필요" }}</div>
+              </div>
+              <div class="flex justify-between gap-3">
+                <div class="text-slate-300/70">토지가격</div>
+                <div class="font-bold">{{ land_price }}</div>
+              </div>
+              <div class="text-[10px] text-amber-200/80 font-bold mt-2">
+                ※ 데이터 소스 확정 전: 보수적 추정이며 "확인 필요"입니다.
+              </div>
+            </div>
+          </div>
+
+          <div class="rounded-2xl bg-white/5 border border-white/10 p-4">
+            <div class="font-extrabold text-sm mb-2">8대 중대 체크사항</div>
+            <div class="space-y-2 text-xs">
+              {% for c in ai_analysis.checks or [] %}
+                <div class="p-3 rounded-xl border border-white/10 bg-black/10 flex items-center justify-between gap-3">
+                  <div>
+                    <div class="font-extrabold text-slate-100">{{ c.title or c.category }}</div>
+                    <div class="text-slate-300/70 mt-1">{{ c.result }}</div>
+                  </div>
+                  {% if c.link %}
+                    <a class="px-3 py-1 rounded-lg bg-white/10 border border-white/10 text-cyan-200 font-bold hover:bg-white/15"
+                       href="{{ c.link }}" target="_blank">링크</a>
+                  {% endif %}
+                </div>
+              {% endfor %}
+              {% if (ai_analysis.checks or [])|length == 0 %}
+                <div class="text-slate-400">AI 분석 데이터가 없습니다.</div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="flex flex-wrap gap-2 mt-6">
+          <form method="POST" action="/api/report/pdf">
+            <input type="hidden" name="payload" value="{{ payload_json|e }}">
+            <button class="px-4 py-2 rounded-xl bg-slate-100 text-slate-900 font-extrabold hover:bg-white" type="submit">PDF 즉시 출력</button>
+          </form>
+          <a class="px-4 py-2 rounded-xl bg-white/10 border border-white/10 font-extrabold hover:bg-white/15" href="javascript:window.print()">브라우저 인쇄</a>
+        </div>
       </div>
     </div>
   </div>
@@ -753,27 +829,60 @@ REPORT_HTML = """
 <script>
   const payload = {{ payload_json|safe }};
   const roi = (payload.finance && payload.finance.roi25y) ? payload.finance.roi25y : {};
-  const cfNo = Array.isArray(roi.cashflows_no_land) ? roi.cashflows_no_land : [];
-  const cfWith = Array.isArray(roi.cashflows_with_land) ? roi.cashflows_with_land : cfNo;
-  const labels = (cfNo.length ? cfNo : cfWith).map((_, i) => `Y${i+1}`);
+  const cfNoRaw = Array.isArray(roi.cashflows_no_land) ? roi.cashflows_no_land : [];
+  const cfWithRaw = Array.isArray(roi.cashflows_with_land) ? roi.cashflows_with_land : cfNoRaw;
+  const landPrice = (roi && typeof roi.land_price_won === "number") ? roi.land_price_won : null;
 
-  function makeBar(id, data){
-    const el = document.getElementById(id);
-    if(!el) return;
+  // State
+  let landMode = (landPrice && landPrice > 0) ? "buy" : "own"; // buy | own
+  let scenarioFactor = parseFloat(document.getElementById("scenarioSel")?.value || "1.0") || 1.0;
+
+  // Buttons style
+  function setBtnActive(id, active){
+    const b = document.getElementById(id);
+    if(!b) return;
+    if(active){
+      b.classList.add("bg-slate-100","text-slate-900");
+      b.classList.remove("bg-white/10","text-slate-100");
+    }else{
+      b.classList.remove("bg-slate-100","text-slate-900");
+      b.classList.add("bg-white/10","text-slate-100");
+    }
+  }
+
+  function getSeries(){
+    const cfNo = cfNoRaw.map(v => Math.round(v * scenarioFactor));
+    const baseWith = (landMode === "own") ? cfNoRaw : cfWithRaw;
+    const cfWith = baseWith.map(v => Math.round(v * scenarioFactor));
+    return {cfNo, cfWith};
+  }
+
+  const labels = (cfNoRaw.length ? cfNoRaw : cfWithRaw).map((_, i) => `Y${i+1}`);
+
+  // Charts
+  function makeBar(elId, data){
+    const el = document.getElementById(elId);
+    if(!el) return null;
     const ctx = el.getContext('2d');
-    new Chart(ctx, {
+    return new Chart(ctx, {
       type: 'bar',
       data: { labels, datasets: [{ label: '현금흐름(원)', data }] },
       options: {
         responsive: true,
         plugins: { legend: { display: false } },
-        scales: { x: { ticks: { maxRotation: 0, autoSkip: true } } }
+        scales: {
+          x: { ticks: { maxRotation: 0, autoSkip: true, color: "rgba(226,232,240,0.65)" }, grid: { color: "rgba(148,163,184,0.08)" } },
+          y: { ticks: { color: "rgba(226,232,240,0.65)" }, grid: { color: "rgba(148,163,184,0.08)" } }
+        }
       }
     });
   }
 
-  
+  const init = getSeries();
+  const chartNo = makeBar('cfChartNoLand', init.cfNo);
+  const chartWith = makeBar('cfChartWithLand', init.cfWith);
 
+  // NPV/IRR
   function fmtWon(n){
     try{ return Math.round(n).toLocaleString() + " 원"; }catch(e){ return "확인 필요"; }
   }
@@ -788,17 +897,12 @@ REPORT_HTML = """
     return v;
   }
 
-  // Simple IRR (Newton + fallback bisection)
   function irr(cashflows){
-    // cashflows are yearly, already include equity at t0? Our series starts Y1.
-    // We approximate with t0=0 investment included in first year if present.
-    // Use heuristic: if all flows positive -> no IRR.
-    let hasNeg = false, hasPos = false;
+    let hasNeg=false, hasPos=false;
     for(const c of cashflows){ if(c<0) hasNeg=true; if(c>0) hasPos=true; }
     if(!(hasNeg && hasPos)) return null;
 
-    // Newton
-    let x = 0.08; // 8%
+    let x = 0.08;
     for(let it=0; it<40; it++){
       let f=0, df=0;
       for(let i=0;i<cashflows.length;i++){
@@ -811,12 +915,9 @@ REPORT_HTML = """
       const nx = x - f/df;
       if(!isFinite(nx)) break;
       if(Math.abs(nx-x) < 1e-6) { x=nx; return x*100; }
-      x = nx;
-      if(x < -0.9) x = -0.9;
-      if(x > 2.0) x = 2.0;
+      x = Math.max(-0.9, Math.min(2.0, nx));
     }
 
-    // Bisection in [-0.5, 1.5]
     let lo=-0.5, hi=1.5;
     function f(rate){
       let s=0;
@@ -841,6 +942,13 @@ REPORT_HTML = """
 
   function recomputeRoiMetrics(){
     const rate = parseFloat(document.getElementById("discountRate")?.value || "6") || 6;
+    const {cfNo, cfWith} = getSeries();
+
+    // Update charts
+    if(chartNo){ chartNo.data.datasets[0].data = cfNo; chartNo.update(); }
+    if(chartWith){ chartWith.data.datasets[0].data = cfWith; chartWith.update(); }
+
+    // Update NPV/IRR
     const nNo = npv(rate, cfNo);
     const nWith = npv(rate, cfWith);
     const iNo = irr(cfNo);
@@ -855,17 +963,36 @@ REPORT_HTML = """
     if(npvWithEl) npvWithEl.innerText = fmtWon(nWith);
     if(irrNoEl) irrNoEl.innerText = (iNo===null ? "확인 필요" : (iNo.toFixed(2) + " %"));
     if(irrWithEl) irrWithEl.innerText = (iWith===null ? "확인 필요" : (iWith.toFixed(2) + " %"));
+
+    const landNote = document.getElementById("landNote");
+    if(landNote){
+      if(landMode === "own"){
+        landNote.innerText = "토지 보유 가정: 토지가격을 사업비에 반영하지 않습니다.";
+      }else{
+        landNote.innerText = landPrice ? ("토지 구매 가정: 1년차에 토지가격을 upfront로 반영합니다.") : "토지 구매 가정: 토지가격 데이터가 없어 포함/제외 차이가 없을 수 있습니다.";
+      }
+    }
+
+    setBtnActive("landOwnBtn", landMode==="own");
+    setBtnActive("landBuyBtn", landMode==="buy");
   }
 
   document.getElementById("recalcRoi")?.addEventListener("click", (e)=>{ e.preventDefault(); recomputeRoiMetrics(); });
-  recomputeRoiMetrics();
+  document.getElementById("scenarioSel")?.addEventListener("change", (e)=>{ scenarioFactor = parseFloat(e.target.value||"1")||1; recomputeRoiMetrics(); });
 
-  makeBar('cfChartNoLand', cfNo);
-  makeBar('cfChartWithLand', cfWith);
+  document.getElementById("landOwnBtn")?.addEventListener("click", (e)=>{ e.preventDefault(); landMode="own"; recomputeRoiMetrics(); });
+  document.getElementById("landBuyBtn")?.addEventListener("click", (e)=>{ e.preventDefault(); landMode="buy"; recomputeRoiMetrics(); });
+
+  // init state
+  setBtnActive("landOwnBtn", landMode==="own");
+  setBtnActive("landBuyBtn", landMode==="buy");
+  recomputeRoiMetrics();
 </script>
 </body>
 </html>
+
 """
+
 
 def _format_won(v: int) -> str:
     try:
