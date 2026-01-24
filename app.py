@@ -11,7 +11,6 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 import time
 import json
-import traceback
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -484,8 +483,6 @@ def admin_login():
         return set_admin_cookie(resp, token)
 
     except Exception as e:
-        # secrets 노출 방지: traceback에서 SECRET_KEY 등은 직접 노출하지 않지만,
-        # 그래도 최소한의 정보만 전달
         err = f"{type(e).__name__}: {e}"
         print("[ADMIN_LOGIN_ERROR]", err)
         return json_bad("internal error", 500, error=err, diag=db_diag())
@@ -739,7 +736,6 @@ def report():
     def _json_load(s):
         try:
             import json
-import traceback
             return json.loads(s) if s else {}
         except Exception:
             return {}
@@ -770,7 +766,6 @@ import traceback
     }
 
     import json
-import traceback
     payload_json = json.dumps(payload, ensure_ascii=False)
 
         # Derived display fields (data-source-free estimates included)
@@ -951,7 +946,6 @@ def report_pdf():
     payload = None
     if request.form and request.form.get("payload"):
         import json
-import traceback
         try:
             payload = json.loads(request.form.get("payload"))
         except Exception:
