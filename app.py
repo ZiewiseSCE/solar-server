@@ -417,6 +417,17 @@ def verify_admin_session(token: str) -> bool:
     except Exception:
         return False
 
+def _admin_auth_debug():
+    auth = request.headers.get("Authorization", "") or ""
+    ck = request.cookies.get(_ADMIN_COOKIE_NAME)
+    return {
+        "has_authorization": bool(auth),
+        "auth_prefix": auth.split(" ", 1)[0] if auth else "",
+        "auth_len": len(auth),
+        "has_cookie": bool(ck),
+        "cookie_len": len(ck) if ck else 0,
+    }
+
 def _get_admin_token_from_request():
     # 1) Bearer
     auth = request.headers.get("Authorization", "")
@@ -511,13 +522,13 @@ def admin_login():
 @app.route("/api/admin/licenses", methods=["GET"])
 def admin_licenses():
     if not require_admin():
-        return json_bad("unauthorized", 401)
+        return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
     return json_ok(items=get_all_licenses(), diag=db_diag())
 
 @app.route("/api/admin/license/create", methods=["POST"])
 def admin_license_create():
     if not require_admin():
-        return json_bad("unauthorized", 401)
+        return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
 
     data = request.get_json(silent=True) or {}
     days = int(data.get("days") or 30)
@@ -533,7 +544,7 @@ def admin_license_create():
 @app.route("/api/admin/license/delete", methods=["POST"])
 def admin_license_delete():
     if not require_admin():
-        return json_bad("unauthorized", 401)
+        return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
 
     data = request.get_json(silent=True) or {}
     token = (data.get("token") or "").strip()
@@ -546,7 +557,7 @@ def admin_license_delete():
 @app.route("/api/admin/license/reset", methods=["POST"])
 def admin_license_reset():
     if not require_admin():
-        return json_bad("unauthorized", 401)
+        return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
 
     data = request.get_json(silent=True) or {}
     token = (data.get("token") or "").strip()
@@ -559,7 +570,7 @@ def admin_license_reset():
 @app.route("/api/admin/license/extend", methods=["POST"])
 def admin_license_extend():
     if not require_admin():
-        return json_bad("unauthorized", 401)
+        return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
 
     data = request.get_json(silent=True) or {}
     token = (data.get("token") or "").strip()
