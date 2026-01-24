@@ -92,26 +92,30 @@ def get_conn():
 # ------------------------------------------------------------
 
 def init_db():
-    """Create required tables if missing."""
+    """Create required tables if missing (and apply lightweight migrations)."""
     conn = get_conn()
     try:
-        # admin_state
+        # admin_state (for legacy code compatibility; not used for auth now)
         _ensure_admin_state(conn)
 
-        # licenses
         cur = conn.cursor()
+        # Base table (initial columns)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS licenses (
                 token        TEXT PRIMARY KEY,
                 note         TEXT NULL,
                 created_at   TIMESTAMPTZ NOT NULL,
-                expires_at   TIMESTAMPTZ NOT NULL,
-                registered   BOOLEAN NOT NULL DEFAULT FALSE,
-                bound_fp     TEXT NULL,
-                bound_at     TIMESTAMPTZ NULL,
-                last_seen_at TIMESTAMPTZ NULL
+                expires_at   TIMESTAMPTZ NOT NULL
             );
         """)
+        conn.commit()
+
+        # Lightweight migrations for existing installations
+        # (CREATE TABLE IF NOT EXISTS does NOT add new columns)
+        cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS registered   BOOLEAN NOT NULL DEFAULT FALSE;")
+        cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS bound_fp     TEXT NULL;")
+        cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS bound_at     TIMESTAMPTZ NULL;")
+        cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NULL;")
         conn.commit()
     finally:
         conn.close()
