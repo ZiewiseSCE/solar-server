@@ -11,6 +11,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 import time
 import json
+import traceback
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -467,8 +468,28 @@ def admin_login():
     - 입력한 admin_key == ADMIN_API_KEY 이면 로그인 성공
     - DB 바인딩/등록 없이, 어떤 PC/브라우저에서도 동일 키로 로그인 가능
     """
-    data = request.get_json(silent=True) or {}
-    k = (data.get("admin_key") or "").strip()
+    try:
+        data = request.get_json(silent=True) or {}
+        k = (data.get("admin_key") or "").strip()
+
+        env_key = (os.getenv("ADMIN_API_KEY") or "").strip()
+        if not env_key:
+            return json_bad("ADMIN_API_KEY not set", 500)
+
+        if k != env_key:
+            return json_bad("invalid credential", 401)
+
+        token = sign_admin_session()
+        resp = make_response(jsonify({"ok": True, "session_token": token}))
+        return set_admin_cookie(resp, token)
+
+    except Exception as e:
+        # secrets 노출 방지: traceback에서 SECRET_KEY 등은 직접 노출하지 않지만,
+        # 그래도 최소한의 정보만 전달
+        err = f"{type(e).__name__}: {e}"
+        print("[ADMIN_LOGIN_ERROR]", err)
+        return json_bad("internal error", 500, error=err, diag=db_diag())
+
 
     env_key = (os.getenv("ADMIN_API_KEY") or "").strip()
     if not env_key:
@@ -718,6 +739,7 @@ def report():
     def _json_load(s):
         try:
             import json
+import traceback
             return json.loads(s) if s else {}
         except Exception:
             return {}
@@ -748,6 +770,7 @@ def report():
     }
 
     import json
+import traceback
     payload_json = json.dumps(payload, ensure_ascii=False)
 
         # Derived display fields (data-source-free estimates included)
@@ -928,6 +951,7 @@ def report_pdf():
     payload = None
     if request.form and request.form.get("payload"):
         import json
+import traceback
         try:
             payload = json.loads(request.form.get("payload"))
         except Exception:
