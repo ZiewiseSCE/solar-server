@@ -909,6 +909,59 @@ def infra_existing():
     )
 
 # ------------------------------------------------------------
+# F-27: 지역별 일사량/날씨 기반 최적 방위각/경사각 (연동 준비 상태)
+#  - 데이터 소스 확정 전까지는 "확인 필요" + 구조만 제공
+# ------------------------------------------------------------
+@app.route("/api/solar/optimize", methods=["POST"])
+def solar_optimize():
+    data = request.get_json(silent=True) or {}
+    lat = data.get("lat")
+    lng = data.get("lng")
+    address = (data.get("address") or "").strip()
+    mode = (data.get("mode") or "roof").strip().lower()
+
+    # 기본값(보수적): 정남향(180°), 경사 20°
+    # 실제 구현 시: 기상/일사량 데이터 + 지역 보정 + 지형/경사도 반영
+    payload = {
+        "lat": lat,
+        "lng": lng,
+        "address": address or "확인 필요",
+        "mode": mode,
+        "sun_hours": None,              # 데이터 소스 확정 시 숫자로 제공(예: 3.8)
+        "azimuth_deg": 180,             # 정남향
+        "tilt_deg": 20,                 # 보수적 기본
+        "source": "placeholder",
+        "needs_confirm": True,
+        "note": "공신력 있는 일사량/날씨 데이터 소스/키 확정 필요: 현재는 구조만 제공(확인 필요)"
+    }
+    return json_ok(**payload)
+
+# ------------------------------------------------------------
+# F-28: 토지 시세 AI/데이터 기반 자동 산출 (연동 준비 상태)
+#  - 데이터 소스 확정 전까지는 값 자동 채움 미구현(표기 구조만)
+# ------------------------------------------------------------
+@app.route("/api/land/estimate", methods=["POST"])
+def land_estimate():
+    data = request.get_json(silent=True) or {}
+    address = (data.get("address") or "").strip()
+    pnu = (data.get("pnu") or "").strip() or None
+    area_m2 = data.get("area_m2")
+    area_pyeong = data.get("area_pyeong")
+
+    payload = {
+        "address": address or "확인 필요",
+        "pnu": pnu,
+        "area_m2": area_m2,
+        "area_pyeong": area_pyeong,
+        "land_price_won": None,  # 데이터 소스 확정 시 숫자로 제공
+        "unit_price_won_per_pyeong": None,
+        "source": "placeholder",
+        "needs_confirm": True,
+        "note": "토지 시세 데이터 소스(공시지가/실거래/상용 API) 확정 필요: 현재는 구조만 제공(확인 필요)"
+    }
+    return json_ok(**payload)
+
+# ------------------------------------------------------------
 # Global exception handler (500에서도 원인 JSON으로 반환)
 # ------------------------------------------------------------
 @app.errorhandler(Exception)
