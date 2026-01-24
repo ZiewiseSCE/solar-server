@@ -670,6 +670,32 @@ REPORT_HTML = """
         </div>
       </div>
 
+      <div class="bg-white rounded-lg border border-slate-200 p-4 mt-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="font-bold text-sm">ROI/NPV/IRR (25년)</div>
+          <div class="flex items-center gap-2 text-xs">
+            <span class="text-slate-500">할인율</span>
+            <input id="discountRate" type="number" step="0.1" value="6.0" class="w-20 px-2 py-1 border border-slate-300 rounded" />
+            <span class="text-slate-500">%</span>
+            <button id="recalcRoi" class="px-3 py-1 rounded bg-slate-900 text-white font-bold">재계산</button>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+          <div class="bg-slate-50 rounded border border-slate-200 p-3">
+            <div class="text-xs font-bold text-slate-600 mb-2">토지비 제외</div>
+            <div class="text-sm">NPV: <span id="npvNo" class="font-bold"></span></div>
+            <div class="text-sm">IRR: <span id="irrNo" class="font-bold"></span></div>
+          </div>
+          <div class="bg-slate-50 rounded border border-slate-200 p-3">
+            <div class="text-xs font-bold text-slate-600 mb-2">토지비 포함</div>
+            <div class="text-sm">NPV: <span id="npvWith" class="font-bold"></span></div>
+            <div class="text-sm">IRR: <span id="irrWith" class="font-bold"></span></div>
+          </div>
+        </div>
+      </div>
+
+
       <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
         <div class="bg-white rounded-lg border border-slate-200 p-4">
           <div class="font-bold text-sm mb-2">25년 현금흐름(토지비 제외)</div>
@@ -746,6 +772,94 @@ REPORT_HTML = """
     });
   }
 
+  
+
+  function fmtWon(n){
+    try{ return Math.round(n).toLocaleString() + " 원"; }catch(e){ return "확인 필요"; }
+  }
+
+  function npv(ratePct, cashflows){
+    const r = (ratePct/100);
+    let v = 0;
+    for(let i=0;i<cashflows.length;i++){
+      const t = i+1;
+      v += cashflows[i] / Math.pow(1+r, t);
+    }
+    return v;
+  }
+
+  // Simple IRR (Newton + fallback bisection)
+  function irr(cashflows){
+    // cashflows are yearly, already include equity at t0? Our series starts Y1.
+    // We approximate with t0=0 investment included in first year if present.
+    // Use heuristic: if all flows positive -> no IRR.
+    let hasNeg = false, hasPos = false;
+    for(const c of cashflows){ if(c<0) hasNeg=true; if(c>0) hasPos=true; }
+    if(!(hasNeg && hasPos)) return null;
+
+    // Newton
+    let x = 0.08; // 8%
+    for(let it=0; it<40; it++){
+      let f=0, df=0;
+      for(let i=0;i<cashflows.length;i++){
+        const t=i+1;
+        const denom = Math.pow(1+x, t);
+        f += cashflows[i]/denom;
+        df += -t * cashflows[i] / (denom*(1+x));
+      }
+      if(Math.abs(df) < 1e-9) break;
+      const nx = x - f/df;
+      if(!isFinite(nx)) break;
+      if(Math.abs(nx-x) < 1e-6) { x=nx; return x*100; }
+      x = nx;
+      if(x < -0.9) x = -0.9;
+      if(x > 2.0) x = 2.0;
+    }
+
+    // Bisection in [-0.5, 1.5]
+    let lo=-0.5, hi=1.5;
+    function f(rate){
+      let s=0;
+      for(let i=0;i<cashflows.length;i++){
+        const t=i+1;
+        s += cashflows[i]/Math.pow(1+rate, t);
+      }
+      return s;
+    }
+    let flo=f(lo), fhi=f(hi);
+    if(!isFinite(flo) || !isFinite(fhi) || flo*fhi>0) return null;
+
+    for(let it=0; it<80; it++){
+      const mid = (lo+hi)/2;
+      const fm = f(mid);
+      if(Math.abs(fm) < 1e-6) return mid*100;
+      if(flo*fm <= 0){ hi=mid; fhi=fm; }
+      else { lo=mid; flo=fm; }
+    }
+    return ((lo+hi)/2)*100;
+  }
+
+  function recomputeRoiMetrics(){
+    const rate = parseFloat(document.getElementById("discountRate")?.value || "6") || 6;
+    const nNo = npv(rate, cfNo);
+    const nWith = npv(rate, cfWith);
+    const iNo = irr(cfNo);
+    const iWith = irr(cfWith);
+
+    const npvNoEl = document.getElementById("npvNo");
+    const npvWithEl = document.getElementById("npvWith");
+    const irrNoEl = document.getElementById("irrNo");
+    const irrWithEl = document.getElementById("irrWith");
+
+    if(npvNoEl) npvNoEl.innerText = fmtWon(nNo);
+    if(npvWithEl) npvWithEl.innerText = fmtWon(nWith);
+    if(irrNoEl) irrNoEl.innerText = (iNo===null ? "확인 필요" : (iNo.toFixed(2) + " %"));
+    if(irrWithEl) irrWithEl.innerText = (iWith===null ? "확인 필요" : (iWith.toFixed(2) + " %"));
+  }
+
+  document.getElementById("recalcRoi")?.addEventListener("click", (e)=>{ e.preventDefault(); recomputeRoiMetrics(); });
+  recomputeRoiMetrics();
+
   makeBar('cfChartNoLand', cfNo);
   makeBar('cfChartWithLand', cfWith);
 </script>
@@ -779,6 +893,8 @@ def report():
 
     finance = _json_load(form.get("finance"))
     ai_analysis = _json_load(form.get("ai_analysis"))
+    solar_opt = _json_load(form.get("solar_opt"))
+    land_estimate = _json_load(form.get("land_estimate"))
     ai_score_raw = _json_load(form.get("ai_score"))
 
     # ai_score could be number or object
@@ -795,6 +911,8 @@ def report():
         "date": date,
         "finance": finance,
         "ai_analysis": ai_analysis,
+        "solar_opt": solar_opt,
+        "land_estimate": land_estimate,
         "ai_score": ai_score,
     }
 
@@ -804,12 +922,19 @@ def report():
         # Derived display fields (data-source-free estimates included)
     assumptions = (finance or {}).get("assumptions") or {}
     solar = {
-        "sun_hours": assumptions.get("sunHours"),
-        "azimuth_deg": assumptions.get("azimuthDeg"),
-        "tilt_deg": assumptions.get("tiltDeg"),
+        "sun_hours": (solar_opt or {}).get("sun_hours") if isinstance(solar_opt, dict) and (solar_opt or {}).get("sun_hours") is not None else assumptions.get("sunHours"),
+        "azimuth_deg": (solar_opt or {}).get("azimuth_deg") if isinstance(solar_opt, dict) and (solar_opt or {}).get("azimuth_deg") is not None else assumptions.get("azimuthDeg"),
+        "tilt_deg": (solar_opt or {}).get("tilt_deg") if isinstance(solar_opt, dict) and (solar_opt or {}).get("tilt_deg") is not None else assumptions.get("tiltDeg"),
         "ori_factor": assumptions.get("oriFactor"),
     }
-    land_price_won = ((finance or {}).get("roi25y") or {}).get("land_price_won")
+    land_price_won = None
+    try:
+        if isinstance(land_estimate, dict) and land_estimate.get("land_price_won") is not None:
+            land_price_won = land_estimate.get("land_price_won")
+        else:
+            land_price_won = ((finance or {}).get("roi25y") or {}).get("land_price_won")
+    except Exception:
+        land_price_won = ((finance or {}).get("roi25y") or {}).get("land_price_won")
     land_price = _format_won(land_price_won) if land_price_won is not None else "확인 필요"
 
     return render_template_string(
@@ -820,6 +945,8 @@ def report():
         date=date,
         finance=finance or {},
         ai_analysis=ai_analysis or {},
+        solar_opt=solar_opt or {},
+        land_estimate=land_estimate or {},
         ai_score=ai_score,
         payload_json=payload_json,
         solar=solar,
@@ -876,6 +1003,28 @@ def build_pdf_bytes(payload: dict) -> bytes:
     line(f"Payback: {pb if pb else '> 25'} years", size=10, dy=10*mm)
 
     line(f"AI Attractiveness Score: {ai_score}", bold=True, dy=8*mm)
+    # NPV (discount 6%) for both cases (simple)
+    def _npv(rate, cashflows):
+        try:
+            r = rate
+            v = 0.0
+            for i, cf in enumerate(cashflows, start=1):
+                v += float(cf) / ((1+r) ** i)
+            return v
+        except Exception:
+            return None
+
+    roi = finance.get("roi25y") if isinstance(finance, dict) else {}
+    cf_no = (roi.get("cashflows_no_land") or []) if isinstance(roi, dict) else []
+    cf_with = (roi.get("cashflows_with_land") or []) if isinstance(roi, dict) else []
+    disc = 0.06
+    npv_no = _npv(disc, cf_no) if cf_no else None
+    npv_with = _npv(disc, cf_with) if cf_with else None
+
+    line("NPV (discount 6%)", bold=True, dy=8*mm)
+    line(f"No-land: {_format_won(npv_no) if npv_no is not None else '확인 필요'}", size=10)
+    line(f"With-land: {_format_won(npv_with) if npv_with is not None else '확인 필요'}", size=10, dy=10*mm)
+
     checks = (ai.get("checks") or [])
     if checks:
         line("8 Critical Checks:", bold=True, dy=8*mm)
