@@ -10,7 +10,7 @@ from io import BytesIO
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-from flask import Flask, request, jsonify, make_response, render_template_string, send_file
+from flask import Flask, request, jsonify, make_response, render_template_string, render_template, send_file
 from flask_cors import CORS
 
 # PDF (F-22)
