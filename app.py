@@ -56,6 +56,9 @@ def _preflight_ok():
 ADMIN_API_KEY = (os.getenv("ADMIN_API_KEY") or "").strip()
 DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
 
+# Flask / session signing secret (required for admin session)
+SECRET_KEY = (os.getenv("SECRET_KEY") or "").strip()
+
 PUBLIC_VWORLD_KEY = (os.getenv("VWORLD_KEY") or "").strip()
 PUBLIC_KEPCO_KEY = (os.getenv("KEPCO_KEY") or "").strip()
 GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
@@ -381,14 +384,14 @@ def _check_admin_key(raw_key: str) -> bool:
     return _sha256_hex(_get_admin_secret() + raw_key) == key_hash
 
 def sign_admin_session() -> str:
-    """Returns a signed token string."""
-    secret = _get_admin_secret()
+    """Returns a signed token string (HMAC with SECRET_KEY)."""
+    if not SECRET_KEY:
+        raise RuntimeError("SECRET_KEY not set")
     now = int(datetime.now(timezone.utc).timestamp())
-    # 7 days
-    exp = now + 7 * 24 * 3600
+    exp = now + 7 * 24 * 3600  # 7 days
     payload = {"iat": now, "exp": exp}
     body = _b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
-    sig = _b64url(hmac.new(secret.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).digest())
+    sig = _b64url(hmac.new(SECRET_KEY.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).digest())
     return f"{body}.{sig}"
 
 def verify_admin_session(token: str) -> bool:
@@ -449,39 +452,29 @@ def clear_admin_cookie(resp):
 @app.route("/api/auth/whoami", methods=["GET"])
 @app.route("/api/admin/status", methods=["GET"])  # admin.html 호환
 def whoami():
-    # 상태 체크용: 항상 200을 목표로 (DB 문제도 JSON으로 리턴)
-    try:
-        needs_setup = (_get_admin_key_hash() is None)
-        is_admin = require_admin()
-        return json_ok(
-            ts=now_utc().isoformat(),
-            admin_enabled=True,
-            admin_needs_setup=needs_setup,
-            is_admin=is_admin,
-            diag=db_diag(),
-        )
-    except Exception as e:
-        # DB가 아직 준비 안 된 경우 등
-        return json_ok(
-            ts=now_utc().isoformat(),
-            admin_enabled=True,
-            admin_needs_setup=True,
-            is_admin=False,
-            diag={"ok": False, "error": repr(e), **db_diag()},
-        )
+    # 상태 체크용 (admin 인증은 ENV 기반). DB 상태는 diag로만 확인.
+    return json_ok(
+        ts=now_utc().isoformat(),
+        admin_enabled=True,
+        is_admin=require_admin(),
+        diag=db_diag(),
+    )
 
 @app.route("/api/admin/login", methods=["POST"])
 def admin_login():
     """
-    Admin login:
-    - 최초 1회: 입력된 admin_key를 DB에 해시로 저장(바인딩)
-    - 이후: 같은 admin_key로만 인증 가능
-    - 성공 시: JSON 응답 + HttpOnly 쿠키 세팅(스토리지 차단 대응)
+    Admin login (ENV only):
+    - 입력한 admin_key == ADMIN_API_KEY 이면 로그인 성공
+    - DB 바인딩/등록 없이, 어떤 PC/브라우저에서도 동일 키로 로그인 가능
     """
     data = request.get_json(silent=True) or {}
     k = (data.get("admin_key") or "").strip()
-    if not _check_admin_key(k):
-        # 아직 키가 등록되지 않았고 빈 값이면 그냥 실패 처리
+
+    env_key = (os.getenv("ADMIN_API_KEY") or "").strip()
+    if not env_key:
+        return json_bad("ADMIN_API_KEY not set", 500)
+
+    if k != env_key:
         return json_bad("invalid credential", 401)
 
     token = sign_admin_session()
