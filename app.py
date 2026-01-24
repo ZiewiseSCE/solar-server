@@ -865,6 +865,50 @@ def report_pdf():
 
 
 # ------------------------------------------------------------
+# F-25/26: Infra layer APIs (연동 준비 상태)
+#  - 실제 한전/기설치 데이터 소스 확정 시 이 엔드포인트 내부만 교체하면 프론트가 그대로 동작
+# ------------------------------------------------------------
+@app.route("/api/infra/kepco", methods=["GET"])
+def infra_kepco():
+    """
+    Query params:
+      bbox = "minLng,minLat,maxLng,maxLat"
+      z    = zoom level
+    Returns:
+      items: substations [{id,name,lat,lng,remaining_mw,available_year,status}]
+      lines: lines       [{id,coords:[[lat,lng],[lat,lng],...],remaining_mw,available_year,status}]
+    """
+    bbox = (request.args.get("bbox") or "").strip()
+    z = int(request.args.get("z") or 0)
+    # 데이터 소스 미확정: 구조만 제공
+    return json_ok(
+        bbox=bbox,
+        z=z,
+        items=[],
+        lines=[],
+        note="KEPCO 데이터 소스/키/스키마 미확정: 현재는 구조만 제공(확인 필요)"
+    )
+
+@app.route("/api/infra/existing", methods=["GET"])
+def infra_existing():
+    """
+    Query params:
+      bbox = "minLng,minLat,maxLng,maxLat"
+      z    = zoom level
+    Returns:
+      items: existing plants [{id,lat,lng,capacity_kw,status}]
+    """
+    bbox = (request.args.get("bbox") or "").strip()
+    z = int(request.args.get("z") or 0)
+    # 데이터 소스 미확정: 구조만 제공
+    return json_ok(
+        bbox=bbox,
+        z=z,
+        items=[],
+        note="기 설치 태양광 위치 데이터(GeoJSON/DB) 미확정: 현재는 구조만 제공(확인 필요)"
+    )
+
+# ------------------------------------------------------------
 # Global exception handler (500에서도 원인 JSON으로 반환)
 # ------------------------------------------------------------
 @app.errorhandler(Exception)
