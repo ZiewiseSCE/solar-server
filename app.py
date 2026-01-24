@@ -142,20 +142,32 @@ def init_db_with_retry(max_wait_sec: int = 30, sleep_sec: float = 2.0) -> bool:
 def ensure_license_schema():
     """
     기존 운영 DB에서 licenses 테이블이 이미 존재하는 경우,
-    CREATE TABLE IF NOT EXISTS로는 컬럼이 추가되지 않으므로 컬럼을 보강한다.
-    (reset/bind/list 등에서 필요한 컬럼들)
+    CREATE TABLE IF NOT EXISTS로는 컬럼이 추가되지 않으므로 컬럼/제약을 보강한다.
+    - 운영 중 이미 만들어진 스키마가 NOT NULL 제약을 갖고 있을 수 있어 reset 시 NULL 저장이 실패할 수 있음.
     """
     conn = get_conn()
     try:
         cur = conn.cursor()
-        # base table might already exist; add columns if missing
+        # columns (idempotent)
         cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS registered   BOOLEAN NOT NULL DEFAULT FALSE;")
         cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS bound_fp     TEXT NULL;")
         cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS bound_at     TIMESTAMPTZ NULL;")
         cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NULL;")
+
+        # constraints: drop NOT NULL if legacy schema had it (idempotent-ish via try/except)
+        for col in ("bound_fp", "bound_at", "last_seen_at"):
+            try:
+                cur.execute(f"ALTER TABLE licenses ALTER COLUMN {col} DROP NOT NULL;")
+            except Exception:
+                conn.rollback()
+                # ignore if column missing or already nullable or permissions issues
+                conn.autocommit = True
+                conn.autocommit = False
+
         conn.commit()
     finally:
         conn.close()
+
 
 def db_diag():
     try:
@@ -198,22 +210,42 @@ def reset_license(token: str) -> int:
     conn = get_conn()
     try:
         cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE licenses
-               SET registered=FALSE,
-                   bound_fp=NULL,
-                   bound_at=NULL,
-                   last_seen_at=NULL
-             WHERE token=%s
-            """,
-            (token,),
-        )
-        n = cur.rowcount
-        conn.commit()
-        return n
+        try:
+            cur.execute(
+                """
+                UPDATE licenses
+                   SET registered=FALSE,
+                       bound_fp=NULL,
+                       bound_at=NULL,
+                       last_seen_at=NULL
+                 WHERE token=%s
+                """,
+                (token,),
+            )
+            n = cur.rowcount
+            conn.commit()
+            return n
+        except psycopg2.errors.NotNullViolation:
+            # legacy schema: bound_fp may be NOT NULL. fallback to empty string.
+            conn.rollback()
+            cur.execute(
+                """
+                UPDATE licenses
+                   SET registered=FALSE,
+                       bound_fp='',
+                       bound_at=NULL,
+                       last_seen_at=NULL
+                 WHERE token=%s
+                """,
+                (token,),
+            )
+            n = cur.rowcount
+            conn.commit()
+            return n
     finally:
         conn.close()
+
+
 
 def extend_license(token: str, new_expires_at: datetime) -> int:
     conn = get_conn()
@@ -570,57 +602,45 @@ def admin_license_create():
 
 @app.route("/api/admin/license/delete", methods=["POST"])
 def admin_license_delete():
-    try:
-        if not require_admin():
-            return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
+    if not require_admin():
+        return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
 
-        data = request.get_json(silent=True) or {}
-        token = (data.get("token") or "").strip()
-        if not token:
-            return json_bad("token required", 400)
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    if not token:
+        return json_bad("token required", 400)
 
-        n = delete_license(token)
-        return json_ok(deleted=(n > 0))
+    n = delete_license(token)
+    return json_ok(deleted=(n > 0))
 
-
-    except Exception as e:
-        return json_bad("internal error", 500, error=repr(e), diag=db_diag())
 @app.route("/api/admin/license/reset", methods=["POST"])
 def admin_license_reset():
-    try:
-        if not require_admin():
-            return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
+    if not require_admin():
+        return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
 
-        data = request.get_json(silent=True) or {}
-        token = (data.get("token") or "").strip()
-        if not token:
-            return json_bad("token required", 400)
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    if not token:
+        return json_bad("token required", 400)
 
-        n = reset_license(token)
-        return json_ok(reset=(n > 0))
+    n = reset_license(token)
+    return json_ok(reset=(n > 0))
 
-
-    except Exception as e:
-        return json_bad("internal error", 500, error=repr(e), diag=db_diag())
 @app.route("/api/admin/license/extend", methods=["POST"])
 def admin_license_extend():
-    try:
-        if not require_admin():
-            return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
+    if not require_admin():
+        return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
 
-        data = request.get_json(silent=True) or {}
-        token = (data.get("token") or "").strip()
-        days = int(data.get("days") or 30)
-        if not token:
-            return json_bad("token required", 400)
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    days = int(data.get("days") or 30)
+    if not token:
+        return json_bad("token required", 400)
 
-        new_expiry = now_utc() + timedelta(days=days)
-        n = extend_license(token, new_expiry)
-        return json_ok(extended=(n > 0), expires_at=new_expiry.isoformat())
+    new_expiry = now_utc() + timedelta(days=days)
+    n = extend_license(token, new_expiry)
+    return json_ok(extended=(n > 0), expires_at=new_expiry.isoformat())
 
-
-    except Exception as e:
-        return json_bad("internal error", 500, error=repr(e), diag=db_diag())
 @app.route("/api/license/check", methods=["POST"])
 def license_check():
     """
