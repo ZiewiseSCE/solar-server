@@ -570,45 +570,57 @@ def admin_license_create():
 
 @app.route("/api/admin/license/delete", methods=["POST"])
 def admin_license_delete():
-    if not require_admin():
-        return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
+    try:
+        if not require_admin():
+            return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
 
-    data = request.get_json(silent=True) or {}
-    token = (data.get("token") or "").strip()
-    if not token:
-        return json_bad("token required", 400)
+        data = request.get_json(silent=True) or {}
+        token = (data.get("token") or "").strip()
+        if not token:
+            return json_bad("token required", 400)
 
-    n = delete_license(token)
-    return json_ok(deleted=(n > 0))
+        n = delete_license(token)
+        return json_ok(deleted=(n > 0))
 
+
+    except Exception as e:
+        return json_bad("internal error", 500, error=repr(e), diag=db_diag())
 @app.route("/api/admin/license/reset", methods=["POST"])
 def admin_license_reset():
-    if not require_admin():
-        return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
+    try:
+        if not require_admin():
+            return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
 
-    data = request.get_json(silent=True) or {}
-    token = (data.get("token") or "").strip()
-    if not token:
-        return json_bad("token required", 400)
+        data = request.get_json(silent=True) or {}
+        token = (data.get("token") or "").strip()
+        if not token:
+            return json_bad("token required", 400)
 
-    n = reset_license(token)
-    return json_ok(reset=(n > 0))
+        n = reset_license(token)
+        return json_ok(reset=(n > 0))
 
+
+    except Exception as e:
+        return json_bad("internal error", 500, error=repr(e), diag=db_diag())
 @app.route("/api/admin/license/extend", methods=["POST"])
 def admin_license_extend():
-    if not require_admin():
-        return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
+    try:
+        if not require_admin():
+            return json_bad("unauthorized", 401, auth=_admin_auth_debug(), diag=db_diag())
 
-    data = request.get_json(silent=True) or {}
-    token = (data.get("token") or "").strip()
-    days = int(data.get("days") or 30)
-    if not token:
-        return json_bad("token required", 400)
+        data = request.get_json(silent=True) or {}
+        token = (data.get("token") or "").strip()
+        days = int(data.get("days") or 30)
+        if not token:
+            return json_bad("token required", 400)
 
-    new_expiry = now_utc() + timedelta(days=days)
-    n = extend_license(token, new_expiry)
-    return json_ok(extended=(n > 0), expires_at=new_expiry.isoformat())
+        new_expiry = now_utc() + timedelta(days=days)
+        n = extend_license(token, new_expiry)
+        return json_ok(extended=(n > 0), expires_at=new_expiry.isoformat())
 
+
+    except Exception as e:
+        return json_bad("internal error", 500, error=repr(e), diag=db_diag())
 @app.route("/api/license/check", methods=["POST"])
 def license_check():
     """
