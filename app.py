@@ -84,6 +84,190 @@ def get_conn():
 
 
 # ------------------------------------------------------------
+# DB init / diagnostics / license key storage
+# ------------------------------------------------------------
+
+def init_db():
+    """Create required tables if missing."""
+    conn = get_conn()
+    try:
+        # admin_state
+        _ensure_admin_state(conn)
+
+        # licenses
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS licenses (
+                token        TEXT PRIMARY KEY,
+                note         TEXT NULL,
+                created_at   TIMESTAMPTZ NOT NULL,
+                expires_at   TIMESTAMPTZ NOT NULL,
+                registered   BOOLEAN NOT NULL DEFAULT FALSE,
+                bound_fp     TEXT NULL,
+                bound_at     TIMESTAMPTZ NULL,
+                last_seen_at TIMESTAMPTZ NULL
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+def init_db_with_retry(max_wait_sec: int = 30, sleep_sec: float = 2.0) -> bool:
+    """
+    Cloudtype/컨테이너 환경에서 DB가 늦게 뜨는 경우가 있어 재시도.
+    실패해도 프로세스는 계속 살아있게 해 부팅 실패를 방지한다.
+    """
+    start = time.time()
+    last_err = None
+    while time.time() - start < max_wait_sec:
+        try:
+            init_db()
+            print("[BOOT] init_db OK")
+            return True
+        except Exception as e:
+            last_err = e
+            print("[BOOT] init_db retry...", repr(e))
+            time.sleep(sleep_sec)
+    print("[BOOT] init_db FAILED but continue:", repr(last_err))
+    return False
+
+def db_diag():
+    try:
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+            return {"ok": True}
+        finally:
+            conn.close()
+    except Exception as e:
+        return {"ok": False, "error": repr(e)}
+
+def insert_license(token: str, note: str, created_at: datetime, expires_at: datetime):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO licenses (token, note, created_at, expires_at) VALUES (%s,%s,%s,%s)",
+            (token, note or None, created_at, expires_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+def delete_license(token: str) -> int:
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM licenses WHERE token=%s", (token,))
+        n = cur.rowcount
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+def reset_license(token: str) -> int:
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE licenses
+               SET registered=FALSE,
+                   bound_fp=NULL,
+                   bound_at=NULL,
+                   last_seen_at=NULL
+             WHERE token=%s
+            """,
+            (token,),
+        )
+        n = cur.rowcount
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+def extend_license(token: str, new_expires_at: datetime) -> int:
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE licenses SET expires_at=%s WHERE token=%s",
+            (new_expires_at, token),
+        )
+        n = cur.rowcount
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+def find_license(token: str):
+    conn = get_conn()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM licenses WHERE token=%s", (token,))
+        return cur.fetchone()
+    finally:
+        conn.close()
+
+def bind_license(token: str, fingerprint: str) -> int:
+    """
+    - 미등록이면 등록(바인딩)
+    - 이미 등록 + 같은 fingerprint면 last_seen 갱신만
+    """
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE licenses
+               SET registered=TRUE,
+                   bound_fp=COALESCE(bound_fp, %s),
+                   bound_at=COALESCE(bound_at, NOW()),
+                   last_seen_at=NOW()
+             WHERE token=%s
+            """,
+            (fingerprint, token),
+        )
+        n = cur.rowcount
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+def touch_license(token: str) -> int:
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE licenses SET last_seen_at=NOW() WHERE token=%s", (token,))
+        n = cur.rowcount
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+def get_all_licenses():
+    conn = get_conn()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT token, note, created_at, expires_at,
+                   registered, bound_fp, bound_at, last_seen_at
+              FROM licenses
+             ORDER BY created_at DESC
+        """)
+        rows = cur.fetchall() or []
+        # datetime -> iso string for JSON friendliness
+        for r in rows:
+            for k in ["created_at", "expires_at", "bound_at", "last_seen_at"]:
+                if r.get(k) is not None:
+                    r[k] = r[k].isoformat()
+        return rows
+    finally:
+        conn.close()
+
+# ------------------------------------------------------------
 # JSON helpers
 # ------------------------------------------------------------
 def json_ok(**kwargs):
@@ -352,6 +536,54 @@ def admin_license_extend():
     new_expiry = now_utc() + timedelta(days=days)
     n = extend_license(token, new_expiry)
     return json_ok(extended=(n > 0), expires_at=new_expiry.isoformat())
+
+@app.route("/api/license/check", methods=["POST"])
+def license_check():
+    """
+    바인딩(등록) 없이 상태만 확인.
+    - token 유효 여부 / 만료 여부
+    - registered 여부
+    - fingerprint가 제공되면 bound_fp와 일치하는지(bound_to_me)만 판단
+    """
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    fp = (data.get("fingerprint") or "").strip()
+
+    if not token:
+        return json_bad("token required", 400)
+
+    row = find_license(token)
+    if not row:
+        return json_bad("invalid token", 404)
+
+    # 만료 체크
+    expires_at = row.get("expires_at")
+    try:
+        # row from psycopg2 RealDictCursor returns datetime
+        is_expired = bool(expires_at and expires_at < now_utc())
+        expires_iso = expires_at.isoformat() if expires_at else None
+    except Exception:
+        is_expired = False
+        expires_iso = str(expires_at)
+
+    registered = bool(row.get("registered"))
+    bound_fp = (row.get("bound_fp") or "")
+    bound_to_me = bool(fp and registered and bound_fp == fp)
+
+    # 조회만이지만 운영 편의상 last_seen 갱신(원치 않으면 제거 가능)
+    try:
+        touch_license(token)
+    except Exception:
+        pass
+
+    return json_ok(
+        token=token,
+        expires_at=expires_iso,
+        expired=is_expired,
+        registered=registered,
+        bound_to_me=bound_to_me,
+    )
+
 
 @app.route("/api/license/activate", methods=["POST"])
 def license_activate():
@@ -847,7 +1079,7 @@ def handle_any_exception(e):
 # ------------------------------------------------------------
 # Ensure DB table exists under gunicorn too
 # ------------------------------------------------------------
-init_db()
+init_db_with_retry()
 
 
 # ------------------------------------------------------------
