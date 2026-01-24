@@ -98,368 +98,197 @@ def json_bad(msg, code=400, **kwargs):
 
 
 # ------------------------------------------------------------
-# base64url + HMAC admin session
-# ------------------------------------------------------------
-def _b64url(b: bytes) -> str:
-    return base64.urlsafe_b64encode(b).decode("utf-8").rstrip("=")
 
-def _b64urldecode(s: str) -> bytes:
-    pad = "=" * (-len(s) % 4)
-    return base64.urlsafe_b64decode((s + pad).encode("utf-8"))
+# base64url + HMAC admin session (DB-backed, cookie-friendly)
+# ------------------------------------------------------------
+# 목표:
+# - ADMIN_API_KEY(ENV)에 의존하지 않고 DB(PostgreSQL)에 등록된 관리자 키로 인증
+# - 한 번 로그인하면 HttpOnly 쿠키로 세션 유지(브라우저 스토리지 차단 이슈 대응)
+# - 최초 1회만 "관리자 키 등록(바인딩)" 후, 이후에는 같은 키로만 로그인 가능(재등록/변경 방지)
+
+_ADMIN_COOKIE_NAME = "sp_admin"
+_ADMIN_CACHE = {"loaded_at": 0.0, "secret": None, "key_hash": None}
+
+def _sha256_hex(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+def _ensure_admin_state(conn):
+    """Create admin_state row if missing and cache it."""
+    conn.cursor().execute("""
+        CREATE TABLE IF NOT EXISTS admin_state (
+            id              INTEGER PRIMARY KEY,
+            secret          TEXT NOT NULL,
+            admin_key_hash  TEXT NULL,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    """)
+    conn.commit()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id, secret, admin_key_hash FROM admin_state WHERE id=1")
+    row = cur.fetchone()
+    if not row:
+        secret = secrets.token_hex(32)
+        cur2 = conn.cursor()
+        cur2.execute(
+            "INSERT INTO admin_state (id, secret, admin_key_hash) VALUES (1, %s, NULL)",
+            (secret,),
+        )
+        conn.commit()
+        row = {"id": 1, "secret": secret, "admin_key_hash": None}
+    return row
+
+def _load_admin_cache(force: bool = False):
+    import time
+    now = time.time()
+    if (not force) and _ADMIN_CACHE["secret"] and (now - _ADMIN_CACHE["loaded_at"] < 10):
+        return
+    conn = get_conn()
+    try:
+        row = _ensure_admin_state(conn)
+        _ADMIN_CACHE["secret"] = row["secret"]
+        _ADMIN_CACHE["key_hash"] = row.get("admin_key_hash")
+        _ADMIN_CACHE["loaded_at"] = now
+    finally:
+        conn.close()
+
+def _get_admin_secret() -> str:
+    _load_admin_cache()
+    return _ADMIN_CACHE["secret"]
+
+def _get_admin_key_hash():
+    _load_admin_cache()
+    return _ADMIN_CACHE["key_hash"]
+
+def _set_admin_key_if_empty(raw_key: str) -> bool:
+    """If DB has no admin_key_hash, set it. Returns True if set, False otherwise."""
+    _load_admin_cache()
+    if _ADMIN_CACHE["key_hash"]:
+        return False
+    conn = get_conn()
+    try:
+        row = _ensure_admin_state(conn)
+        if row.get("admin_key_hash"):
+            return False
+        secret = row["secret"]
+        key_hash = _sha256_hex(secret + raw_key.strip())
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE admin_state SET admin_key_hash=%s, updated_at=NOW() WHERE id=1 AND admin_key_hash IS NULL",
+            (key_hash,),
+        )
+        conn.commit()
+        _load_admin_cache(force=True)
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
+def _check_admin_key(raw_key: str) -> bool:
+    raw_key = (raw_key or "").strip()
+    if not raw_key:
+        return False
+    # 최초 1회 등록 허용
+    if _get_admin_key_hash() is None:
+        _set_admin_key_if_empty(raw_key)
+    key_hash = _get_admin_key_hash()
+    if not key_hash:
+        return False
+    return _sha256_hex(_get_admin_secret() + raw_key) == key_hash
 
 def sign_admin_session() -> str:
-    if not ADMIN_API_KEY:
-        raise RuntimeError("ADMIN_API_KEY not set")
-    ts = int(now_utc().timestamp())
-    nonce = secrets.token_hex(16)
-    payload = f"{ts}.{nonce}".encode("utf-8")
-    sig = hmac.new(ADMIN_API_KEY.encode("utf-8"), payload, hashlib.sha256).digest()
-    return f"{_b64url(payload)}.{_b64url(sig)}"
+    """Returns a signed token string."""
+    secret = _get_admin_secret()
+    now = int(datetime.now(timezone.utc).timestamp())
+    # 7 days
+    exp = now + 7 * 24 * 3600
+    payload = {"iat": now, "exp": exp}
+    body = _b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    sig = _b64url(hmac.new(secret.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).digest())
+    return f"{body}.{sig}"
 
 def verify_admin_session(token: str) -> bool:
-    if not ADMIN_API_KEY:
-        return False
     try:
-        p_b64, s_b64 = token.split(".", 1)
-        payload = _b64urldecode(p_b64)
-        sig = _b64urldecode(s_b64)
-
-        expected = hmac.new(
-            ADMIN_API_KEY.encode("utf-8"),
-            payload,
-            hashlib.sha256
-        ).digest()
-
-        if not hmac.compare_digest(sig, expected):
+        if not token or "." not in token:
             return False
-
-        ts_s, _nonce = payload.decode("utf-8").split(".", 1)
-        ts = int(ts_s)
-        return (now_utc().timestamp() - ts) <= (7 * 24 * 3600)
+        body, sig = token.split(".", 1)
+        secret = _get_admin_secret()
+        expected = _b64url(hmac.new(secret.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).digest())
+        if not hmac.compare_digest(expected, sig):
+            return False
+        payload = json.loads(_b64urldecode(body).decode("utf-8"))
+        now = int(datetime.now(timezone.utc).timestamp())
+        return now <= int(payload.get("exp", 0))
     except Exception:
         return False
 
-def require_admin() -> bool:
-    auth = (request.headers.get("Authorization") or "").strip()
+def _get_admin_token_from_request():
+    # 1) Bearer
+    auth = request.headers.get("Authorization", "")
     if auth.lower().startswith("bearer "):
-        token = auth.split(" ", 1)[1].strip()
-        return verify_admin_session(token)
-    return False
+        return auth.split(" ", 1)[1].strip()
+    # 2) Cookie (preferred)
+    ck = request.cookies.get(_ADMIN_COOKIE_NAME)
+    if ck:
+        return ck
+    return None
 
+def require_admin():
+    token = _get_admin_token_from_request()
+    if not token or not verify_admin_session(token):
+        return False
+    return True
 
-# ------------------------------------------------------------
-# Cookies (F-24)
-# ------------------------------------------------------------
-def _is_https_request() -> bool:
-    # Works behind reverse-proxy if it sets X-Forwarded-Proto
-    if request.is_secure:
-        return True
-    xf = (request.headers.get("X-Forwarded-Proto") or "").lower()
-    return xf == "https"
-
-def set_cookie(resp, name: str, value: str, max_age_days: int = 30):
-    secure = False
-    if COOKIE_SECURE == "true":
+def set_admin_cookie(resp, token: str):
+    # cross-site 사용을 고려: SameSite=None + Secure 권장(Cloudtype는 https)
+    secure = True if COOKIE_SECURE in ("auto", "true", True) else False
+    same_site = COOKIE_SAMESITE  # "Lax" / "Strict" / "None"
+    # SameSite=None 이면 Secure 필수 (브라우저 정책)
+    if str(same_site).lower() == "none":
         secure = True
-    elif COOKIE_SECURE == "false":
-        secure = False
-    else:
-        secure = _is_https_request()
-
-    samesite = COOKIE_SAMESITE
-    if samesite not in ("Lax", "Strict", "None"):
-        samesite = "Lax"
-
     resp.set_cookie(
-        name,
-        value,
-        max_age=max_age_days * 24 * 3600,
+        _ADMIN_COOKIE_NAME,
+        token,
         httponly=True,
         secure=secure,
-        samesite=samesite
+        samesite=same_site,
+        max_age=7 * 24 * 3600,
+        path="/",
     )
+    return resp
+
+def clear_admin_cookie(resp):
+    resp.set_cookie(_ADMIN_COOKIE_NAME, "", expires=0, path="/")
+    return resp
 
 
-# ------------------------------------------------------------
-# DB: init + CRUD (public schema forced)
-# ------------------------------------------------------------
-def init_db():
-    # public 스키마에 고정 (schema 혼선 제거)
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("CREATE SCHEMA IF NOT EXISTS public;")
-            cur.execute("SET search_path TO public;")
-
-            # 테이블 생성
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS public.licenses (
-                    token TEXT PRIMARY KEY,
-                    note TEXT,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    expires_at TIMESTAMPTZ NOT NULL,
-                    bound_at TIMESTAMPTZ,
-                    bound_fp TEXT,
-                    registered BOOLEAN NOT NULL DEFAULT FALSE
-                )
-            """)
-
-            # 혹시 예전 잘못된 스키마였던 경우를 위해 컬럼 보정(안전)
-            cur.execute("ALTER TABLE public.licenses ADD COLUMN IF NOT EXISTS note TEXT")
-            cur.execute("ALTER TABLE public.licenses ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ")
-            cur.execute("ALTER TABLE public.licenses ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ")
-            cur.execute("ALTER TABLE public.licenses ADD COLUMN IF NOT EXISTS bound_at TIMESTAMPTZ")
-            cur.execute("ALTER TABLE public.licenses ADD COLUMN IF NOT EXISTS bound_fp TEXT")
-            cur.execute("ALTER TABLE public.licenses ADD COLUMN IF NOT EXISTS registered BOOLEAN DEFAULT FALSE")
-
-            # NULL 값 있으면 채우기(기존 row가 있었다면)
-            cur.execute("UPDATE public.licenses SET created_at = COALESCE(created_at, NOW()) WHERE created_at IS NULL")
-            cur.execute("UPDATE public.licenses SET expires_at = COALESCE(expires_at, NOW() + INTERVAL '30 days') WHERE expires_at IS NULL")
-            cur.execute("UPDATE public.licenses SET registered = COALESCE(registered, FALSE) WHERE registered IS NULL")
-
-            # NOT NULL 강제
-            cur.execute("ALTER TABLE public.licenses ALTER COLUMN created_at SET NOT NULL")
-            cur.execute("ALTER TABLE public.licenses ALTER COLUMN expires_at SET NOT NULL")
-
-            conn.commit()
-
-def db_diag():
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SET search_path TO public;")
-            cur.execute("SELECT current_database()")
-            dbname = cur.fetchone()[0]
-            cur.execute("SELECT inet_server_addr()::text, inet_server_port()")
-            host, port = cur.fetchone()
-
-            cur.execute("SELECT to_regclass('public.licenses') IS NOT NULL")
-            table_exists = bool(cur.fetchone()[0])
-            cnt = None
-            if table_exists:
-                cur.execute("SELECT COUNT(*) FROM public.licenses")
-                cnt = int(cur.fetchone()[0])
-
-            return {
-                "db_ok": True,
-                "current_database": dbname,
-                "server_addr": host,
-                "server_port": port,
-                "licenses_table_exists": table_exists,
-                "licenses_count": cnt,
-            }
-
-def get_all_licenses():
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SET search_path TO public;")
-            cur.execute("SELECT * FROM public.licenses ORDER BY created_at DESC")
-            return cur.fetchall()
-
-def insert_license(token: str, note: str, created_at, expires_at):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SET search_path TO public;")
-            cur.execute("""
-                INSERT INTO public.licenses (token, note, created_at, expires_at, registered)
-                VALUES (%s, %s, %s, %s, FALSE)
-            """, (token, note, created_at, expires_at))
-            conn.commit()
-
-def delete_license(token: str) -> int:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SET search_path TO public;")
-            cur.execute("DELETE FROM public.licenses WHERE token=%s", (token,))
-            conn.commit()
-            return cur.rowcount
-
-def reset_license(token: str) -> int:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SET search_path TO public;")
-            cur.execute("""
-                UPDATE public.licenses
-                SET bound_fp=NULL, bound_at=NULL, registered=FALSE
-                WHERE token=%s
-            """, (token,))
-            conn.commit()
-            return cur.rowcount
-
-def extend_license(token: str, new_expiry) -> int:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SET search_path TO public;")
-            cur.execute("""
-                UPDATE public.licenses
-                SET expires_at=%s
-                WHERE token=%s
-            """, (new_expiry, token))
-            conn.commit()
-            return cur.rowcount
-
-def find_license(token: str):
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SET search_path TO public;")
-            cur.execute("SELECT * FROM public.licenses WHERE token=%s", (token,))
-            return cur.fetchone()
-
-def bind_license(token: str, fingerprint: str):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SET search_path TO public;")
-            cur.execute("""
-                UPDATE public.licenses
-                SET bound_fp=%s, bound_at=%s, registered=TRUE
-                WHERE token=%s
-            """, (fingerprint, now_utc(), token))
-            conn.commit()
-            return cur.rowcount
-
-
-# ------------------------------------------------------------
-# Finance (F-17) - PF equal payment
-# ------------------------------------------------------------
-def pf_equal_payment(principal: float, annual_rate_pct: float, years: int):
-    principal = float(principal or 0)
-    years = int(years or 0)
-    annual_rate_pct = float(annual_rate_pct or 0)
-    if principal <= 0 or years <= 0:
-        return {
-            "monthly_payment": 0,
-            "total_interest": 0,
-            "total_payment": 0
-        }
-
-    r = (annual_rate_pct / 100.0) / 12.0
-    n = years * 12
-    if r <= 0:
-        monthly = principal / n
-        total_payment = principal
-        total_interest = 0.0
-    else:
-        monthly = principal * r * ((1 + r) ** n) / (((1 + r) ** n) - 1)
-        total_payment = monthly * n
-        total_interest = max(0.0, total_payment - principal)
-
-    return {
-        "monthly_payment": float(monthly),
-        "total_interest": float(total_interest),
-        "total_payment": float(total_payment)
-    }
-
-
-# ------------------------------------------------------------
-# AI analysis (F-15/16) - API-first 구조
-#   * 실제 외부 데이터 연동 전: "확인 필요" + 링크 구조를 보존
-# ------------------------------------------------------------
-def build_ai_checks(address: str, mode: str):
-    addr_q = (address or "").strip()
-    mode = (mode or "roof").strip().lower()
-    # 링크들은 "검색/바로가기" 용도로만 제공(실제 파라미터/키는 추후 확정)
-    return [
-        {
-            "category": "도시/자치 조례 확인(ELIS)",
-            "title": "도시/자치 조례 확인",
-            "result": "확인 필요",
-            "link": "https://www.elis.go.kr/",
-            "needs_confirm": True,
-        },
-        {
-            "category": "토지이음 용도지역/지구 확인",
-            "title": "토지이음 용도지역/지구",
-            "result": "확인 필요",
-            "link": "https://www.eum.go.kr/",
-            "needs_confirm": True,
-        },
-        {
-            "category": "상위법 규제(환경/농지 등) 확인(법제처)",
-            "title": "상위법 규제(환경/농지 등)",
-            "result": "확인 필요",
-            "link": "https://www.law.go.kr/",
-            "needs_confirm": True,
-        },
-        {
-            "category": "자연·생태 등급(환경공간정보서비스)",
-            "title": "자연·생태 등급",
-            "result": "확인 필요",
-            "link": "https://egis.me.go.kr/",
-            "needs_confirm": True,
-        },
-        {
-            "category": "문화재/국가유산 규제(공간정보)",
-            "title": "문화재/국가유산 규제",
-            "result": "확인 필요",
-            "link": "https://www.gis.go.kr/",
-            "needs_confirm": True,
-        },
-        {
-            "category": "국토환경성평가지도(경사도/환경)",
-            "title": "국토환경성평가지도",
-            "result": "정확도 확인필요",
-            "link": "https://egis.me.go.kr/",
-            "needs_confirm": True,
-        },
-        {
-            "category": "소규모 환경영향평가 대상 여부",
-            "title": "소규모 환경영향평가",
-            "result": "면적/용도지역 기반 확인 필요",
-            "link": "https://www.me.go.kr/",
-            "needs_confirm": True,
-        },
-        {
-            "category": "한전 용량 확인(한전ON)",
-            "title": "한전 선로/변전소 용량",
-            "result": "확인 필요",
-            "link": "https://online.kepco.co.kr/",
-            "needs_confirm": True,
-            "extra": {"need_more_info": True}
-        },
-    ]
-
-
-def conservative_score(panel_count: int, checks: list):
-    # 0~100 보수적: 확인 필요/리스크가 많을수록 감점
-    base = 80
-    if panel_count <= 0:
-        base -= 40
-
-    risk = 0
-    for c in checks:
-        if c.get("needs_confirm"):
-            risk += 5
-        r = (c.get("result") or "")
-        if "정확도" in r or "확인" in r:
-            risk += 2
-    score = max(0, min(100, base - risk))
-    # confidence: 데이터가 확정된 항목이 적으면 낮게
-    confirmed = sum(1 for c in checks if not c.get("needs_confirm"))
-    conf = max(10, min(95, confirmed * 12))
-    return score, conf
-
-
-# ------------------------------------------------------------
-# Routes
-# ------------------------------------------------------------
 @app.route("/api/auth/whoami", methods=["GET"])
 def whoami():
     # admin.html 상태 체크용: 항상 200
     return json_ok(
         ts=now_utc().isoformat(),
-        admin_enabled=bool(ADMIN_API_KEY),
+        admin_enabled=True,
+        admin_needs_setup=(_get_admin_key_hash() is None),
         is_admin=require_admin()
     )
 
 @app.route("/api/admin/login", methods=["POST"])
 def admin_login():
-    if not ADMIN_API_KEY:
-        return json_bad("admin disabled (ADMIN_API_KEY not set)", 503)
-
+    """
+    Admin login:
+    - 최초 1회: 입력된 admin_key를 DB에 해시로 저장(바인딩)
+    - 이후: 같은 admin_key로만 인증 가능
+    - 성공 시: JSON 응답 + HttpOnly 쿠키 세팅(스토리지 차단 대응)
+    """
     data = request.get_json(silent=True) or {}
     k = (data.get("admin_key") or "").strip()
-    if k != ADMIN_API_KEY:
+    if not _check_admin_key(k):
+        # 아직 키가 등록되지 않았고 빈 값이면 그냥 실패 처리
         return json_bad("invalid credential", 401)
 
-    return json_ok(session_token=sign_admin_session())
+    token = sign_admin_session()
+    resp = make_response(jsonify({"ok": True, "session_token": token}))
+    return set_admin_cookie(resp, token)
+
 
 @app.route("/api/admin/licenses", methods=["GET"])
 def admin_licenses():
