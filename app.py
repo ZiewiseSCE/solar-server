@@ -56,6 +56,9 @@ PUBLIC_KEPCO_KEY = (os.getenv("KEPCO_KEY") or "").strip()
 GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 LAW_API_ID = (os.getenv("LAW_API_ID") or "").strip()
 
+# Optional land price heuristic (F-28) - won per pyeong (평 단가)
+LAND_UNIT_PRICE_WON_PER_PYEONG = float(os.getenv("LAND_UNIT_PRICE_WON_PER_PYEONG") or 0)
+
 # Cookie policy (F-24)
 COOKIE_SECURE = (os.getenv("COOKIE_SECURE") or "auto").strip().lower()  # auto|true|false
 COOKIE_SAMESITE = (os.getenv("COOKIE_SAMESITE") or "Lax").strip()       # Lax|Strict|None
@@ -670,7 +673,25 @@ REPORT_HTML = """
       <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
         <div class="bg-white rounded-lg border border-slate-200 p-4">
           <div class="font-bold text-sm mb-2">25년 현금흐름(토지비 제외)</div>
-          <canvas id="cfChart" height="160"></canvas>
+          <canvas id="cfChartNoLand" height="160"></canvas>
+        </div>
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <div class="font-bold text-sm mb-2">25년 현금흐름(토지비 포함)</div>
+          <div class="text-[10px] text-slate-500 mb-2">※ 토지가격 데이터가 없으면 제외/포함 차이가 없을 수 있습니다.</div>
+          <canvas id="cfChartWithLand" height="160"></canvas>
+        </div>
+      </div>
+
+      <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <div class="font-bold text-sm mb-2">추정 가정(무데이터 보정 포함)</div>
+          <div class="text-xs text-slate-600 space-y-1">
+            <div><span class="font-bold">일사량:</span> {{ solar.sun_hours or "확인 필요" }} h/일</div>
+            <div><span class="font-bold">방위/경사:</span> {{ solar.azimuth_deg or "확인 필요" }}° / {{ solar.tilt_deg or "확인 필요" }}°</div>
+            <div><span class="font-bold">방위/경사 보정:</span> {{ solar.ori_factor or "확인 필요" }}</div>
+            <div><span class="font-bold">토지가격:</span> {{ land_price }}</div>
+            <div class="text-[10px] text-amber-600 font-bold">※ 데이터 소스 확정 전: 보수적 추정이며 "확인 필요"입니다.</div>
+          </div>
         </div>
         <div class="bg-white rounded-lg border border-slate-200 p-4">
           <div class="font-bold text-sm mb-2">8대 중대 체크사항</div>
@@ -705,19 +726,28 @@ REPORT_HTML = """
 
 <script>
   const payload = {{ payload_json|safe }};
-  const cf = (payload.finance && payload.finance.roi25y && payload.finance.roi25y.cashflows_no_land) ? payload.finance.roi25y.cashflows_no_land : [];
-  const labels = cf.map((_, i) => `Y${i+1}`);
+  const roi = (payload.finance && payload.finance.roi25y) ? payload.finance.roi25y : {};
+  const cfNo = Array.isArray(roi.cashflows_no_land) ? roi.cashflows_no_land : [];
+  const cfWith = Array.isArray(roi.cashflows_with_land) ? roi.cashflows_with_land : cfNo;
+  const labels = (cfNo.length ? cfNo : cfWith).map((_, i) => `Y${i+1}`);
 
-  const ctx = document.getElementById('cfChart').getContext('2d');
-  new Chart(ctx, {
-    type: 'bar',
-    data: { labels, datasets: [{ label: '현금흐름(원)', data: cf }] },
-    options: {
-      responsive: true,
-      plugins: { legend: { display: false } },
-      scales: { x: { ticks: { maxRotation: 0, autoSkip: true } } }
-    }
-  });
+  function makeBar(id, data){
+    const el = document.getElementById(id);
+    if(!el) return;
+    const ctx = el.getContext('2d');
+    new Chart(ctx, {
+      type: 'bar',
+      data: { labels, datasets: [{ label: '현금흐름(원)', data }] },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: { x: { ticks: { maxRotation: 0, autoSkip: true } } }
+      }
+    });
+  }
+
+  makeBar('cfChartNoLand', cfNo);
+  makeBar('cfChartWithLand', cfWith);
 </script>
 </body>
 </html>
@@ -771,7 +801,18 @@ def report():
     import json
     payload_json = json.dumps(payload, ensure_ascii=False)
 
-    return render_template_string(
+        # Derived display fields (data-source-free estimates included)
+    assumptions = (finance or {}).get("assumptions") or {}
+    solar = {
+        "sun_hours": assumptions.get("sunHours"),
+        "azimuth_deg": assumptions.get("azimuthDeg"),
+        "tilt_deg": assumptions.get("tiltDeg"),
+        "ori_factor": assumptions.get("oriFactor"),
+    }
+    land_price_won = ((finance or {}).get("roi25y") or {}).get("land_price_won")
+    land_price = _format_won(land_price_won) if land_price_won is not None else "확인 필요"
+
+return render_template_string(
         REPORT_HTML,
         address=address,
         capacity=capacity,
@@ -781,6 +822,8 @@ def report():
         ai_analysis=ai_analysis or {},
         ai_score=ai_score,
         payload_json=payload_json,
+        solar=solar,
+        land_price=land_price,
     )
 
 
@@ -811,6 +854,18 @@ def build_pdf_bytes(payload: dict) -> bytes:
     line(f"Address: {address}", size=10, dy=7*mm)
     line(f"Capacity: {capacity}", size=10, dy=7*mm)
     line(f"KEPCO: {kepco}", size=10, dy=10*mm)
+    # solar assumptions (may be heuristic)
+    assumptions = (finance.get("assumptions") or {}) if isinstance(finance, dict) else {}
+    sunh = assumptions.get("sunHours")
+    az = assumptions.get("azimuthDeg")
+    tilt = assumptions.get("tiltDeg")
+    ori = assumptions.get("oriFactor")
+    land_price_won = ((finance.get("roi25y") or {}).get("land_price_won")) if isinstance(finance, dict) else None
+
+    line(f"Solar: sun_hours={sunh if sunh is not None else '확인 필요'} h/day", size=10, dy=7*mm)
+    line(f"Angles: azimuth={az if az is not None else '확인 필요'} deg, tilt={tilt if tilt is not None else '확인 필요'} deg", size=10, dy=7*mm)
+    line(f"Orientation factor: {ori if ori is not None else '확인 필요'}", size=10, dy=7*mm)
+    line(f"Land price: {_format_won(land_price_won) if land_price_won is not None else '확인 필요'}", size=10, dy=10*mm)
 
     line("Finance Summary", bold=True, dy=8*mm)
     line(f"Total Cost: {_format_won(finance.get('totalCostWon',0))}", size=10)
@@ -920,19 +975,34 @@ def solar_optimize():
     address = (data.get("address") or "").strip()
     mode = (data.get("mode") or "roof").strip().lower()
 
-    # 기본값(보수적): 정남향(180°), 경사 20°
-    # 실제 구현 시: 기상/일사량 데이터 + 지역 보정 + 지형/경사도 반영
+    # 데이터 소스 확정 전 "무데이터(heuristic)" fallback 제공:
+    # - 정남향(180°), 경사: (위도-10)°, 10~35° clamp
+    # - 일사량(시간/일): 한국 위도대(33~38.5) 기준 보수적 선형 근사
+    sun_hours = None
+    az = 180
+    tilt = 20
+    try:
+        if lat is not None:
+            lat_f = float(lat)
+            tilt = max(10, min(35, int(round(lat_f - 10))))
+            # lat 33 -> 3.9, 38.5 -> 3.4
+            t = max(0.0, min(1.0, (lat_f - 33.0) / (38.5 - 33.0)))
+            sun_hours = 3.9 - 0.5 * t
+    except Exception:
+        sun_hours = None
+        tilt = 20
+
     payload = {
         "lat": lat,
         "lng": lng,
         "address": address or "확인 필요",
         "mode": mode,
-        "sun_hours": None,              # 데이터 소스 확정 시 숫자로 제공(예: 3.8)
-        "azimuth_deg": 180,             # 정남향
-        "tilt_deg": 20,                 # 보수적 기본
-        "source": "placeholder",
+        "sun_hours": sun_hours,          # heuristic(확인 필요)
+        "azimuth_deg": az,               # 정남향
+        "tilt_deg": tilt,                # 위도 기반 보수적
+        "source": "heuristic",
         "needs_confirm": True,
-        "note": "공신력 있는 일사량/날씨 데이터 소스/키 확정 필요: 현재는 구조만 제공(확인 필요)"
+        "note": "공신력 있는 일사량/날씨 데이터 소스 확정 전: 위도 기반 보수적 heuristic 제공(확인 필요)"
     }
     return json_ok(**payload)
 
@@ -948,16 +1018,34 @@ def land_estimate():
     area_m2 = data.get("area_m2")
     area_pyeong = data.get("area_pyeong")
 
+    # 데이터 소스 확정 전 "옵션 heuristic":
+    # - ENV LAND_UNIT_PRICE_WON_PER_PYEONG(평 단가) 가 설정되어 있으면 면적 기반으로 산출
+    land_price = None
+    unit_price = None
+    try:
+        if LAND_UNIT_PRICE_WON_PER_PYEONG and float(LAND_UNIT_PRICE_WON_PER_PYEONG) > 0:
+            unit_price = float(LAND_UNIT_PRICE_WON_PER_PYEONG)
+            ap = None
+            if area_pyeong is not None:
+                ap = float(area_pyeong)
+            elif area_m2 is not None:
+                ap = float(area_m2) / 3.3058
+            if ap and ap > 0:
+                land_price = ap * unit_price
+    except Exception:
+        land_price = None
+        unit_price = None
+
     payload = {
         "address": address or "확인 필요",
         "pnu": pnu,
         "area_m2": area_m2,
         "area_pyeong": area_pyeong,
-        "land_price_won": None,  # 데이터 소스 확정 시 숫자로 제공
-        "unit_price_won_per_pyeong": None,
-        "source": "placeholder",
+        "land_price_won": land_price,  # heuristic(옵션) or None
+        "unit_price_won_per_pyeong": unit_price,
+        "source": "heuristic" if land_price is not None else "placeholder",
         "needs_confirm": True,
-        "note": "토지 시세 데이터 소스(공시지가/실거래/상용 API) 확정 필요: 현재는 구조만 제공(확인 필요)"
+        "note": "토지 시세 데이터 소스 확정 전: ENV 평단가가 있으면 면적 기반 heuristic 산출(확인 필요)"
     }
     return json_ok(**payload)
 
