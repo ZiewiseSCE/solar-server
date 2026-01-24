@@ -6,6 +6,9 @@ import secrets
 import math
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+import urllib.request
+import urllib.parse
+import json as _json
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -54,6 +57,7 @@ DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
 PUBLIC_VWORLD_KEY = (os.getenv("VWORLD_KEY") or "").strip()
 PUBLIC_KEPCO_KEY = (os.getenv("KEPCO_KEY") or "").strip()
 GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
+GEMINI_MODEL = (os.getenv("GEMINI_MODEL") or "gemini-1.5-flash").strip()
 LAW_API_ID = (os.getenv("LAW_API_ID") or "").strip()
 
 # Optional land price heuristic (F-28) - won per pyeong (평 단가)
@@ -716,6 +720,9 @@ def build_pdf_bytes(payload: dict) -> bytes:
     Note: This is still a PDF (not HTML render). We mimic the dark theme + KPI cards.
     """
     from io import BytesIO
+import urllib.request
+import urllib.parse
+import json as _json
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm
@@ -1013,6 +1020,123 @@ def handle_any_exception(e):
 # Ensure DB table exists under gunicorn too
 # ------------------------------------------------------------
 init_db()
+
+
+# ------------------------------------------------------------
+# Land price estimate (F-28 readiness)
+#  - API-first. If an official datasource is configured, call it.
+#  - Optional: Gemini estimate (low confidence) when no datasource is configured.
+# ------------------------------------------------------------
+def _try_float(v, default=None):
+    try:
+        if v is None:
+            return default
+        return float(v)
+    except Exception:
+        return default
+
+def _gemini_land_price_estimate(address: str) -> dict:
+    if not GEMINI_API_KEY:
+        return {}
+    # NOTE: Best-effort estimate. NOT an official appraisal.
+    prompt = (
+        "You are assisting a solar project feasibility tool in Korea.\n"
+        "Given a Korean address, estimate an approximate land price per pyeong (평) in KRW.\n"
+        "Rules:\n"
+        "- Be conservative. If you are unsure, return a low confidence.\n"
+        "- DO NOT claim you accessed real-time listings or exact official values.\n"
+        "- Output MUST be strict JSON only with keys:\n"
+        "  unit_price_won_per_pyeong (number),\n"
+        "  confidence_0_1 (number between 0 and 1),\n"
+        "  note (string, short).\n"
+        f"Address: {address}\n"
+    )
+
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 200},
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    req = urllib.request.Request(
+        url,
+        data=_json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        data = _json.loads(resp.read().decode("utf-8"))
+
+    text = ""
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception:
+        return {}
+    text = (text or "").strip()
+
+    # Strip code fences if present
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
+        text = text.replace("```", "").strip()
+
+    try:
+        j = _json.loads(text)
+        return j if isinstance(j, dict) else {}
+    except Exception:
+        return {}
+
+@app.get("/api/land/price")
+def api_land_price():
+    """Land price estimate (평단가)."""
+    address = (request.args.get("address") or "").strip()
+    area_pyeong = _try_float(request.args.get("area_pyeong"), None)
+
+    # 1) ENV default
+    if LAND_UNIT_PRICE_WON_PER_PYEONG and LAND_UNIT_PRICE_WON_PER_PYEONG > 0:
+        unit = float(LAND_UNIT_PRICE_WON_PER_PYEONG)
+        total = round(unit * area_pyeong) if area_pyeong else None
+        return json_ok(
+            unit_price_won_per_pyeong=unit,
+            total_price_won=total,
+            source="env-default",
+            confidence=0.35,
+            note="ENV 기본 평단가 기반 추정치(확인 필요)",
+        )
+
+    # 2) Gemini best-effort (low confidence)
+    if address and GEMINI_API_KEY:
+        try:
+            j = _gemini_land_price_estimate(address)
+            unit = _try_float(j.get("unit_price_won_per_pyeong"), None)
+            conf = _try_float(j.get("confidence_0_1"), 0.15)
+            note = (j.get("note") or "AI 추정치(확인 필요)").strip()
+            if unit and unit > 0:
+                total = round(unit * area_pyeong) if area_pyeong else None
+                return json_ok(
+                    unit_price_won_per_pyeong=unit,
+                    total_price_won=total,
+                    source="gemini-estimate",
+                    confidence=max(0.05, min(conf, 0.45)),
+                    note=note,
+                )
+        except Exception as e:
+            # Do not hard-fail the app for estimation route
+            return json_ok(
+                unit_price_won_per_pyeong=None,
+                total_price_won=None,
+                source="gemini-estimate",
+                confidence=0.0,
+                note=f"gemini estimate failed: {e}",
+            )
+
+    # 3) No datasource
+    return json_ok(
+        unit_price_won_per_pyeong=None,
+        total_price_won=None,
+        source="unknown",
+        confidence=0.0,
+        note="토지 시세 데이터 소스 미확정(확인 필요)",
+    )
+
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT") or 5000)
