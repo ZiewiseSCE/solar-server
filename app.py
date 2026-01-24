@@ -139,6 +139,24 @@ def init_db_with_retry(max_wait_sec: int = 30, sleep_sec: float = 2.0) -> bool:
     print("[BOOT] init_db FAILED but continue:", repr(last_err))
     return False
 
+def ensure_license_schema():
+    """
+    기존 운영 DB에서 licenses 테이블이 이미 존재하는 경우,
+    CREATE TABLE IF NOT EXISTS로는 컬럼이 추가되지 않으므로 컬럼을 보강한다.
+    (reset/bind/list 등에서 필요한 컬럼들)
+    """
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        # base table might already exist; add columns if missing
+        cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS registered   BOOLEAN NOT NULL DEFAULT FALSE;")
+        cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS bound_fp     TEXT NULL;")
+        cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS bound_at     TIMESTAMPTZ NULL;")
+        cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NULL;")
+        conn.commit()
+    finally:
+        conn.close()
+
 def db_diag():
     try:
         conn = get_conn()
@@ -176,6 +194,7 @@ def delete_license(token: str) -> int:
         conn.close()
 
 def reset_license(token: str) -> int:
+    ensure_license_schema()
     conn = get_conn()
     try:
         cur = conn.cursor()
@@ -220,6 +239,7 @@ def find_license(token: str):
         conn.close()
 
 def bind_license(token: str, fingerprint: str) -> int:
+    ensure_license_schema()
     """
     - 미등록이면 등록(바인딩)
     - 이미 등록 + 같은 fingerprint면 last_seen 갱신만
@@ -256,6 +276,7 @@ def touch_license(token: str) -> int:
         conn.close()
 
 def get_all_licenses():
+    ensure_license_schema()
     conn = get_conn()
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
