@@ -10,6 +10,7 @@ import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
 import time
+import json
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
