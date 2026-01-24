@@ -812,7 +812,7 @@ def report():
     land_price_won = ((finance or {}).get("roi25y") or {}).get("land_price_won")
     land_price = _format_won(land_price_won) if land_price_won is not None else "확인 필요"
 
-return render_template_string(
+    return render_template_string(
         REPORT_HTML,
         address=address,
         capacity=capacity,
