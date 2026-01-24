@@ -711,104 +711,142 @@ def report():
 
 
 def build_pdf_bytes(payload: dict) -> bytes:
+    """
+    Styled PDF (report-like) using reportlab + embedded charts.
+    Note: This is still a PDF (not HTML render). We mimic the dark theme + KPI cards.
+    """
+    from io import BytesIO
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.lib.utils import ImageReader
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     W, H = A4
 
-    x0 = 18 * mm
-    y = H - 18 * mm
+    def rect(x, y, w, h, fill, stroke=colors.Color(1,1,1,0.08), r=8):
+        c.setStrokeColor(stroke)
+        c.setFillColor(fill)
+        c.roundRect(x, y, w, h, r, stroke=1, fill=1)
 
-    def line(txt, dy=6*mm, size=11, bold=False):
-        nonlocal y
+    # Background (dark gradient-ish)
+    c.setFillColorRGB(0.03, 0.05, 0.10)
+    c.rect(0, 0, W, H, stroke=0, fill=1)
+
+    margin = 14 * mm
+    x0 = margin
+    y0 = H - margin
+
+    def text(x, y, s, size=11, color=colors.whitesmoke, bold=False):
+        c.setFillColor(color)
         c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
-        c.drawString(x0, y, txt)
-        y -= dy
+        c.drawString(x, y, s)
 
+    # Data
     address = payload.get("address") or "확인 필요"
     date = payload.get("date") or ""
-    capacity = payload.get("capacity") or "-"
-    kepco = payload.get("kepco_capacity") or "확인 필요"
     finance = payload.get("finance") or {}
-    ai_score = payload.get("ai_score") or 0
-    ai = payload.get("ai_analysis") or {}
+    ai_score = payload.get("ai_score") or (payload.get("ai_analysis") or {}).get("attractiveness_score") or 0
 
-    line("Solar Pathfinder Report", size=16, bold=True, dy=10*mm)
-    line(f"Date: {date}", size=10, dy=7*mm)
-    line(f"Address: {address}", size=10, dy=7*mm)
-    line(f"Capacity: {capacity}", size=10, dy=7*mm)
-    line(f"KEPCO: {kepco}", size=10, dy=10*mm)
-    # solar assumptions (may be heuristic)
-    assumptions = (finance.get("assumptions") or {}) if isinstance(finance, dict) else {}
-    sunh = assumptions.get("sunHours")
-    az = assumptions.get("azimuthDeg")
-    tilt = assumptions.get("tiltDeg")
-    ori = assumptions.get("oriFactor")
-    land_price_won = ((finance.get("roi25y") or {}).get("land_price_won")) if isinstance(finance, dict) else None
+    roi = (finance.get("roi25y") or {}) if isinstance(finance, dict) else {}
+    cf_no = roi.get("cashflows_no_land") or []
+    cf_with = roi.get("cashflows_with_land") or cf_no
+    dscr_min = roi.get("dscr_min")
+    dscr_avg = roi.get("dscr_avg")
+    loan120 = roi.get("max_loan_by_dscr_120")
+    loan130 = roi.get("max_loan_by_dscr_130")
 
-    line(f"Solar: sun_hours={sunh if sunh is not None else '확인 필요'} h/day", size=10, dy=7*mm)
-    line(f"Angles: azimuth={az if az is not None else '확인 필요'} deg, tilt={tilt if tilt is not None else '확인 필요'} deg", size=10, dy=7*mm)
-    line(f"Orientation factor: {ori if ori is not None else '확인 필요'}", size=10, dy=7*mm)
-    line(f"Land price: {_format_won(land_price_won) if land_price_won is not None else '확인 필요'}", size=10, dy=10*mm)
+    # Header card
+    card_y = y0 - 38*mm
+    rect(x0, card_y, W-2*margin, 38*mm, fill=colors.Color(1,1,1,0.06))
+    text(x0+12, y0-14, "Solar Pathfinder — 상세 리포트", size=16, bold=True)
+    text(x0+12, y0-22, f"{date}", size=9, color=colors.Color(0.75,0.8,0.9,0.9))
+    text(x0+12, y0-32, f"주소: {address}", size=10, color=colors.Color(0.85,0.9,1,0.9))
 
-    line("Finance Summary", bold=True, dy=8*mm)
-    line(f"Total Cost: {_format_won(finance.get('totalCostWon',0))}", size=10)
-    line(f"Annual Revenue: {_format_won(finance.get('annualRevenueWon',0))}", size=10)
-    line(f"Monthly Debt(PF): {_format_won(finance.get('monthlyDebtWon',0))}", size=10)
-    line(f"Total Interest: {_format_won(finance.get('totalInterestWon',0))}", size=10)
-    pb = finance.get("paybackYears")
-    line(f"Payback: {pb if pb else '> 25'} years", size=10, dy=10*mm)
+    # Score badge
+    badge_w = 58*mm
+    badge_h = 12*mm
+    bx = W - margin - badge_w
+    by = y0 - 26*mm
+    rect(bx, by, badge_w, badge_h, fill=colors.Color(0.08,0.5,0.3,0.25), stroke=colors.Color(0.2,0.9,0.6,0.35), r=10)
+    text(bx+10, by+4, f"구매매력도  {ai_score}", size=12, bold=True, color=colors.Color(0.85,1,0.9,1))
 
-    line(f"AI Attractiveness Score: {ai_score}", bold=True, dy=8*mm)
-    # NPV (discount 6%) for both cases (simple)
-    def _npv(rate, cashflows):
-        try:
-            r = rate
-            v = 0.0
-            for i, cf in enumerate(cashflows, start=1):
-                v += float(cf) / ((1+r) ** i)
-            return v
-        except Exception:
-            return None
+    # KPI cards (4)
+    kpi_top = card_y - 10*mm
+    kpi_h = 18*mm
+    kpi_gap = 4*mm
+    kpi_w = (W-2*margin - 3*kpi_gap)/4
 
-    roi = finance.get("roi25y") if isinstance(finance, dict) else {}
-    cf_no = (roi.get("cashflows_no_land") or []) if isinstance(roi, dict) else []
-    cf_with = (roi.get("cashflows_with_land") or []) if isinstance(roi, dict) else []
-    disc = 0.06
-    npv_no = _npv(disc, cf_no) if cf_no else None
-    npv_with = _npv(disc, cf_with) if cf_with else None
+    def won(v):
+        return _format_won(v) if v is not None else "확인 필요"
 
-    line("NPV (discount 6%)", bold=True, dy=8*mm)
-    line(f"No-land: {_format_won(npv_no) if npv_no is not None else '확인 필요'}", size=10)
-    line(f"With-land: {_format_won(npv_with) if npv_with is not None else '확인 필요'}", size=10, dy=10*mm)
+    kpis = [
+        ("총 사업비", won(finance.get("totalCostWon")), colors.Color(0.2,0.95,0.55,0.12)),
+        ("연 총수익", won(finance.get("annualRevenueWon")), colors.Color(0.35,0.55,1.0,0.12)),
+        ("월 상환액", won(finance.get("monthlyDebtWon")), colors.Color(0.5,0.35,1.0,0.12)),
+        ("자본회수기간", f"{finance.get('paybackYears') or '>'} 25 년" if finance.get("paybackYears") else "> 25 년", colors.Color(1.0,0.7,0.2,0.12)),
+    ]
 
-    # DSCR summary (if present)
-    dscr_min = roi.get("dscr_min") if isinstance(roi, dict) else None
-    dscr_avg = roi.get("dscr_avg") if isinstance(roi, dict) else None
-    line("DSCR (PF term)", bold=True, dy=8*mm)
-    line(f"Min DSCR: {dscr_min if dscr_min is not None else '확인 필요'}", size=10)
-    line(f"Avg DSCR: {dscr_avg if dscr_avg is not None else '확인 필요'}", size=10, dy=10*mm)
+    for i,(k,v,fc) in enumerate(kpis):
+        x = x0 + i*(kpi_w + kpi_gap)
+        y = kpi_top - kpi_h
+        rect(x, y, kpi_w, kpi_h, fill=fc)
+        text(x+8, y+kpi_h-7, k, size=9, color=colors.Color(0.75,0.82,0.92,0.9), bold=True)
+        text(x+8, y+6, str(v), size=11, bold=True)
 
-    checks = (ai.get("checks") or [])
-    if checks:
-        line("8 Critical Checks:", bold=True, dy=8*mm)
-        c.setFont("Helvetica", 9)
-        for idx, item in enumerate(checks[:8], start=1):
-            if y < 20*mm:
-                c.showPage()
-                y = H - 18*mm
-                c.setFont("Helvetica", 9)
-            title = item.get("title") or item.get("category") or f"Item {idx}"
-            result = item.get("result") or "확인 필요"
-            c.drawString(x0, y, f"{idx}. {title}: {result}")
-            y -= 5*mm
-    else:
-        line("No AI checks available.", size=10)
+    # Charts: cashflows (no-land and with-land) + DSCR
+    chart_y = y - 10*mm
+    chart_h = 58*mm
+    chart_w = (W-2*margin - 6*mm)/2
+
+    def chart_image(data, title, kind="bar"):
+        fig = plt.figure(figsize=(6,2.3), dpi=150)
+        ax = fig.add_subplot(111)
+        xs = list(range(1, len(data)+1))
+        if kind == "bar":
+            ax.bar(xs, data)
+        else:
+            ax.plot(xs, data, linewidth=2)
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel("Year", fontsize=8)
+        ax.tick_params(axis='both', labelsize=7)
+        ax.grid(True, alpha=0.25)
+        buf2 = BytesIO()
+        fig.tight_layout()
+        fig.savefig(buf2, format="png", transparent=True)
+        plt.close(fig)
+        buf2.seek(0)
+        return buf2
+
+    # Cashflow charts
+    try:
+        img1 = ImageReader(chart_image(cf_no[:25], "Cashflow (No Land)", "bar"))
+        img2 = ImageReader(chart_image(cf_with[:25], "Cashflow (With Land)", "bar"))
+        rect(x0, chart_y-chart_h, chart_w, chart_h, fill=colors.Color(1,1,1,0.05))
+        rect(x0+chart_w+6*mm, chart_y-chart_h, chart_w, chart_h, fill=colors.Color(1,1,1,0.05))
+        c.drawImage(img1, x0+6, chart_y-chart_h+6, width=chart_w-12, height=chart_h-12, mask='auto')
+        c.drawImage(img2, x0+chart_w+6*mm+6, chart_y-chart_h+6, width=chart_w-12, height=chart_h-12, mask='auto')
+    except Exception:
+        pass
+
+    # DSCR + loan sizing section
+    info_y = chart_y - chart_h - 10*mm
+    rect(x0, info_y-32*mm, W-2*margin, 32*mm, fill=colors.Color(1,1,1,0.05))
+    text(x0+10, info_y-10, "PF 요약 (DSCR / 대출한도)", size=12, bold=True)
+    text(x0+10, info_y-20, f"DSCR Min: {dscr_min if dscr_min is not None else '확인 필요'}   |   DSCR Avg: {dscr_avg if dscr_avg is not None else '확인 필요'}", size=10)
+    text(x0+10, info_y-30, f"대출한도(DSCR≥1.20): {won(loan120)}   /   (DSCR≥1.30): {won(loan130)}", size=10, color=colors.Color(0.85,0.9,1,0.95))
 
     c.showPage()
     c.save()
-    return buf.getvalue()
-
-
+    pdf = buf.getvalue()
+    buf.close()
+    return pdf
 @app.route("/api/report/pdf", methods=["POST"])
 def report_pdf():
     # Accept form-encoded "payload" or JSON body
