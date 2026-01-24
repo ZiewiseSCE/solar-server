@@ -404,11 +404,12 @@ def sign_admin_session() -> str:
 
 def verify_admin_session(token: str) -> bool:
     try:
+        if not SECRET_KEY:
+            return False
         if not token or "." not in token:
             return False
         body, sig = token.split(".", 1)
-        secret = _get_admin_secret()
-        expected = _b64url(hmac.new(secret.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).digest())
+        expected = _b64url(hmac.new(SECRET_KEY.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).digest())
         if not hmac.compare_digest(expected, sig):
             return False
         payload = json.loads(_b64urldecode(body).decode("utf-8"))
@@ -416,6 +417,7 @@ def verify_admin_session(token: str) -> bool:
         return now <= int(payload.get("exp", 0))
     except Exception:
         return False
+
 
 def _admin_auth_debug():
     auth = request.headers.get("Authorization", "") or ""
