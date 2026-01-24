@@ -753,7 +753,38 @@ REPORT_HTML = """
           </div>
         </div>
 
-        <!-- Charts -->
+        
+        <!-- DSCR -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+          <div class="rounded-2xl bg-white/5 border border-white/10 p-4">
+            <div class="text-xs font-extrabold text-slate-200/90 mb-2">DSCR (PF 기간)</div>
+            <div class="flex items-end justify-between">
+              <div>
+                <div class="text-[11px] text-slate-300/70">최소</div>
+                <div id="dscrMin" class="text-lg font-extrabold">-</div>
+              </div>
+              <div class="text-right">
+                <div class="text-[11px] text-slate-300/70">평균</div>
+                <div id="dscrAvg" class="text-lg font-extrabold">-</div>
+              </div>
+            </div>
+          </div>
+          <div class="rounded-2xl bg-white/5 border border-white/10 p-4">
+            <div class="text-xs font-extrabold text-slate-200/90 mb-2">DSCR 기준</div>
+            <div class="flex items-center gap-2">
+              <input id="dscrThreshold" type="number" step="0.05" value="1.20" class="w-24 px-2 py-1 bg-slate-900/60 border border-white/10 rounded-lg text-xs" />
+              <span class="text-[11px] text-slate-300/70">이상</span>
+              <button id="recalcPf" class="px-3 py-1 rounded-lg bg-white/10 border border-white/10 text-xs font-extrabold hover:bg-white/15">판정</button>
+            </div>
+            <div id="pfVerdict" class="mt-3 text-sm font-extrabold">-</div>
+            <div class="text-[10px] text-slate-300/70 mt-1">※ DSCR은 (수익-운영비-교체CAPEX)/연부채상환으로 계산(보수)</div>
+          </div>
+          <div class="rounded-2xl bg-white/5 border border-white/10 p-4">
+            <div class="text-xs font-extrabold text-slate-200/90 mb-2">DSCR 추이</div>
+            <canvas id="dscrChart" height="110"></canvas>
+          </div>
+        </div>
+<!-- Charts -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
           <div class="rounded-2xl bg-white/5 border border-white/10 p-4">
             <div class="font-extrabold text-sm mb-2">25년 현금흐름(토지비 제외)</div>
@@ -833,6 +864,10 @@ REPORT_HTML = """
   const cfWithRaw = Array.isArray(roi.cashflows_with_land) ? roi.cashflows_with_land : cfNoRaw;
   const landPrice = (roi && typeof roi.land_price_won === "number") ? roi.land_price_won : null;
 
+  const dscrYearsRaw = Array.isArray(roi.dscr_years) ? roi.dscr_years : [];
+  const dscrMinRaw = (typeof roi.dscr_min === "number") ? roi.dscr_min : null;
+  const dscrAvgRaw = (typeof roi.dscr_avg === "number") ? roi.dscr_avg : null;
+
   // State
   let landMode = (landPrice && landPrice > 0) ? "buy" : "own"; // buy | own
   let scenarioFactor = parseFloat(document.getElementById("scenarioSel")?.value || "1.0") || 1.0;
@@ -881,6 +916,27 @@ REPORT_HTML = """
   const init = getSeries();
   const chartNo = makeBar('cfChartNoLand', init.cfNo);
   const chartWith = makeBar('cfChartWithLand', init.cfWith);
+
+  // DSCR chart (line)
+  function makeLine(elId, data){
+    const el = document.getElementById(elId);
+    if(!el) return null;
+    const ctx = el.getContext('2d');
+    return new Chart(ctx, {
+      type: 'line',
+      data: { labels, datasets: [{ label: 'DSCR', data, tension: 0.25 }] },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: "rgba(226,232,240,0.65)" }, grid: { color: "rgba(148,163,184,0.08)" } },
+          y: { ticks: { color: "rgba(226,232,240,0.65)" }, grid: { color: "rgba(148,163,184,0.08)" }, suggestedMin: 0.8 }
+        }
+      }
+    });
+  }
+  const dscrChart = makeLine("dscrChart", dscrYearsRaw);
+
 
   // NPV/IRR
   function fmtWon(n){
@@ -975,9 +1031,32 @@ REPORT_HTML = """
 
     setBtnActive("landOwnBtn", landMode==="own");
     setBtnActive("landBuyBtn", landMode==="buy");
+
+    // DSCR UI (PF 기간은 시나리오/토지모드와 무관하게 동일; 단, 시나리오에 따라 CADS가 바뀌므로 재계산)
+    const dscrMinEl = document.getElementById("dscrMin");
+    const dscrAvgEl = document.getElementById("dscrAvg");
+    if(dscrMinEl) dscrMinEl.innerText = (dscrMinRaw===null ? "확인 필요" : dscrMinRaw.toFixed(2));
+    if(dscrAvgEl) dscrAvgEl.innerText = (dscrAvgRaw===null ? "확인 필요" : dscrAvgRaw.toFixed(2));
+
+    // Verdict
+    const thr = parseFloat(document.getElementById("dscrThreshold")?.value || "1.2") || 1.2;
+    const verdictEl = document.getElementById("pfVerdict");
+    if(verdictEl){
+      if(dscrMinRaw===null){
+        verdictEl.innerText = "확인 필요";
+        verdictEl.className = "mt-3 text-sm font-extrabold";
+      }else if(dscrMinRaw >= thr){
+        verdictEl.innerText = `PF 가능(보수) ✅  최소 DSCR ${dscrMinRaw.toFixed(2)} ≥ ${thr.toFixed(2)}`;
+        verdictEl.className = "mt-3 text-sm font-extrabold text-emerald-200";
+      }else{
+        verdictEl.innerText = `PF 리스크 ⚠️  최소 DSCR ${dscrMinRaw.toFixed(2)} < ${thr.toFixed(2)}`;
+        verdictEl.className = "mt-3 text-sm font-extrabold text-amber-200";
+      }
+    }
   }
 
-  document.getElementById("recalcRoi")?.addEventListener("click", (e)=>{ e.preventDefault(); recomputeRoiMetrics(); });
+    document.getElementById("recalcPf")?.addEventListener("click", (e)=>{ e.preventDefault(); recomputeRoiMetrics(); });
+document.getElementById("recalcRoi")?.addEventListener("click", (e)=>{ e.preventDefault(); recomputeRoiMetrics(); });
   document.getElementById("scenarioSel")?.addEventListener("change", (e)=>{ scenarioFactor = parseFloat(e.target.value||"1")||1; recomputeRoiMetrics(); });
 
   document.getElementById("landOwnBtn")?.addEventListener("click", (e)=>{ e.preventDefault(); landMode="own"; recomputeRoiMetrics(); });
@@ -991,7 +1070,9 @@ REPORT_HTML = """
 </body>
 </html>
 
+
 """
+
 
 
 def _format_won(v: int) -> str:
@@ -1151,6 +1232,13 @@ def build_pdf_bytes(payload: dict) -> bytes:
     line("NPV (discount 6%)", bold=True, dy=8*mm)
     line(f"No-land: {_format_won(npv_no) if npv_no is not None else '확인 필요'}", size=10)
     line(f"With-land: {_format_won(npv_with) if npv_with is not None else '확인 필요'}", size=10, dy=10*mm)
+
+    # DSCR summary (if present)
+    dscr_min = roi.get("dscr_min") if isinstance(roi, dict) else None
+    dscr_avg = roi.get("dscr_avg") if isinstance(roi, dict) else None
+    line("DSCR (PF term)", bold=True, dy=8*mm)
+    line(f"Min DSCR: {dscr_min if dscr_min is not None else '확인 필요'}", size=10)
+    line(f"Avg DSCR: {dscr_avg if dscr_avg is not None else '확인 필요'}", size=10, dy=10*mm)
 
     checks = (ai.get("checks") or [])
     if checks:
