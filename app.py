@@ -8,8 +8,8 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import urllib.request
 import urllib.parse
-import json as _json
 import xml.etree.ElementTree as ET
+import time
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -58,11 +58,12 @@ DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
 PUBLIC_VWORLD_KEY = (os.getenv("VWORLD_KEY") or "").strip()
 PUBLIC_KEPCO_KEY = (os.getenv("KEPCO_KEY") or "").strip()
 GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
-GEMINI_MODEL = (os.getenv("GEMINI_MODEL") or "gemini-1.5-flash").strip()
 LAW_API_ID = (os.getenv("LAW_API_ID") or "").strip()
 
 # Optional land price heuristic (F-28) - won per pyeong (평 단가)
 LAND_UNIT_PRICE_WON_PER_PYEONG = float(os.getenv("LAND_UNIT_PRICE_WON_PER_PYEONG") or 0)
+DATA_GO_KR_SERVICE_KEY = (os.getenv("DATA_GO_KR_SERVICE_KEY") or "").strip()  # data.go.kr serviceKey
+
 
 # Cookie policy (F-24)
 COOKIE_SECURE = (os.getenv("COOKIE_SECURE") or "auto").strip().lower()  # auto|true|false
@@ -721,10 +722,6 @@ def build_pdf_bytes(payload: dict) -> bytes:
     Note: This is still a PDF (not HTML render). We mimic the dark theme + KPI cards.
     """
     from io import BytesIO
-import urllib.request
-import urllib.parse
-import json as _json
-import xml.etree.ElementTree as ET
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm
@@ -1025,10 +1022,27 @@ init_db()
 
 
 # ------------------------------------------------------------
-# Land price estimate (data.go.kr RTMS LandTrade + fallback)
-#  - Official: data.go.kr RTMS LandTrade (법정동/월 단위)
-#  - Fallback: ENV default unit price / Gemini estimate
+# data.go.kr RTMS LandTrade (토지 실거래가) -> 평단가 보수 추정
+#  - Requires DATA_GO_KR_SERVICE_KEY in ENV (Cloudtype)
+#  - Uses LAWD_CD(시군구 5) + DEAL_YMD(YYYYMM), tries recent months if needed
+#  - Conservative: use 30th percentile of price/평
 # ------------------------------------------------------------
+_LAND_PRICE_CACHE = {}  # key -> (ts, payload)
+_LAND_PRICE_CACHE_TTL_SEC = 3600
+
+def _cache_get(key: str):
+    v = _LAND_PRICE_CACHE.get(key)
+    if not v:
+        return None
+    ts, payload = v
+    if time.time() - ts > _LAND_PRICE_CACHE_TTL_SEC:
+        _LAND_PRICE_CACHE.pop(key, None)
+        return None
+    return payload
+
+def _cache_set(key: str, payload):
+    _LAND_PRICE_CACHE[key] = (time.time(), payload)
+
 def _try_float(v, default=None):
     try:
         if v is None:
@@ -1037,24 +1051,53 @@ def _try_float(v, default=None):
     except Exception:
         return default
 
-def _pnu_to_lawd_cd(pnu: str) -> str:
-    # PNU: 19 digits. First 10 digits = 법정동코드. RTMS LAWD_CD expects 5-digit 시군구 코드.
-    pnu = (pnu or "").strip()
-    if pnu.isdigit() and len(pnu) >= 5:
-        return pnu[:5]
-    return ""
+def _parse_amount_to_won(s):
+    """RTMS 거래금액은 통상 '만원' 단위 문자열(예: '12,345') 형태가 많음 -> 원 환산"""
+    if s is None:
+        return None
+    s = str(s).replace(",", "").strip()
+    if not s:
+        return None
+    try:
+        v = float(s)
+    except Exception:
+        return None
+    # heuristic: treat as 만원
+    return v * 10000.0
+
+def _parse_area_m2(s):
+    if s is None:
+        return None
+    s = str(s).replace(",", "").strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+def _ym_list_recent(n_months=3):
+    now = datetime.now()
+    y, m = now.year, now.month
+    out = []
+    for i in range(n_months):
+        mm = m - i
+        yy = y
+        while mm <= 0:
+            mm += 12
+            yy -= 1
+        out.append(f"{yy}{mm:02d}")
+    return out
 
 def _fetch_rtms_land_trade(lawd_cd: str, deal_ymd: str) -> dict:
-    """Fetch land trade (실거래가) items for a given LAWD_CD(5) and DEAL_YMD(YYYYMM).
-    Endpoint name can vary by product on data.go.kr. This implementation targets
-    RTMSDataSvcLandTrade/getRTMSDataSvcLandTrade (widely used).
-    """
+    """Fetch RTMS land trade items (XML) for a given lawd_cd(5) and deal_ymd(YYYYMM)."""
     if not DATA_GO_KR_SERVICE_KEY:
         return {}
     lawd_cd = (lawd_cd or "").strip()
     deal_ymd = (deal_ymd or "").strip()
     if not (lawd_cd.isdigit() and len(lawd_cd) == 5 and deal_ymd.isdigit() and len(deal_ymd) == 6):
         return {}
+
     base_url = "https://apis.data.go.kr/1613000/RTMSDataSvcLandTrade/getRTMSDataSvcLandTrade"
     params = {
         "serviceKey": DATA_GO_KR_SERVICE_KEY,
@@ -1082,60 +1125,47 @@ def _fetch_rtms_land_trade(lawd_cd: str, deal_ymd: str) -> dict:
         if d:
             items.append(d)
 
+    result_code = (root.findtext(".//resultCode") or "").strip()
+    result_msg = (root.findtext(".//resultMsg") or "").strip()
+    total_count = (root.findtext(".//totalCount") or "").strip()
+
     return {
         "items": items,
         "meta": {
-            "resultCode": (root.findtext(".//resultCode") or "").strip(),
-            "resultMsg": (root.findtext(".//resultMsg") or "").strip(),
-            "totalCount": (root.findtext(".//totalCount") or "").strip(),
+            "resultCode": result_code,
+            "resultMsg": result_msg,
+            "totalCount": total_count,
             "lawd_cd": lawd_cd,
             "deal_ymd": deal_ymd,
         },
     }
 
 def _rtms_estimate_unit_price_per_pyeong(items: list) -> dict:
-    """Conservative unit price per pyeong from RTMS land trade items."""
+    """Compute conservative price per pyeong from RTMS items."""
     if not items:
         return {}
+    # Typical field names for this service often include '거래금액' and '대지면적'
     amt_keys = ["거래금액", "dealAmount", "dealamount"]
-    area_keys = ["대지면적", "전용면적", "area", "areaForExclusiveUse", "areaforExclusiveUse", "plottage", "landArea"]
-
-    def parse_amount(s):
-        if s is None:
-            return None
-        s = str(s).replace(",", "").replace(" ", "").strip()
-        try:
-            v = float(s)
-        except Exception:
-            return None
-        # RTMS commonly provides 거래금액 in '만원'
-        return v * 10000.0
-
-    def parse_area_m2(s):
-        if s is None:
-            return None
-        s = str(s).replace(",", "").replace(" ", "").strip()
-        try:
-            return float(s)
-        except Exception:
-            return None
+    area_keys = ["대지면적", "전용면적", "면적", "area", "plottage", "landArea"]
 
     ratios = []
     for it in items:
         amt = None
         for k in amt_keys:
             if it.get(k):
-                amt = parse_amount(it.get(k))
+                amt = _parse_amount_to_won(it.get(k))
                 break
         if not amt:
             continue
+
         area = None
         for k in area_keys:
             if it.get(k):
-                area = parse_area_m2(it.get(k))
+                area = _parse_area_m2(it.get(k))
                 break
         if not area or area <= 0:
             continue
+
         pyeong = area / 3.305785
         if pyeong <= 0:
             continue
@@ -1146,112 +1176,80 @@ def _rtms_estimate_unit_price_per_pyeong(items: list) -> dict:
 
     ratios.sort()
     # conservative: 30th percentile
-    idx = max(0, int(len(ratios) * 0.3) - 1)
+    idx = max(0, int(len(ratios) * 0.30) - 1)
     unit = ratios[idx]
     return {
         "unit_price_won_per_pyeong": round(unit),
         "sample_count": len(ratios),
-        "note": "국토부 토지 실거래가(법정동/월) 기반 보수적 추정치",
+        "note": "국토부 RTMS 토지 실거래가 기반 보수적 추정치(시군구/월 단위)",
     }
-
-def _gemini_land_price_estimate(address: str) -> dict:
-    if not GEMINI_API_KEY:
-        return {}
-    prompt = (
-        "You are assisting a solar project feasibility tool in Korea.\n"
-        "Given a Korean address, estimate an approximate land price per pyeong (평) in KRW.\n"
-        "Rules:\n"
-        "- Be conservative. If you are unsure, return a low confidence.\n"
-        "- DO NOT claim you accessed real-time listings or exact official values.\n"
-        "- Output MUST be strict JSON only with keys:\n"
-        "  unit_price_won_per_pyeong (number),\n"
-        "  confidence_0_1 (number between 0 and 1),\n"
-        "  note (string, short).\n"
-        f"Address: {address}\n"
-    )
-    body = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 200},
-    }
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    req = urllib.request.Request(
-        url,
-        data=_json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=12) as resp:
-        data = _json.loads(resp.read().decode("utf-8"))
-
-    text = ""
-    try:
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception:
-        return {}
-    text = (text or "").strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
-        text = text.replace("```", "").strip()
-    try:
-        j = _json.loads(text)
-        return j if isinstance(j, dict) else {}
-    except Exception:
-        return {}
 
 @app.get("/api/land/price")
 def api_land_price():
-    """Return land unit price per pyeong (평단가) and total land price if area provided.
-
-    Query params:
-      address (optional)
-      pnu (optional) -> used to derive LAWD_CD (first 5 digits)
-      lawd_cd (optional) 5 digits
-      deal_ymd (optional) YYYYMM, default: current month
-      area_pyeong (optional)
-    """
-    address = (request.args.get("address") or "").strip()
+    """Land price estimate (원/평, 원). Query: pnu|lawd_cd, deal_ymd(optional), area_pyeong(optional)"""
     pnu = (request.args.get("pnu") or "").strip()
     lawd_cd = (request.args.get("lawd_cd") or "").strip()
-    deal_ymd = (request.args.get("deal_ymd") or "").strip()
-    if not deal_ymd:
-        deal_ymd = datetime.now().strftime("%Y%m")
+    deal_ymd = (request.args.get("deal_ymd") or "").strip()  # YYYYMM
+    address = (request.args.get("address") or "").strip()
     area_pyeong = _try_float(request.args.get("area_pyeong"), None)
 
-    if not lawd_cd and pnu:
-        lawd_cd = _pnu_to_lawd_cd(pnu)
+    # derive lawd_cd from PNU if possible
+    if (not lawd_cd) and pnu and pnu.isdigit() and len(pnu) >= 5:
+        lawd_cd = pnu[:5]
 
-    # 0) data.go.kr RTMS
-    if DATA_GO_KR_SERVICE_KEY and lawd_cd and deal_ymd:
+    # cache key
+    cache_key = f"{lawd_cd}:{deal_ymd or 'AUTO'}:{area_pyeong or ''}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return json_ok(**cached)
+
+    # 0) data.go.kr official RTMS when service key available and lawd_cd exists
+    if DATA_GO_KR_SERVICE_KEY and lawd_cd and lawd_cd.isdigit() and len(lawd_cd) == 5:
+        ym_list = [deal_ymd] if (deal_ymd and deal_ymd.isdigit() and len(deal_ymd) == 6) else _ym_list_recent(3)
+        combined_ratios = []
+        total_samples = 0
+        used_months = []
         try:
-            rt = _fetch_rtms_land_trade(lawd_cd, deal_ymd)
-            est = _rtms_estimate_unit_price_per_pyeong(rt.get("items") or [])
-            unit = _try_float(est.get("unit_price_won_per_pyeong"), None)
-            if unit and unit > 0:
-                total = round(unit * area_pyeong) if area_pyeong else None
-                return json_ok(
-                    unit_price_won_per_pyeong=unit,
-                    total_price_won=total,
-                    source="data.go.kr-rtms-landtrade",
-                    confidence=0.65,
-                    note=f"{est.get('note','실거래가 기반')} (표본 {est.get('sample_count',0)}건, {lawd_cd}/{deal_ymd})",
-                )
+            for ym in ym_list:
+                rt = _fetch_rtms_land_trade(lawd_cd, ym)
+                est = _rtms_estimate_unit_price_per_pyeong(rt.get("items") or [])
+                unit = _try_float(est.get("unit_price_won_per_pyeong"), None)
+                if unit and unit > 0:
+                    # We cannot merge ratios without storing them; but we can accept first month with data
+                    total = round(unit * area_pyeong) if area_pyeong else None
+                    payload = dict(
+                        unit_price_won_per_pyeong=unit,
+                        total_price_won=total,
+                        source="data.go.kr-rtms-landtrade",
+                        confidence=0.70,
+                        note=f"{est.get('note','실거래가 기반')} (표본 {est.get('sample_count',0)}건, {ym})",
+                        lawd_cd=lawd_cd,
+                        deal_ymd=ym,
+                    )
+                    _cache_set(cache_key, payload)
+                    return json_ok(**payload)
+                used_months.append(ym)
+            # no data in recent months
         except Exception as e:
-            # fallthrough to other methods
             pass
 
-    # 1) ENV default
+    # 1) fallback ENV default
     if LAND_UNIT_PRICE_WON_PER_PYEONG and LAND_UNIT_PRICE_WON_PER_PYEONG > 0:
         unit = float(LAND_UNIT_PRICE_WON_PER_PYEONG)
         total = round(unit * area_pyeong) if area_pyeong else None
-        return json_ok(
+        payload = dict(
             unit_price_won_per_pyeong=unit,
             total_price_won=total,
             source="env-default",
             confidence=0.35,
             note="ENV 기본 평단가 기반 추정치(확인 필요)",
+            lawd_cd=lawd_cd or None,
+            deal_ymd=deal_ymd or None,
         )
+        _cache_set(cache_key, payload)
+        return json_ok(**payload)
 
-    # 2) Gemini best-effort
+    # 2) fallback Gemini (best-effort) if exists in this app build
     if address and GEMINI_API_KEY:
         try:
             j = _gemini_land_price_estimate(address)
@@ -1260,23 +1258,31 @@ def api_land_price():
             note = (j.get("note") or "AI 추정치(확인 필요)").strip()
             if unit and unit > 0:
                 total = round(unit * area_pyeong) if area_pyeong else None
-                return json_ok(
+                payload = dict(
                     unit_price_won_per_pyeong=unit,
                     total_price_won=total,
                     source="gemini-estimate",
                     confidence=max(0.05, min(conf, 0.45)),
                     note=note,
+                    lawd_cd=lawd_cd or None,
+                    deal_ymd=deal_ymd or None,
                 )
+                _cache_set(cache_key, payload)
+                return json_ok(**payload)
         except Exception:
             pass
 
-    return json_ok(
+    payload = dict(
         unit_price_won_per_pyeong=None,
         total_price_won=None,
         source="unknown",
         confidence=0.0,
-        note="토지 시세 데이터 소스 미확정(확인 필요)",
+        note="토지 시세 데이터 소스 미확정 또는 조회 실패(확인 필요)",
+        lawd_cd=lawd_cd or None,
+        deal_ymd=deal_ymd or None,
     )
+    _cache_set(cache_key, payload)
+    return json_ok(**payload)
 
 
 if __name__ == "__main__":
