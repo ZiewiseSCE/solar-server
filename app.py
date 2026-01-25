@@ -11,6 +11,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 import time
 import json
+import re
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -732,48 +733,251 @@ def session_ping():
 
 
 # ------------------------------------------------------------
-# F-16.5: AI 분석(8대 체크/점수)용 기본 헬퍼 (500 방지)
+# F-30: 8대 중대 체크사항 (Backend 판정 로직 + 점수 산출)
+#  - 기존 Flask app.py에 추가하여 "서버 부팅 유지" (FastAPI 별도 배포 불필요)
+#  - Endpoint: POST /api/checks/analyze
 # ------------------------------------------------------------
-def build_ai_checks(address: str, mode: str):
-    """
-    기존 프론트(UI)가 기대하는 형태로 'checks' 리스트를 반환.
-    실제 규제/데이터는 /api/checks/analyze 에서 계산하고,
-    여기서는 AI 요약카드가 500으로 죽지 않도록 "기본값 + 안내" 제공.
-    """
-    checks = [
-        {"key": "zoning", "title": "용도지역", "status": "확인 필요", "detail": "V-World(토지이용계획) 연동 결과를 확인하세요."},
-        {"key": "ecology", "title": "생태자연도", "status": "확인 필요", "detail": "V-World(생태자연도) 연동 결과를 확인하세요."},
-        {"key": "heritage", "title": "문화재 규제", "status": "확인 필요", "detail": "V-World(문화재보존관리지도) 연동 결과를 확인하세요."},
-        {"key": "setback", "title": "이격거리", "status": "확인 필요", "detail": "조례/AI 분석 및 거리측정 연동이 필요합니다."},
-        {"key": "grid", "title": "한전 여유용량", "status": "확인 필요", "detail": "KEPCO(분산전원 연계정보) 조회 필요"},
-        {"key": "slope", "title": "경사도", "status": "확인 필요", "detail": "DEM/지형 기반 경사도 계산 필요"},
-        {"key": "insolation", "title": "일사량", "status": "확인 필요", "detail": "기상청/추정 일사량 계산 필요"},
-        {"key": "land_price", "title": "토지가격", "status": "확인 필요", "detail": "실거래/공시지가 기반 추정 필요"},
-    ]
-    # 지붕 모드인 경우 문구만 약간 변경
-    if (mode or "").lower() == "roof":
-        checks[0]["detail"] = "지붕 모드: 용도지역 영향은 낮지만 기본 확인 권장"
-    return checks
 
-def conservative_score(panel_count: int, checks):
-    """
-    보수적 점수(0~100) + 신뢰도(%) 반환. (프론트 표시용)
-    """
-    base = 60
+# VWorld 규제 레이어 코드는 프로젝트/계정에 따라 달라 ENV로 받습니다.
+# 예) VWORLD_LAYER_ZONING="국토교통부_토지이용계획"
+VWORLD_API_KEY = (os.getenv("VWORLD_API_KEY") or os.getenv("VWORLD_KEY") or "").strip()
+VWORLD_LAYER_ZONING = (os.getenv("VWORLD_LAYER_ZONING") or "").strip()
+VWORLD_LAYER_ECO = (os.getenv("VWORLD_LAYER_ECO") or "").strip()
+VWORLD_LAYER_HERITAGE = (os.getenv("VWORLD_LAYER_HERITAGE") or "").strip()
+
+# data.go.kr 키 이름 호환 (둘 중 하나만 있어도 동작)
+if not DATA_GO_KR_SERVICE_KEY:
+    DATA_GO_KR_SERVICE_KEY = (os.getenv("DATA_GO_KR_KEY") or "").strip()
+
+def _status_to_score_delta(status: str) -> int:
+    if status == "FAIL":
+        return -30
+    if status == "WARNING":
+        return -10
+    return 0
+
+def _calc_total_score(check_list: dict) -> tuple[int, float]:
+    score = 100
+    fail = 0
+    warn = 0
+    for v in (check_list or {}).values():
+        st = (v or {}).get("status", "WARNING")
+        score += _status_to_score_delta(st)
+        if st == "FAIL": fail += 1
+        elif st == "WARNING": warn += 1
+    score = max(0, min(100, score))
+    # 신뢰도(휴리스틱): FAIL/WARN 많을수록 감소
+    conf = 0.985 - min(0.35, warn * 0.03 + fail * 0.08)
+    conf = max(0.25, min(0.99, conf))
+    return score, conf
+
+def _normalize_text(x: str) -> str:
+    return re.sub(r"\s+", " ", (x or "").strip())
+
+def _vworld_getfeature(layer: str, lat: float, lng: float):
+    if not (VWORLD_API_KEY and layer):
+        return None
+    url = "https://api.vworld.kr/req/data"
+    d = 0.0006
+    bbox = f"{lng-d},{lat-d},{lng+d},{lat+d}"
+    params = {
+        "key": VWORLD_API_KEY,
+        "service": "data",
+        "request": "GetFeature",
+        "data": layer,
+        "geomFilter": f"BOX({bbox})",
+        "size": 5,
+        "page": 1,
+        "format": "json",
+        "geometry": "false",
+        "attribute": "true",
+        "crs": "EPSG:4326",
+    }
     try:
-        pc = int(panel_count or 0)
+        q = url + "?" + urllib.parse.urlencode(params)
+        r = urllib.request.urlopen(q, timeout=8)
+        j = json.loads(r.read().decode("utf-8"))
+        feats = (((j.get("response") or {}).get("result") or {}).get("featureCollection") or {}).get("features") or []
+        return feats[0] if feats else None
     except Exception:
-        pc = 0
-    # 패널 수가 많을수록 약간 가점(최대 15)
-    base += min(15, pc // 200)
-    # 확인 필요 개수만큼 감점(최대 30)
-    unknowns = 0
-    for c in (checks or []):
-        if (c or {}).get("status") in ("확인 필요", "WARNING", "주의"):
-            unknowns += 1
-    score = max(0, min(100, base - min(30, unknowns * 3)))
-    confidence = max(0.25, min(0.99, 0.85 - unknowns * 0.04))
-    return score, f"{confidence*100:.1f}%"
+        return None
+
+def _zoning_check(lat: float, lng: float) -> dict:
+    pass_kw = ["계획관리지역", "생산관리지역", "자연녹지지역"]
+    fail_kw = ["농림지역", "보전녹지지역", "개발제한구역"]
+    feat = _vworld_getfeature(VWORLD_LAYER_ZONING, lat, lng)
+    if not feat:
+        return {"status":"WARNING","value":"확인 필요","msg":"V-World 용도지역 레이어 미설정/연동 실패(VWORLD_LAYER_ZONING 확인)."}
+    props = feat.get("properties") or {}
+    plans = _normalize_text(str(props.get("plans") or props.get("PLAN") or props.get("plan") or ""))
+    val = plans or _normalize_text(str(props))[:120]
+    if any(k in plans for k in fail_kw):
+        return {"status":"FAIL","value":val,"msg":"부적합 용도지역이 포함됩니다."}
+    if any(k in plans for k in pass_kw):
+        return {"status":"PASS","value":val,"msg":"사업 가능 지역(우선 검토)입니다."}
+    return {"status":"WARNING","value":val or "기타","msg":"해당 용도지역은 추가 검토가 필요합니다."}
+
+def _ecology_check(lat: float, lng: float) -> dict:
+    feat = _vworld_getfeature(VWORLD_LAYER_ECO, lat, lng)
+    if not feat:
+        return {"status":"PASS","value":"등급 없음/확인 필요","msg":"생태자연도 데이터 확인이 필요합니다(없으면 대체로 적합)."}
+    props = feat.get("properties") or {}
+    grade = _normalize_text(str(props.get("grade") or props.get("GRD") or props.get("등급") or ""))
+    if "1" in grade:
+        return {"status":"FAIL","value":f"생태 {grade}","msg":"1등급 권역은 개발이 제한됩니다."}
+    if "2" in grade:
+        return {"status":"WARNING","value":f"생태 {grade}","msg":"2등급 권역은 조건부 가능(협의 필요)입니다."}
+    return {"status":"PASS","value":f"생태 {grade or '3등급/없음'}","msg":"생태 규제 리스크가 낮습니다."}
+
+def _heritage_check(lat: float, lng: float) -> dict:
+    feat = _vworld_getfeature(VWORLD_LAYER_HERITAGE, lat, lng)
+    if not feat:
+        return {"status":"PASS","value":"해당 없음/확인 필요","msg":"문화재 데이터 확인이 필요합니다(없으면 적합)."}
+    props = feat.get("properties") or {}
+    blob = _normalize_text(" ".join([str(v) for v in props.values()])[:300])
+    name = _normalize_text(str(props.get("name") or props.get("nm") or props.get("명칭") or "문화재 구역"))
+    if ("현상변경허용구역" in blob) or ("보호구역" in blob):
+        return {"status":"FAIL","value":name,"msg":"문화재 보호/현상변경 구역으로 규제 가능성이 높습니다."}
+    return {"status":"PASS","value":name or "문화재 영향 낮음","msg":"문화재 규제 영향이 낮습니다."}
+
+def _setback_check(address: str, dist_road_m, dist_res_m) -> dict:
+    # 현재 repo에는 '거리 측정' 구현이 확정적이지 않아,
+    # - 조례 기준 자동추출 실패/거리값 미제공 시 WARNING으로 안전 처리
+    # - 추후 Gemini 연동 및 거리 측정값(dist_road_m/dist_residential_m) 연결 시 PASS/FAIL로 승격
+    return {"status":"WARNING","value":"조례 기준 확인 필요","msg":"법제처/AI 및 거리측정 연동이 필요합니다."}
+
+_kepco_cache = {}  # key -> (ts, rows)
+def _kepco_fetch(metroCd: str, cityCd: str):
+    if not PUBLIC_KEPCO_KEY:
+        return []
+    url = "https://bigdata.kepco.co.kr/openapi/v1/dispersedGeneration.do"
+    params = {"metroCd": metroCd, "cityCd": cityCd, "apiKey": PUBLIC_KEPCO_KEY, "returnType": "json"}
+    for i in range(3):
+        try:
+            q = url + "?" + urllib.parse.urlencode(params)
+            r = urllib.request.urlopen(q, timeout=8)
+            j = json.loads(r.read().decode("utf-8"))
+            return j.get("data", []) or []
+        except Exception:
+            time.sleep(0.4*(i+1))
+    return []
+
+def _grid_check(pnu: str, capacity_kw):
+    if not pnu or len(pnu) < 5:
+        return {"status":"WARNING","value":"PNU 필요","msg":"한전 여유용량 조회를 위해 PNU(19자리)가 필요합니다."}
+    metroCd, cityCd = pnu[:2], pnu[2:5]
+    key = f"{metroCd}-{cityCd}"
+    now = time.time()
+    if key in _kepco_cache and (now - _kepco_cache[key][0]) < 300:
+        rows = _kepco_cache[key][1]
+    else:
+        rows = _kepco_fetch(metroCd, cityCd)
+        _kepco_cache[key] = (now, rows)
+
+    if not rows:
+        return {"status":"WARNING","value":"확인 필요","msg":"한전 API 응답이 없거나 일시적으로 실패했습니다. 재시도 필요."}
+
+    def to_float(x):
+        try: return float(str(x).strip())
+        except: return 0.0
+    max_vol3 = max((to_float(r.get("vol3")) for r in rows), default=0.0)
+    mw = max_vol3 / 1000.0
+    req_mw = (float(capacity_kw) if capacity_kw else 1000.0) / 1000.0
+
+    if max_vol3 == 0:
+        return {"status":"FAIL","value":"여유 0MW","msg":"여유용량 0: 접속 불가 가능성이 큽니다."}
+    if mw >= max(1.0, req_mw):
+        return {"status":"PASS","value":f"여유 {mw:.2f}MW","msg":"여유용량이 충분합니다."}
+    return {"status":"WARNING","value":f"여유 {mw:.2f}MW","msg":"여유용량이 부족할 수 있습니다(협의 필요)."}
+
+def _slope_check(slope_deg):
+    if slope_deg is None:
+        return {"status":"WARNING","value":"확인 필요","msg":"경사도 데이터가 없습니다(DEM 연동 또는 프론트 계산값 전달 필요)."}
+    try:
+        s = float(slope_deg)
+    except Exception:
+        return {"status":"WARNING","value":"확인 필요","msg":"경사도 값 파싱 실패"}
+    if s < 15:
+        return {"status":"PASS","value":f"{s:.1f}°","msg":"경사도 기준 적합(15° 미만)입니다."}
+    if s < 20:
+        return {"status":"WARNING","value":f"{s:.1f}°","msg":"경사도 주의 구간(15~20°). 조례/허가 요건 확인 필요."}
+    return {"status":"FAIL","value":f"{s:.1f}°","msg":"경사도 과다(20° 이상): 개발행위허가 불가 가능."}
+
+def _insolation_check(sun_hours):
+    if sun_hours is None:
+        return {"status":"WARNING","value":"확인 필요","msg":"일사량 데이터가 없습니다(기상청 연동 또는 위도 기반 추정 필요)."}
+    try:
+        h = float(sun_hours)
+    except Exception:
+        return {"status":"WARNING","value":"확인 필요","msg":"일사량 값 파싱 실패"}
+    if h >= 3.6:
+        return {"status":"PASS","value":f"{h:.2f}h","msg":"일사량 기준 적합(≥3.6h)입니다."}
+    if h < 3.2:
+        return {"status":"WARNING","value":f"{h:.2f}h","msg":"일사량이 낮습니다(3.2h 미만). 수익성 저하 가능."}
+    return {"status":"WARNING","value":f"{h:.2f}h","msg":"일사량 추가 검토가 필요합니다."}
+
+def _land_price_check(pnu: str, area_m2):
+    # 정보 제공용. 가능한 한 값을 채우고, 불확실하면 '(추가 확인 필요)'
+    try:
+        area_pyeong = (float(area_m2)/3.305785) if (area_m2 is not None and float(area_m2)>0) else None
+    except Exception:
+        area_pyeong = None
+
+    unit = None
+    total = None
+    estimated = False
+
+    if LAND_UNIT_PRICE_WON_PER_PYEONG and LAND_UNIT_PRICE_WON_PER_PYEONG > 0:
+        unit = float(LAND_UNIT_PRICE_WON_PER_PYEONG)
+        estimated = True
+
+    if unit and area_pyeong:
+        total = unit * area_pyeong
+
+    if unit is None:
+        return {"status":"WARNING","value":"추정 불가","msg":"실거래/공시지가 데이터가 부족합니다(추가 확인 필요)."}
+    if total is not None:
+        return {"status":"PASS","value":f"{int(unit):,}원/평 · {int(total):,}원" + (" (추가 확인 필요)" if estimated else ""), "msg":"토지가격은 참고용입니다."}
+    return {"status":"PASS","value":f"{int(unit):,}원/평" + (" (추가 확인 필요)" if estimated else ""), "msg":"토지가격은 참고용입니다."}
+
+@app.route("/api/checks/analyze", methods=["POST"])
+def checks_analyze():
+    data = request.get_json(silent=True) or {}
+    address = (data.get("address") or "").strip()
+    lat = data.get("lat")
+    lng = data.get("lng")
+    pnu = (data.get("pnu") or "").strip()
+    capacity_kw = data.get("capacity_kw") or None
+    slope_deg = data.get("slope_deg")
+    sun_hours = data.get("sun_hours")
+    dist_road_m = data.get("dist_road_m")
+    dist_res_m = data.get("dist_residential_m")
+    area_m2 = data.get("area_m2")
+
+    try:
+        lat_f = float(lat)
+        lng_f = float(lng)
+    except Exception:
+        return json_bad("lat/lng required", 400)
+
+    check_list = {
+        "zoning": _zoning_check(lat_f, lng_f),
+        "ecology": _ecology_check(lat_f, lng_f),
+        "heritage": _heritage_check(lat_f, lng_f),
+        "setback": _setback_check(address, dist_road_m, dist_res_m),
+        "grid": _grid_check(pnu, capacity_kw),
+        "slope": _slope_check(slope_deg),
+        "insolation": _insolation_check(sun_hours),
+        "land_price": _land_price_check(pnu, area_m2),
+    }
+
+    total, conf = _calc_total_score(check_list)
+    return json_ok(
+        total_score=total,
+        confidence=f"{conf*100:.1f}%",
+        check_list=check_list
+    )
+
 
 @app.route("/api/ai/analyze", methods=["POST"])
 def ai_analyze():
