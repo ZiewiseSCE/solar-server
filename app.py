@@ -80,6 +80,35 @@ def _stable_hash_int(s: str) -> int:
     h = hashlib.sha256(s.encode("utf-8")).hexdigest()
     return int(h[:12], 16)
 
+
+def _kepco_capacity_sim(address: str = "", pnu: str = None, lat: float = None, lng: float = None):
+    """
+    한전 계통여유 '결정론적' 모의값 생성.
+    - 외부 API 미연동/실패 상황에서도 항상 동일 입력→동일 결과를 반환 (Null 금지)
+    반환: {"mw": float, "text": str, "seed": int}
+    """
+    key = (pnu or "").strip() or (address or "").strip()
+    if not key and lat is not None and lng is not None:
+        key = f"{lat:.5f},{lng:.5f}"
+    if not key:
+        key = "unknown"
+
+    seed = _stable_hash_int("kepco:" + key)
+    # 1.0 ~ 7.0MW 범위에서 결정론적으로 선택
+    mw = 1.0 + ((seed % 6000) / 1000.0)  # 1.000~6.999
+    # 구간 라벨
+    if mw >= 5.0:
+        label = "4MW 이상(여유)"
+    elif mw >= 3.0:
+        label = "2~4MW(보통)"
+    elif mw >= 1.5:
+        label = "1~2MW(제한)"
+    else:
+        label = "1MW 미만(혼잡)"
+    text = f"{mw:.1f} MW ({label})"
+    return {"mw": float(f"{mw:.1f}"), "text": text, "seed": seed}
+
+
 def _heuristic_area_m2_from_address(address: str) -> float:
     # 최후 fallback: 250~2500㎡ 범위 결정론적
     seed = _stable_hash_int(address or "unknown")
@@ -988,108 +1017,213 @@ def _vworld_get_zoning(address: str):
     except Exception as e:
         return {"ok": False, "needs_confirm": True, "zone": None, "raw": {"error": repr(e)}}
 
-def build_ai_checks(address: str, mode: str):
+
+def _vworld_get_zoning_by_point_or_address(address: str, lat: float = None, lng: float = None):
     """
-    8대 체크사항(보수적): 외부 데이터 실패/미연동은 needs_confirm=True.
+    V-World 용도지역 조회(포인트 우선, 실패 시 주소 기반).
+    - lat/lng가 있으면 GetFeature(POINT) 시도
+    - 실패하면 기존 _vworld_get_zoning(address)로 fallback
     """
+    address = (address or "").strip()
+    if not PUBLIC_VWORLD_KEY:
+        return {"ok": False, "needs_confirm": True, "zone": None, "raw": None}
+
+    # 1) point 기반 조회 시도
+    if lat is not None and lng is not None:
+        try:
+            # V-World 데이터 레이어는 환경마다 다를 수 있어 후보를 순차 시도
+            # (성공 시 첫 결과에서 용도지역/지구 관련 속성을 최대한 추출)
+            candidates = [
+                "LT_C_UQ111",  # 용도지역(프로젝트별 상이)
+                "LT_C_UQ112",  # 용도지구
+                "LT_C_UQ113",  # 용도구역
+            ]
+            for data_layer in candidates:
+                url = "https://api.vworld.kr/req/data"
+                params = {
+                    "service": "data",
+                    "request": "getfeature",
+                    "version": "2.0",
+                    "format": "json",
+                    "crs": "EPSG:4326",
+                    "key": PUBLIC_VWORLD_KEY,
+                    "data": data_layer,
+                    "geometry": "false",
+                    "attribute": "true",
+                    "geomfilter": f"POINT({lng} {lat})",
+                    "size": 1,
+                }
+                r = requests.get(url, params=params, timeout=6)
+                js = r.json()
+                # 응답 구조가 프로젝트/키에 따라 달라 방어적으로 파싱
+                feats = (((js or {}).get("response") or {}).get("result") or {}).get("featureCollection") or {}
+                features = feats.get("features") or []
+                if not features:
+                    continue
+                props = (features[0].get("properties") or {})
+                # 흔히 쓰이는 키 후보
+                for k in ["zoning", "prposAreaDstrc", "prposAreaDstrcNm", "zone", "name", "dstrc_nm"]:
+                    if props.get(k):
+                        return {"ok": True, "needs_confirm": False, "zone": str(props.get(k)), "raw": props}
+                # 키가 불명확하면 properties를 통째로 던져주되 확인 필요
+                return {"ok": True, "needs_confirm": True, "zone": None, "raw": props}
+        except Exception:
+            pass
+
+    # 2) 주소 기반 fallback
+    return _vworld_get_zoning(address)
+
+
+def build_ai_checks(address: str, lat: float = None, lng: float = None, mode: str = "roof"):
+    """
+    8대 중대 체크사항(실데이터/휴리스틱 혼합).
+    - 가능한 항목은 실제 데이터(예: V-World 용도지역)로 채움
+    - 외부 API 실패 시에도 "빈값/None"이 아니라 추정 문구를 넣고 needs_confirm=True로 처리
+    """
+    address = (address or "").strip()
     mode = (mode or "roof").strip().lower()
+
+    def _kw(s: str, *words: str) -> bool:
+        return any(w in (s or "") for w in words)
+
     checks = []
 
-    # 1) 용도지역 (V-World)
-    vz = _vworld_get_zoning(address)
+    # ------------------------------------------------------------
+    # 1) 용도지역 (V-World GetFeature best-effort)
+    # ------------------------------------------------------------
+    vz = _vworld_get_zoning_by_point_or_address(address, lat, lng)
     if vz.get("ok") and vz.get("zone"):
-        checks.append(_check_item(
-            "용도지역(개발행위 가능성)",
-            f"조회됨: {vz['zone']}",
-            passed=None,
-            needs_confirm=vz.get("needs_confirm", False),
-            weight=1.3,
-            link="https://www.vworld.kr/",
-            meta={"zone": vz.get("zone")}
-        ))
+        msg = f"조회됨: {vz['zone']}"
+        needs = bool(vz.get("needs_confirm", False))
     else:
-        checks.append(_check_item(
-            "용도지역(개발행위 가능성)",
-            "확인 필요 (V-World 용도지역 조회 실패/미연동)",
-            passed=None,
-            needs_confirm=True,
-            weight=1.3,
-            link="https://www.vworld.kr/",
-            meta=vz.get("raw") or {}
-        ))
+        # AI/휴리스틱 추정
+        if _kw(address, "산", "임", "임야"):
+            zone_guess = "농림/보전 가능성(산지/임야 추정)"
+        elif _kw(address, "리", "면", "읍"):
+            zone_guess = "관리지역 가능성(농촌/교외 추정)"
+        else:
+            zone_guess = "도시/준도시지역 가능성(추정)"
+        msg = f"확인 필요 (추정: {zone_guess})"
+        needs = True
 
-    # 2) 이격거리
+    checks.append(_check_item(
+        "용도지역(개발행위 가능성)",
+        msg,
+        passed=None,
+        needs_confirm=needs,
+        weight=1.3,
+        link="https://www.vworld.kr/",
+        meta={"zone": vz.get("zone") or None, "raw": vz.get("raw")}
+    ))
+
+    # ------------------------------------------------------------
+    # 2) 이격거리(경계/도로/시설) - 휴리스틱
+    # ------------------------------------------------------------
+    setback_hint = "현장 경계/도로/시설물 기준 이격거리 측정 필요"
+    if _kw(address, "산", "임", "임야"):
+        setback_hint = "임야/산지일 가능성 → 임도/경계 기준 이격거리 추가 확인 필요"
     checks.append(_check_item(
         "이격거리(경계/도로/시설)",
-        "확인 필요 (현장 경계/도로/시설물 기준 이격거리 측정 필요)",
+        f"확인 필요 ({setback_hint})",
         passed=None,
         needs_confirm=True,
-        weight=1.2
+        weight=1.0,
+        link="https://www.vworld.kr/"
     ))
 
-    # 3) 경사도
+    # ------------------------------------------------------------
+    # 3) 경사도(토공/구조 위험) - 키워드 기반 판별
+    # ------------------------------------------------------------
+    if _kw(address, "산", "임", "고개", "재"):
+        slope_msg = "주의(산지/임야 키워드 → 경사도 높을 수 있음)"
+        needs = True
+    else:
+        slope_msg = "평지 가능성(키워드 기준 추정) – DEM 연동 시 재검증 권장"
+        needs = True
     checks.append(_check_item(
         "경사도(토공/구조 위험)",
-        "확인 필요 (DEM/지형 데이터 연동 필요)",
+        f"확인 필요 ({slope_msg})",
         passed=None,
-        needs_confirm=True,
-        weight=1.1
+        needs_confirm=needs,
+        weight=1.1,
+        link="https://www.vworld.kr/"
     ))
 
-    # 4) 일사/그늘
+    # ------------------------------------------------------------
+    # 4) 일사/그늘(발전량 리스크) - 간단 추정
+    # ------------------------------------------------------------
+    shade_msg = "그늘/장애물 및 일사량 데이터 연동 필요"
+    if mode == "roof":
+        shade_msg = "지붕 주변(옥상 구조물/인접 건물) 그늘 영향 확인 필요"
     checks.append(_check_item(
         "일사/그늘(발전량 리스크)",
-        "확인 필요 (그늘/장애물 및 일사량 데이터 연동 필요)",
-        passed=None,
-        needs_confirm=True,
-        weight=1.1
-    ))
-
-    # 5) 계통연계
-    checks.append(_check_item(
-        "계통연계(한전 여유용량)",
-        "확인 필요 (KEPCO API 연동/변전소 관할 확인 필요)",
-        passed=None,
-        needs_confirm=True,
-        weight=1.5
-    ))
-
-    # 6) 인허가/행위제한
-    checks.append(_check_item(
-        "인허가/행위제한(농지·산지·보전·도시계획)",
-        "확인 필요 (농지전용/산지전용/보전관리지역/환경 규제 검토 필요)",
-        passed=None,
-        needs_confirm=True,
-        weight=1.4
-    ))
-
-    # 7) 접근성/공사성
-    checks.append(_check_item(
-        "접근성/공사성(진입로·장비 반입)",
-        "확인 필요 (진입로 폭/경사/교량하중 현장 확인 필요)",
+        f"확인 필요 ({shade_msg})",
         passed=None,
         needs_confirm=True,
         weight=1.0
     ))
 
-    # 8) 토지비/사업성
+    # ------------------------------------------------------------
+    # 5) 계통연계(한전 여유용량) - 결정론적 시뮬레이션(Null 금지)
+    # ------------------------------------------------------------
+    cap = _kepco_capacity_sim(address=address, pnu=None, lat=lat, lng=lng)
     checks.append(_check_item(
-        "토지비/사업성(토지 단가)",
-        "확인 필요 (공시지가·실거래가 기반 추정 필요)",
+        "계통연계(한전 여유용량)",
+        f"모의: {cap['text']} (주소/좌표 기반 시뮬레이션)",
+        passed=None,
+        needs_confirm=True,  # 실제 연계는 항상 확인 필요
+        weight=1.2,
+        link="https://home.kepco.co.kr/"
+    ))
+
+    # ------------------------------------------------------------
+    # 6) 인허가/행위제한(농지·산지·보전·도시계획) - 휴리스틱
+    # ------------------------------------------------------------
+    permit_msg = "농지/산지/보전관리지역/도시계획 규제 검토 필요"
+    if _kw(address, "농", "전", "답"):
+        permit_msg = "농지 키워드 → 농지전용/형질변경 가능 여부 확인 필요"
+    if _kw(address, "산", "임", "임야"):
+        permit_msg = "산지/임야 키워드 → 산지전용/보전규제 가능성 확인 필요"
+    checks.append(_check_item(
+        "인허가/행위제한(농지·산지·보전·도시계획)",
+        f"확인 필요 ({permit_msg})",
         passed=None,
         needs_confirm=True,
         weight=1.2
     ))
 
-    # mode별 보정
-    if mode == "roof":
-        for c in checks:
-            if c["title"].startswith("경사도"):
-                c["weight"] *= 0.6
-            if c["title"].startswith("토지비/사업성"):
-                c["weight"] *= 0.3
+    # ------------------------------------------------------------
+    # 7) 접근성/공사성(진입로·장비 반입) - 휴리스틱
+    # ------------------------------------------------------------
+    access_msg = "진입로 폭/경사/교량하중 현장 확인 필요"
+    if _kw(address, "산", "임", "리"):
+        access_msg = "교외/산지 가능성 → 진입로 협소/경사 리스크 점검 필요"
+    checks.append(_check_item(
+        "접근성/공사성(진입로·장비 반입)",
+        f"확인 필요 ({access_msg})",
+        passed=None,
+        needs_confirm=True,
+        weight=1.0
+    ))
+
+    # ------------------------------------------------------------
+    # 8) 토지비/사업성(토지 단가) - Gemini/휴리스틱(항상 숫자 반환)
+    # ------------------------------------------------------------
+    est = _gemini_land_price_estimate(address)
+    unit_won = float(est.get("unit_price_won_per_pyeong") or 0)
+    unit_man = max(0, round(unit_won / 10000, 1))  # 만원/평
+    note = est.get("note") or "AI/휴리스틱 추정"
+    checks.append(_check_item(
+        "토지비/사업성(토지 단가)",
+        f"추정: 평당 약 {unit_man}만원 ({note})",
+        passed=None,
+        needs_confirm=True,
+        weight=1.1,
+        meta={"unit_price_won_per_pyeong": unit_won, "confidence": est.get("confidence_0_1")}
+    ))
 
     return checks
+
 
 def conservative_score(panel_count: int, checks: list):
     """
@@ -1156,7 +1290,7 @@ def ai_analyze():
     panel_count = int(data.get("panel_count") or 0)
     setback_m = float(data.get("setback_m") or 0)
 
-    checks = build_ai_checks(address, mode)
+    checks = build_ai_checks(address, lat=lat, lng=lng, mode=mode)
     score, confidence = conservative_score(panel_count, checks)
 
     # 확장 필드(미확정 데이터는 "확인 필요")
