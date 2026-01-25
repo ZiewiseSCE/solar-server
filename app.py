@@ -1492,6 +1492,22 @@ def _kepco_best_effort_parse(raw_bytes: bytes):
     return None, {"parsed_as": "text", "raw_preview": txt[:2000]}
 
 
+
+def _simulate_kepco_capacity_text(seed_str: str) -> str:
+    """Deterministic simulated KEPCO capacity text (for demo/fallback).
+    Always returns a non-empty Korean string like '4MW 이상'.
+    """
+    s = (seed_str or "unknown").strip()
+    seed = _stable_hash_int(s)
+    r = seed % 1000
+    if r < 220:
+        return "4MW 이상"
+    if r < 520:
+        return "2~4MW"
+    if r < 820:
+        return "1~2MW"
+    return "1MW 미만"
+
 @app.route("/api/infra/kepco", methods=["GET"])
 def infra_kepco():
     """
@@ -1510,18 +1526,21 @@ def infra_kepco():
     api_url = (os.getenv("KEPCO_API_URL") or "").strip()
 
     if not api_url or not api_key:
+        # Fallback: deterministic simulated capacity so UI does not stay empty
+        seed = pnu or (request.args.get("address") or "").strip() or bbox or "unknown"
+        sim = _simulate_kepco_capacity_text(seed)
         return json_ok(
             pnu=pnu or None,
             bbox=bbox or None,
             z=z,
             items=[],
             lines=[],
-            kepco_capacity=None,
-            note="KEPCO_API_URL 또는 KEPCO_KEY 미설정: 연동 필요(확인 필요)",
+            kepco_capacity=sim,
+            source="simulated",
+            note="KEPCO_API_URL/KEPCO_KEY 미설정 → 모의 용량 표시(확인 필요)",
             needs_confirm=True,
         )
-
-    try:
+try:
         params = {"serviceKey": api_key}
         if pnu:
             params["pnu"] = pnu
@@ -1965,8 +1984,9 @@ def api_land_price():
         _cache_set(cache_key, payload)
         return json_ok(**payload)
 
-    # 2) fallback Gemini (best-effort) if exists in this app build
-    if address and GEMINI_API_KEY:
+    # 2) fallback Gemini/Heuristic (always; never return null just because AI key is missing)
+    seed_addr = (address or (f"PNU:{pnu}" if pnu else "") or (lawd_cd or "")).strip()
+    if seed_addr:
         try:
             j = _gemini_land_price_estimate(address)
             unit = _try_float(j.get("unit_price_won_per_pyeong"), None)
