@@ -776,6 +776,253 @@ def session_ping():
 # ------------------------------------------------------------
 # F-15/16: AI 분석 API
 # ------------------------------------------------------------
+
+# -----------------------------
+# AI checks (8대 체크) + conservative scoring
+# -----------------------------
+def _clamp(x, lo, hi):
+    try:
+        x = float(x)
+    except Exception:
+        return lo
+    return max(lo, min(hi, x))
+
+def _as_bool(v):
+    return True if v is True else False
+
+def _check_item(title, result, passed=None, needs_confirm=False, weight=1.0, link=None, meta=None):
+    return {
+        "title": title,
+        "result": result,
+        "passed": passed,  # True/False/None
+        "needs_confirm": bool(needs_confirm),
+        "weight": float(weight),
+        "link": link,
+        "meta": meta or {},
+    }
+
+def _vworld_get_zoning(address: str):
+    """
+    V-World 용도지역 조회 (best-effort).
+    - 주소→좌표→용도지역 레이어 조회
+    - 스펙/레이어가 프로젝트마다 다를 수 있어 실패 시 needs_confirm=True로 반환
+    """
+    if not PUBLIC_VWORLD_KEY or not address:
+        return {"ok": False, "needs_confirm": True, "zone": None, "raw": None}
+
+    try:
+        # 1) Geocode (주소->좌표)
+        geocode_url = "https://api.vworld.kr/req/address"
+        q = {
+            "service": "address",
+            "request": "getCoord",
+            "version": "2.0",
+            "crs": "EPSG:4326",
+            "address": address,
+            "format": "json",
+            "type": "road",  # road/parcel (필요 시 변경)
+            "key": PUBLIC_VWORLD_KEY,
+        }
+        u = geocode_url + "?" + urllib.parse.urlencode(q, doseq=True)
+        with urllib.request.urlopen(urllib.request.Request(u, method="GET"), timeout=8) as resp:
+            raw = resp.read()
+        j = json.loads(raw.decode("utf-8", errors="ignore") or "{}")
+        point = (((j.get("response") or {}).get("result") or {}).get("point") or {})
+        x = point.get("x")
+        y = point.get("y")
+        if not x or not y:
+            return {"ok": False, "needs_confirm": True, "zone": None, "raw": j}
+
+        # 2) Zoning/landuse (레이어 ID는 운영에 맞게 교체 가능)
+        land_url = "https://api.vworld.kr/req/data"
+        q2 = {
+            "service": "data",
+            "request": "GetFeature",
+            "version": "2.0",
+            "format": "json",
+            "crs": "EPSG:4326",
+            "geomFilter": f"POINT({x} {y})",
+            "data": "LT_C_UQ111",  # (예시) 용도지역/지구 레이어. 실제 레이어 ID로 교체 가능.
+            "key": PUBLIC_VWORLD_KEY,
+            "size": "10",
+            "page": "1",
+        }
+        u2 = land_url + "?" + urllib.parse.urlencode(q2, doseq=True)
+        with urllib.request.urlopen(urllib.request.Request(u2, method="GET"), timeout=8) as resp2:
+            raw2 = resp2.read()
+        j2 = json.loads(raw2.decode("utf-8", errors="ignore") or "{}")
+
+        features = (((j2.get("response") or {}).get("result") or {}).get("featureCollection") or {}).get("features") or []
+        zone = None
+        if features:
+            props = (features[0].get("properties") or {})
+            for k in ("zone", "uname", "dname", "lt_cate", "prposAreaDstrcNm", "prpos"):
+                if props.get(k):
+                    zone = props.get(k)
+                    break
+
+        return {"ok": True, "needs_confirm": (zone is None), "zone": zone, "raw": {"x": x, "y": y}}
+    except Exception as e:
+        return {"ok": False, "needs_confirm": True, "zone": None, "raw": {"error": repr(e)}}
+
+def build_ai_checks(address: str, mode: str):
+    """
+    8대 체크사항(보수적): 외부 데이터 실패/미연동은 needs_confirm=True.
+    """
+    mode = (mode or "roof").strip().lower()
+    checks = []
+
+    # 1) 용도지역 (V-World)
+    vz = _vworld_get_zoning(address)
+    if vz.get("ok") and vz.get("zone"):
+        checks.append(_check_item(
+            "용도지역(개발행위 가능성)",
+            f"조회됨: {vz['zone']}",
+            passed=None,
+            needs_confirm=vz.get("needs_confirm", False),
+            weight=1.3,
+            link="https://www.vworld.kr/",
+            meta={"zone": vz.get("zone")}
+        ))
+    else:
+        checks.append(_check_item(
+            "용도지역(개발행위 가능성)",
+            "확인 필요 (V-World 용도지역 조회 실패/미연동)",
+            passed=None,
+            needs_confirm=True,
+            weight=1.3,
+            link="https://www.vworld.kr/",
+            meta=vz.get("raw") or {}
+        ))
+
+    # 2) 이격거리
+    checks.append(_check_item(
+        "이격거리(경계/도로/시설)",
+        "확인 필요 (현장 경계/도로/시설물 기준 이격거리 측정 필요)",
+        passed=None,
+        needs_confirm=True,
+        weight=1.2
+    ))
+
+    # 3) 경사도
+    checks.append(_check_item(
+        "경사도(토공/구조 위험)",
+        "확인 필요 (DEM/지형 데이터 연동 필요)",
+        passed=None,
+        needs_confirm=True,
+        weight=1.1
+    ))
+
+    # 4) 일사/그늘
+    checks.append(_check_item(
+        "일사/그늘(발전량 리스크)",
+        "확인 필요 (그늘/장애물 및 일사량 데이터 연동 필요)",
+        passed=None,
+        needs_confirm=True,
+        weight=1.1
+    ))
+
+    # 5) 계통연계
+    checks.append(_check_item(
+        "계통연계(한전 여유용량)",
+        "확인 필요 (KEPCO API 연동/변전소 관할 확인 필요)",
+        passed=None,
+        needs_confirm=True,
+        weight=1.5
+    ))
+
+    # 6) 인허가/행위제한
+    checks.append(_check_item(
+        "인허가/행위제한(농지·산지·보전·도시계획)",
+        "확인 필요 (농지전용/산지전용/보전관리지역/환경 규제 검토 필요)",
+        passed=None,
+        needs_confirm=True,
+        weight=1.4
+    ))
+
+    # 7) 접근성/공사성
+    checks.append(_check_item(
+        "접근성/공사성(진입로·장비 반입)",
+        "확인 필요 (진입로 폭/경사/교량하중 현장 확인 필요)",
+        passed=None,
+        needs_confirm=True,
+        weight=1.0
+    ))
+
+    # 8) 토지비/사업성
+    checks.append(_check_item(
+        "토지비/사업성(토지 단가)",
+        "확인 필요 (공시지가·실거래가 기반 추정 필요)",
+        passed=None,
+        needs_confirm=True,
+        weight=1.2
+    ))
+
+    # mode별 보정
+    if mode == "roof":
+        for c in checks:
+            if c["title"].startswith("경사도"):
+                c["weight"] *= 0.6
+            if c["title"].startswith("토지비/사업성"):
+                c["weight"] *= 0.3
+
+    return checks
+
+def conservative_score(panel_count: int, checks: list):
+    """
+    보수적 점수(0~100) + 신뢰도(confidence 5~85).
+    - needs_confirm가 많을수록 감점
+    """
+    try:
+        pc = int(panel_count or 0)
+    except Exception:
+        pc = 0
+
+    items = checks if isinstance(checks, list) else []
+    if not items:
+        return 35, 10
+
+    total_w = 0.0
+    score_w = 0.0
+    confirm_w = 0.0
+
+    for c in items:
+        w = float((c or {}).get("weight") or 1.0)
+        total_w += w
+
+        passed = (c or {}).get("passed", None)
+        needs = _as_bool((c or {}).get("needs_confirm"))
+
+        if passed is True:
+            s = 1.0
+        elif passed is False:
+            s = 0.0
+        else:
+            s = 0.55
+
+        if needs:
+            s *= 0.75
+            confirm_w += w
+
+        score_w += (s * w)
+
+    base = (score_w / max(0.001, total_w)) * 100.0
+
+    if pc > 0 and pc < 30:
+        base -= 8
+    elif pc >= 30 and pc < 80:
+        base -= 3
+
+    base = _clamp(base, 0, 100)
+
+    confirm_ratio = confirm_w / max(0.001, total_w)
+    conf = (1.0 - confirm_ratio) * 70 + 10
+    conf = int(round(_clamp(conf, 5, 85)))
+
+    return int(round(base)), conf
+
+
+
 @app.route("/api/ai/analyze", methods=["POST"])
 def ai_analyze():
     data = request.get_json(silent=True) or {}
@@ -1091,45 +1338,106 @@ def report_pdf():
 # F-25/26: Infra layer APIs (연동 준비 상태)
 #  - 실제 한전/기설치 데이터 소스 확정 시 이 엔드포인트 내부만 교체하면 프론트가 그대로 동작
 # ------------------------------------------------------------
+
+def _kepco_best_effort_parse(raw_bytes: bytes):
+    """KEPCO 응답(JSON/XML/text) best-effort 파싱 -> (capacity_text, meta_dict)"""
+    txt = (raw_bytes or b"").decode("utf-8", errors="ignore").strip()
+    if not txt:
+        return None, {"raw": ""}
+
+    # JSON
+    try:
+        j = json.loads(txt)
+        for k in ("kepco_capacity", "availableCapacity", "spareCapacity", "remainCapacity", "remain_mw", "remaining_mw"):
+            if k in j and j.get(k) is not None:
+                return str(j.get(k)), {"parsed_as": "json", "hit": k}
+        return None, {"parsed_as": "json", "note": "no known capacity field", "keys": list(j)[:25]}
+    except Exception:
+        pass
+
+    # XML
+    try:
+        root = ET.fromstring(raw_bytes)
+        for tag in ("kepco_capacity", "availableCapacity", "spareCapacity", "remainCapacity", "remainingMw", "remaining_mw"):
+            v = root.findtext(f".//{tag}")
+            if v:
+                return v.strip(), {"parsed_as": "xml", "hit": tag}
+        return None, {"parsed_as": "xml", "note": "no known tag"}
+    except Exception:
+        pass
+
+    return None, {"parsed_as": "text", "raw_preview": txt[:2000]}
+
+
 @app.route("/api/infra/kepco", methods=["GET"])
 def infra_kepco():
     """
-    Query params:
-      bbox = "minLng,minLat,maxLng,maxLat"
-      z    = zoom level
-    Returns:
-      items: substations [{id,name,lat,lng,remaining_mw,available_year,status}]
-      lines: lines       [{id,coords:[[lat,lng],[lat,lng],...],remaining_mw,available_year,status}]
+    Query:
+      - pnu=... (카드 표시용)
+      - bbox=minLng,minLat,maxLng,maxLat&z=... (레이어용)
+    Env:
+      - KEPCO_KEY (PUBLIC_KEPCO_KEY)
+      - KEPCO_API_URL (실제 한전 OpenAPI 엔드포인트)
     """
+    pnu = (request.args.get("pnu") or "").strip()
     bbox = (request.args.get("bbox") or "").strip()
     z = int(request.args.get("z") or 0)
-    # 데이터 소스 미확정: 구조만 제공
-    return json_ok(
-        bbox=bbox,
-        z=z,
-        items=[],
-        lines=[],
-        note="KEPCO 데이터 소스/키/스키마 미확정: 현재는 구조만 제공(확인 필요)"
-    )
 
-@app.route("/api/infra/existing", methods=["GET"])
-def infra_existing():
-    """
-    Query params:
-      bbox = "minLng,minLat,maxLng,maxLat"
-      z    = zoom level
-    Returns:
-      items: existing plants [{id,lat,lng,capacity_kw,status}]
-    """
-    bbox = (request.args.get("bbox") or "").strip()
-    z = int(request.args.get("z") or 0)
-    # 데이터 소스 미확정: 구조만 제공
-    return json_ok(
-        bbox=bbox,
-        z=z,
-        items=[],
-        note="기 설치 태양광 위치 데이터(GeoJSON/DB) 미확정: 현재는 구조만 제공(확인 필요)"
-    )
+    api_key = (PUBLIC_KEPCO_KEY or "").strip()
+    api_url = (os.getenv("KEPCO_API_URL") or "").strip()
+
+    if not api_url or not api_key:
+        return json_ok(
+            pnu=pnu or None,
+            bbox=bbox or None,
+            z=z,
+            items=[],
+            lines=[],
+            kepco_capacity=None,
+            note="KEPCO_API_URL 또는 KEPCO_KEY 미설정: 연동 필요(확인 필요)",
+            needs_confirm=True,
+        )
+
+    try:
+        params = {"serviceKey": api_key}
+        if pnu:
+            params["pnu"] = pnu
+        if bbox:
+            params["bbox"] = bbox
+            params["z"] = str(z)
+
+        url = api_url + ("?" if "?" not in api_url else "&") + urllib.parse.urlencode(params, doseq=True)
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            raw = resp.read()
+
+        cap, meta = _kepco_best_effort_parse(raw)
+
+        return json_ok(
+            pnu=pnu or None,
+            bbox=bbox or None,
+            z=z,
+            kepco_capacity=cap,
+            items=[],
+            lines=[],
+            source="kepco-openapi",
+            needs_confirm=(cap is None),
+            meta=meta,
+        )
+    except Exception as e:
+        return json_ok(
+            pnu=pnu or None,
+            bbox=bbox or None,
+            z=z,
+            items=[],
+            lines=[],
+            kepco_capacity=None,
+            source="kepco-openapi",
+            needs_confirm=True,
+            note="KEPCO 호출 실패(엔드포인트/파라미터/응답 스키마 확인 필요)",
+            error=repr(e),
+        )
+
 
 # ------------------------------------------------------------
 # F-27: 지역별 일사량/날씨 기반 최적 방위각/경사각 (연동 준비 상태)
@@ -1178,6 +1486,7 @@ def solar_optimize():
 # F-28: 토지 시세 AI/데이터 기반 자동 산출 (연동 준비 상태)
 #  - 데이터 소스 확정 전까지는 값 자동 채움 미구현(표기 구조만)
 # ------------------------------------------------------------
+
 @app.route("/api/land/estimate", methods=["POST"])
 def land_estimate():
     data = request.get_json(silent=True) or {}
@@ -1186,36 +1495,68 @@ def land_estimate():
     area_m2 = data.get("area_m2")
     area_pyeong = data.get("area_pyeong")
 
-    # 데이터 소스 확정 전 "옵션 heuristic":
-    # - ENV LAND_UNIT_PRICE_WON_PER_PYEONG(평 단가) 가 설정되어 있으면 면적 기반으로 산출
-    land_price = None
-    unit_price = None
+    # 면적 보정
     try:
-        if LAND_UNIT_PRICE_WON_PER_PYEONG and float(LAND_UNIT_PRICE_WON_PER_PYEONG) > 0:
-            unit_price = float(LAND_UNIT_PRICE_WON_PER_PYEONG)
-            ap = None
-            if area_pyeong is not None:
-                ap = float(area_pyeong)
-            elif area_m2 is not None:
-                ap = float(area_m2) / 3.3058
-            if ap and ap > 0:
-                land_price = ap * unit_price
+        if area_pyeong is None and area_m2 is not None:
+            area_pyeong = float(area_m2) / 3.3058
+        if area_pyeong is not None:
+            area_pyeong = float(area_pyeong)
     except Exception:
-        land_price = None
-        unit_price = None
+        area_pyeong = None
+
+    unit = None
+    total = None
+    source = "unknown"
+    confidence = 0.0
+    note = "확인 필요"
+
+    try:
+        lawd_cd = (pnu[:5] if (pnu and pnu.isdigit() and len(pnu) >= 5) else None)
+
+        # 1) data.go.kr RTMS 실거래가(토지) 기반 추정 (가능한 경우)
+        if DATA_GO_KR_SERVICE_KEY and lawd_cd and lawd_cd.isdigit() and len(lawd_cd) == 5:
+            ym_list = _ym_list_recent(3)
+            for ym in ym_list:
+                rt = _fetch_rtms_land_trade(lawd_cd, ym)
+                est = _rtms_estimate_unit_price_per_pyeong(rt.get("items") or [])
+                unit0 = _try_float(est.get("unit_price_won_per_pyeong"), None)
+                if unit0 and unit0 > 0:
+                    unit = unit0
+                    total = round(unit * area_pyeong) if area_pyeong else None
+                    source = "data.go.kr-rtms-landtrade"
+                    confidence = 0.70
+                    note = f"{est.get('note','실거래가 기반')} (표본 {est.get('sample_count',0)}건, {ym})"
+                    break
+
+        # 2) fallback: ENV 기본 평단가
+        if unit is None and LAND_UNIT_PRICE_WON_PER_PYEONG and float(LAND_UNIT_PRICE_WON_PER_PYEONG) > 0:
+            unit = float(LAND_UNIT_PRICE_WON_PER_PYEONG)
+            total = round(unit * area_pyeong) if area_pyeong else None
+            source = "env-default"
+            confidence = 0.35
+            note = "ENV 기본 평단가 기반 추정치(확인 필요)"
+
+    except Exception as e:
+        unit = None
+        total = None
+        source = "unknown"
+        confidence = 0.0
+        note = f"조회 실패(확인 필요): {repr(e)}"
 
     payload = {
         "address": address or "확인 필요",
         "pnu": pnu,
         "area_m2": area_m2,
         "area_pyeong": area_pyeong,
-        "land_price_won": land_price,  # heuristic(옵션) or None
-        "unit_price_won_per_pyeong": unit_price,
-        "source": "heuristic" if land_price is not None else "placeholder",
-        "needs_confirm": True,
-        "note": "토지 시세 데이터 소스 확정 전: ENV 평단가가 있으면 면적 기반 heuristic 산출(확인 필요)"
+        "land_price_won": total,
+        "unit_price_won_per_pyeong": unit,
+        "source": source,
+        "confidence": confidence,
+        "needs_confirm": True if confidence < 0.8 else False,
+        "note": note,
     }
     return json_ok(**payload)
+
 
 # ------------------------------------------------------------
 # Global exception handler (500에서도 원인 JSON으로 반환)
