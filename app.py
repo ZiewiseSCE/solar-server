@@ -11,7 +11,6 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 import time
 import json
-import re
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -92,12 +91,59 @@ def get_conn():
 # DB init / diagnostics / license key storage
 # ------------------------------------------------------------
 
+# ------------------------------------------------------------
+# Hardware master tables (Modules/Inverters) - Step1
+# ------------------------------------------------------------
+def _ensure_hardware_tables(conn):
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS pv_modules (
+          id bigserial primary key,
+          no int unique,
+          brand text not null,
+          model text not null,
+          power_w int,
+          module_type text,
+          efficiency_pct numeric,
+          price_won_per_w int,
+          is_bifacial boolean default false,
+          features text,
+          created_at timestamptz default now()
+        );
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS inverters (
+          id bigserial primary key,
+          no int unique,
+          brand text not null,
+          model text not null,
+          capacity_kw int,
+          topology text,
+          price_million_won numeric,
+          price_won bigint,
+          features text,
+          is_integrated_connection_box boolean default false,
+          created_at timestamptz default now()
+        );
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS master_versions (
+          id bigserial primary key,
+          name text unique not null,
+          imported_at timestamptz default now()
+        );
+    """)
+    conn.commit()
+
+
 def init_db():
     """Create required tables if missing (and apply lightweight migrations)."""
     conn = get_conn()
     try:
         # admin_state (for legacy code compatibility; not used for auth now)
         _ensure_admin_state(conn)
+
+        _ensure_hardware_tables(conn)
 
         cur = conn.cursor()
         # Base table (initial columns)
@@ -730,300 +776,6 @@ def session_ping():
 # ------------------------------------------------------------
 # F-15/16: AI 분석 API
 # ------------------------------------------------------------
-
-
-# ------------------------------------------------------------
-# F-30: 8대 중대 체크사항 (Backend 판정 로직 + 점수 산출)
-#  - 기존 Flask app.py에 추가하여 "서버 부팅 유지" (FastAPI 별도 배포 불필요)
-#  - Endpoint: POST /api/checks/analyze
-# ------------------------------------------------------------
-
-# VWorld 규제 레이어 코드는 프로젝트/계정에 따라 달라 ENV로 받습니다.
-# 예) VWORLD_LAYER_ZONING="국토교통부_토지이용계획"
-VWORLD_API_KEY = (os.getenv("VWORLD_API_KEY") or os.getenv("VWORLD_KEY") or "").strip()
-VWORLD_LAYER_ZONING = (os.getenv("VWORLD_LAYER_ZONING") or "").strip()
-VWORLD_LAYER_ECO = (os.getenv("VWORLD_LAYER_ECO") or "").strip()
-VWORLD_LAYER_HERITAGE = (os.getenv("VWORLD_LAYER_HERITAGE") or "").strip()
-
-# data.go.kr 키 이름 호환 (둘 중 하나만 있어도 동작)
-if not DATA_GO_KR_SERVICE_KEY:
-    DATA_GO_KR_SERVICE_KEY = (os.getenv("DATA_GO_KR_KEY") or "").strip()
-
-def _status_to_score_delta(status: str) -> int:
-    if status == "FAIL":
-        return -30
-    if status == "WARNING":
-        return -10
-    return 0
-
-def _calc_total_score(check_list: dict) -> tuple[int, float]:
-    score = 100
-    fail = 0
-    warn = 0
-    for v in (check_list or {}).values():
-        st = (v or {}).get("status", "WARNING")
-        score += _status_to_score_delta(st)
-        if st == "FAIL": fail += 1
-        elif st == "WARNING": warn += 1
-    score = max(0, min(100, score))
-    # 신뢰도(휴리스틱): FAIL/WARN 많을수록 감소
-    conf = 0.985 - min(0.35, warn * 0.03 + fail * 0.08)
-    conf = max(0.25, min(0.99, conf))
-    return score, conf
-
-def _normalize_text(x: str) -> str:
-    return re.sub(r"\s+", " ", (x or "").strip())
-
-def _vworld_getfeature(layer: str, lat: float, lng: float):
-    if not (VWORLD_API_KEY and layer):
-        return None
-    url = "https://api.vworld.kr/req/data"
-    d = 0.0006
-    bbox = f"{lng-d},{lat-d},{lng+d},{lat+d}"
-    params = {
-        "key": VWORLD_API_KEY,
-        "service": "data",
-        "request": "GetFeature",
-        "data": layer,
-        "geomFilter": f"BOX({bbox})",
-        "size": 5,
-        "page": 1,
-        "format": "json",
-        "geometry": "false",
-        "attribute": "true",
-        "crs": "EPSG:4326",
-    }
-    try:
-        q = url + "?" + urllib.parse.urlencode(params)
-        r = urllib.request.urlopen(q, timeout=8)
-        j = json.loads(r.read().decode("utf-8"))
-        feats = (((j.get("response") or {}).get("result") or {}).get("featureCollection") or {}).get("features") or []
-        return feats[0] if feats else None
-    except Exception:
-        return None
-
-def _zoning_check(lat: float, lng: float) -> dict:
-    pass_kw = ["계획관리지역", "생산관리지역", "자연녹지지역"]
-    fail_kw = ["농림지역", "보전녹지지역", "개발제한구역"]
-    feat = _vworld_getfeature(VWORLD_LAYER_ZONING, lat, lng)
-    if not feat:
-        return {"status":"WARNING","value":"확인 필요","msg":"V-World 용도지역 레이어 미설정/연동 실패(VWORLD_LAYER_ZONING 확인)."}
-    props = feat.get("properties") or {}
-    plans = _normalize_text(str(props.get("plans") or props.get("PLAN") or props.get("plan") or ""))
-    val = plans or _normalize_text(str(props))[:120]
-    if any(k in plans for k in fail_kw):
-        return {"status":"FAIL","value":val,"msg":"부적합 용도지역이 포함됩니다."}
-    if any(k in plans for k in pass_kw):
-        return {"status":"PASS","value":val,"msg":"사업 가능 지역(우선 검토)입니다."}
-    return {"status":"WARNING","value":val or "기타","msg":"해당 용도지역은 추가 검토가 필요합니다."}
-
-def _ecology_check(lat: float, lng: float) -> dict:
-    feat = _vworld_getfeature(VWORLD_LAYER_ECO, lat, lng)
-    if not feat:
-        return {"status":"PASS","value":"등급 없음/확인 필요","msg":"생태자연도 데이터 확인이 필요합니다(없으면 대체로 적합)."}
-    props = feat.get("properties") or {}
-    grade = _normalize_text(str(props.get("grade") or props.get("GRD") or props.get("등급") or ""))
-    if "1" in grade:
-        return {"status":"FAIL","value":f"생태 {grade}","msg":"1등급 권역은 개발이 제한됩니다."}
-    if "2" in grade:
-        return {"status":"WARNING","value":f"생태 {grade}","msg":"2등급 권역은 조건부 가능(협의 필요)입니다."}
-    return {"status":"PASS","value":f"생태 {grade or '3등급/없음'}","msg":"생태 규제 리스크가 낮습니다."}
-
-def _heritage_check(lat: float, lng: float) -> dict:
-    feat = _vworld_getfeature(VWORLD_LAYER_HERITAGE, lat, lng)
-    if not feat:
-        return {"status":"PASS","value":"해당 없음/확인 필요","msg":"문화재 데이터 확인이 필요합니다(없으면 적합)."}
-    props = feat.get("properties") or {}
-    blob = _normalize_text(" ".join([str(v) for v in props.values()])[:300])
-    name = _normalize_text(str(props.get("name") or props.get("nm") or props.get("명칭") or "문화재 구역"))
-    if ("현상변경허용구역" in blob) or ("보호구역" in blob):
-        return {"status":"FAIL","value":name,"msg":"문화재 보호/현상변경 구역으로 규제 가능성이 높습니다."}
-    return {"status":"PASS","value":name or "문화재 영향 낮음","msg":"문화재 규제 영향이 낮습니다."}
-
-def _setback_check(address: str, dist_road_m, dist_res_m) -> dict:
-    # 현재 repo에는 '거리 측정' 구현이 확정적이지 않아,
-    # - 조례 기준 자동추출 실패/거리값 미제공 시 WARNING으로 안전 처리
-    # - 추후 Gemini 연동 및 거리 측정값(dist_road_m/dist_residential_m) 연결 시 PASS/FAIL로 승격
-    return {"status":"WARNING","value":"조례 기준 확인 필요","msg":"법제처/AI 및 거리측정 연동이 필요합니다."}
-
-_kepco_cache = {}  # key -> (ts, rows)
-def _kepco_fetch(metroCd: str, cityCd: str):
-    if not PUBLIC_KEPCO_KEY:
-        return []
-    url = "https://bigdata.kepco.co.kr/openapi/v1/dispersedGeneration.do"
-    params = {"metroCd": metroCd, "cityCd": cityCd, "apiKey": PUBLIC_KEPCO_KEY, "returnType": "json"}
-    for i in range(3):
-        try:
-            q = url + "?" + urllib.parse.urlencode(params)
-            r = urllib.request.urlopen(q, timeout=8)
-            j = json.loads(r.read().decode("utf-8"))
-            return j.get("data", []) or []
-        except Exception:
-            time.sleep(0.4*(i+1))
-    return []
-
-def _grid_check(pnu: str, capacity_kw):
-    if not pnu or len(pnu) < 5:
-        return {"status":"WARNING","value":"PNU 필요","msg":"한전 여유용량 조회를 위해 PNU(19자리)가 필요합니다."}
-    metroCd, cityCd = pnu[:2], pnu[2:5]
-    key = f"{metroCd}-{cityCd}"
-    now = time.time()
-    if key in _kepco_cache and (now - _kepco_cache[key][0]) < 300:
-        rows = _kepco_cache[key][1]
-    else:
-        rows = _kepco_fetch(metroCd, cityCd)
-        _kepco_cache[key] = (now, rows)
-
-    if not rows:
-        return {"status":"WARNING","value":"확인 필요","msg":"한전 API 응답이 없거나 일시적으로 실패했습니다. 재시도 필요."}
-
-    def to_float(x):
-        try: return float(str(x).strip())
-        except: return 0.0
-    max_vol3 = max((to_float(r.get("vol3")) for r in rows), default=0.0)
-    mw = max_vol3 / 1000.0
-    req_mw = (float(capacity_kw) if capacity_kw else 1000.0) / 1000.0
-
-    if max_vol3 == 0:
-        return {"status":"FAIL","value":"여유 0MW","msg":"여유용량 0: 접속 불가 가능성이 큽니다."}
-    if mw >= max(1.0, req_mw):
-        return {"status":"PASS","value":f"여유 {mw:.2f}MW","msg":"여유용량이 충분합니다."}
-    return {"status":"WARNING","value":f"여유 {mw:.2f}MW","msg":"여유용량이 부족할 수 있습니다(협의 필요)."}
-
-def _slope_check(slope_deg):
-    if slope_deg is None:
-        return {"status":"WARNING","value":"확인 필요","msg":"경사도 데이터가 없습니다(DEM 연동 또는 프론트 계산값 전달 필요)."}
-    try:
-        s = float(slope_deg)
-    except Exception:
-        return {"status":"WARNING","value":"확인 필요","msg":"경사도 값 파싱 실패"}
-    if s < 15:
-        return {"status":"PASS","value":f"{s:.1f}°","msg":"경사도 기준 적합(15° 미만)입니다."}
-    if s < 20:
-        return {"status":"WARNING","value":f"{s:.1f}°","msg":"경사도 주의 구간(15~20°). 조례/허가 요건 확인 필요."}
-    return {"status":"FAIL","value":f"{s:.1f}°","msg":"경사도 과다(20° 이상): 개발행위허가 불가 가능."}
-
-def _insolation_check(sun_hours):
-    if sun_hours is None:
-        return {"status":"WARNING","value":"확인 필요","msg":"일사량 데이터가 없습니다(기상청 연동 또는 위도 기반 추정 필요)."}
-    try:
-        h = float(sun_hours)
-    except Exception:
-        return {"status":"WARNING","value":"확인 필요","msg":"일사량 값 파싱 실패"}
-    if h >= 3.6:
-        return {"status":"PASS","value":f"{h:.2f}h","msg":"일사량 기준 적합(≥3.6h)입니다."}
-    if h < 3.2:
-        return {"status":"WARNING","value":f"{h:.2f}h","msg":"일사량이 낮습니다(3.2h 미만). 수익성 저하 가능."}
-    return {"status":"WARNING","value":f"{h:.2f}h","msg":"일사량 추가 검토가 필요합니다."}
-
-def _land_price_check(pnu: str, area_m2):
-    # 정보 제공용. 가능한 한 값을 채우고, 불확실하면 '(추가 확인 필요)'
-    try:
-        area_pyeong = (float(area_m2)/3.305785) if (area_m2 is not None and float(area_m2)>0) else None
-    except Exception:
-        area_pyeong = None
-
-    unit = None
-    total = None
-    estimated = False
-
-    if LAND_UNIT_PRICE_WON_PER_PYEONG and LAND_UNIT_PRICE_WON_PER_PYEONG > 0:
-        unit = float(LAND_UNIT_PRICE_WON_PER_PYEONG)
-        estimated = True
-
-    if unit and area_pyeong:
-        total = unit * area_pyeong
-
-    if unit is None:
-        return {"status":"WARNING","value":"추정 불가","msg":"실거래/공시지가 데이터가 부족합니다(추가 확인 필요)."}
-    if total is not None:
-        return {"status":"PASS","value":f"{int(unit):,}원/평 · {int(total):,}원" + (" (추가 확인 필요)" if estimated else ""), "msg":"토지가격은 참고용입니다."}
-    return {"status":"PASS","value":f"{int(unit):,}원/평" + (" (추가 확인 필요)" if estimated else ""), "msg":"토지가격은 참고용입니다."}
-
-@app.route("/api/checks/analyze", methods=["POST"])
-def checks_analyze():
-    data = request.get_json(silent=True) or {}
-    address = (data.get("address") or "").strip()
-    lat = data.get("lat")
-    lng = data.get("lng")
-    pnu = (data.get("pnu") or "").strip()
-    capacity_kw = data.get("capacity_kw") or None
-    slope_deg = data.get("slope_deg")
-    sun_hours = data.get("sun_hours")
-    dist_road_m = data.get("dist_road_m")
-    dist_res_m = data.get("dist_residential_m")
-    area_m2 = data.get("area_m2")
-
-    try:
-        lat_f = float(lat)
-        lng_f = float(lng)
-    except Exception:
-        return json_bad("lat/lng required", 400)
-
-    check_list = {
-        "zoning": _zoning_check(lat_f, lng_f),
-        "ecology": _ecology_check(lat_f, lng_f),
-        "heritage": _heritage_check(lat_f, lng_f),
-        "setback": _setback_check(address, dist_road_m, dist_res_m),
-        "grid": _grid_check(pnu, capacity_kw),
-        "slope": _slope_check(slope_deg),
-        "insolation": _insolation_check(sun_hours),
-        "land_price": _land_price_check(pnu, area_m2),
-    }
-
-    total, conf = _calc_total_score(check_list)
-    return json_ok(
-        total_score=total,
-        confidence=f"{conf*100:.1f}%",
-        check_list=check_list
-    )
-
-
-# ------------------------------------------------------------
-# F-16.5: AI 분석(8대 체크/점수)용 기본 헬퍼 (500 방지)
-# ------------------------------------------------------------
-def build_ai_checks(address: str, mode: str):
-    """
-    기존 프론트(UI)가 기대하는 형태로 'checks' 리스트를 반환.
-    실제 규제/데이터는 /api/checks/analyze 에서 계산하고,
-    여기서는 AI 요약카드가 500으로 죽지 않도록 "기본값 + 안내" 제공.
-    """
-    checks = [
-        {"key": "zoning", "title": "용도지역", "status": "확인 필요", "detail": "V-World(토지이용계획) 연동 결과를 확인하세요."},
-        {"key": "ecology", "title": "생태자연도", "status": "확인 필요", "detail": "V-World(생태자연도) 연동 결과를 확인하세요."},
-        {"key": "heritage", "title": "문화재 규제", "status": "확인 필요", "detail": "V-World(문화재보존관리지도) 연동 결과를 확인하세요."},
-        {"key": "setback", "title": "이격거리", "status": "확인 필요", "detail": "조례/AI 분석 및 거리측정 연동이 필요합니다."},
-        {"key": "grid", "title": "한전 여유용량", "status": "확인 필요", "detail": "KEPCO(분산전원 연계정보) 조회 필요"},
-        {"key": "slope", "title": "경사도", "status": "확인 필요", "detail": "DEM/지형 기반 경사도 계산 필요"},
-        {"key": "insolation", "title": "일사량", "status": "확인 필요", "detail": "기상청/추정 일사량 계산 필요"},
-        {"key": "land_price", "title": "토지가격", "status": "확인 필요", "detail": "실거래/공시지가 기반 추정 필요"},
-    ]
-    # 지붕 모드인 경우 문구만 약간 변경
-    if (mode or "").lower() == "roof":
-        checks[0]["detail"] = "지붕 모드: 용도지역 영향은 낮지만 기본 확인 권장"
-    return checks
-
-def conservative_score(panel_count: int, checks):
-    """
-    보수적 점수(0~100) + 신뢰도(%) 반환. (프론트 표시용)
-    """
-    base = 60
-    try:
-        pc = int(panel_count or 0)
-    except Exception:
-        pc = 0
-    # 패널 수가 많을수록 약간 가점(최대 15)
-    base += min(15, pc // 200)
-    # 확인 필요 개수만큼 감점(최대 30)
-    unknowns = 0
-    for c in (checks or []):
-        if (c or {}).get("status") in ("확인 필요", "WARNING", "주의"):
-            unknowns += 1
-    score = max(0, min(100, base - min(30, unknowns * 3)))
-    confidence = max(0.25, min(0.99, 0.85 - unknowns * 0.04))
-    return score, f"{confidence*100:.1f}%"
-
-
 @app.route("/api/ai/analyze", methods=["POST"])
 def ai_analyze():
     data = request.get_json(silent=True) or {}
@@ -1342,73 +1094,23 @@ def report_pdf():
 @app.route("/api/infra/kepco", methods=["GET"])
 def infra_kepco():
     """
-    KEPCO 분산전원 연계정보(여유용량) 조회.
-    Query:
-      pnu(권장) 또는 metroCd/cityCd
-    Return:
-      data(rows) + summary + kepco_capacity(문자열)
-      (items/lines도 유지: 프론트 호환)
+    Query params:
+      bbox = "minLng,minLat,maxLng,maxLat"
+      z    = zoom level
+    Returns:
+      items: substations [{id,name,lat,lng,remaining_mw,available_year,status}]
+      lines: lines       [{id,coords:[[lat,lng],[lat,lng],...],remaining_mw,available_year,status}]
     """
-    pnu = (request.args.get("pnu") or "").strip()
-    metroCd = (request.args.get("metroCd") or "").strip()
-    cityCd = (request.args.get("cityCd") or "").strip()
-
-    if (not metroCd) and pnu and pnu.isdigit() and len(pnu) >= 5:
-        metroCd = pnu[:2]
-        cityCd = pnu[2:5]
-
-    if not metroCd or not cityCd:
-        return json_ok(items=[], lines=[], rows=[], summary={"row_count": 0, "status": "확인 필요"}, kepco_capacity="확인 필요")
-
-    # 5분 캐시
-    cache_key = f"KEPCO:{metroCd}-{cityCd}"
-    cached = _cache_get(cache_key)
-    if cached:
-        return json_ok(**cached)
-
-    url = "https://bigdata.kepco.co.kr/openapi/v1/dispersedGeneration.do"
-    params = {"metroCd": metroCd, "cityCd": cityCd, "apiKey": PUBLIC_KEPCO_KEY, "returnType": "json"}
-
-    rows = []
-    last_err = None
-    for i in range(3):
-        try:
-            q = url + "?" + urllib.parse.urlencode(params)
-            with urllib.request.urlopen(q, timeout=10) as resp:
-                j = json.loads(resp.read().decode("utf-8"))
-            rows = j.get("data", []) or []
-            break
-        except Exception as e:
-            last_err = e
-            time.sleep(0.4 * (i + 1))
-
-    def to_float(x):
-        try:
-            return float(str(x).strip())
-        except Exception:
-            return None
-
-    max_v1 = max([to_float(d.get("vol1")) or 0 for d in rows], default=0)
-    max_v2 = max([to_float(d.get("vol2")) or 0 for d in rows], default=0)
-    max_v3 = max([to_float(d.get("vol3")) or 0 for d in rows], default=0)
-
-    status = "가능"
-    if rows and (max_v3 == 0 or max_v2 == 0 or max_v1 == 0):
-        status = "불가"
-    elif rows and (min(max_v1, max_v2, max_v3) < 1000):
-        status = "주의"
-    elif not rows:
-        status = "확인 필요"
-
-    payload = dict(
+    bbox = (request.args.get("bbox") or "").strip()
+    z = int(request.args.get("z") or 0)
+    # 데이터 소스 미확정: 구조만 제공
+    return json_ok(
+        bbox=bbox,
+        z=z,
         items=[],
         lines=[],
-        rows=rows,
-        summary={"row_count": len(rows), "max_vol1": max_v1, "max_vol2": max_v2, "max_vol3": max_v3, "status": status},
-        kepco_capacity=f"변전소:{max_v1:.0f} / 변압기:{max_v2:.0f} / DL:{max_v3:.0f} → {status}" if rows else "확인 필요",
+        note="KEPCO 데이터 소스/키/스키마 미확정: 현재는 구조만 제공(확인 필요)"
     )
-    _cache_set(cache_key, payload, ttl_sec=300)
-    return json_ok(**payload)
 
 @app.route("/api/infra/existing", methods=["GET"])
 def infra_existing():
@@ -1478,85 +1180,40 @@ def solar_optimize():
 # ------------------------------------------------------------
 @app.route("/api/land/estimate", methods=["POST"])
 def land_estimate():
-    """
-    프론트 통합결과 카드용 토지가격.
-    - 가능하면 /api/land/price(실거래/ENV/Gemini fallback)를 이용해 unit/total을 계산
-    - 항상 land_price_won(총액) 또는 unit_price_won_per_pyeong(평단가) 중 하나라도 최대한 채움
-    """
     data = request.get_json(silent=True) or {}
     address = (data.get("address") or "").strip()
     pnu = (data.get("pnu") or "").strip() or None
     area_m2 = data.get("area_m2")
     area_pyeong = data.get("area_pyeong")
 
-    # 면적 보정
-    ap = None
+    # 데이터 소스 확정 전 "옵션 heuristic":
+    # - ENV LAND_UNIT_PRICE_WON_PER_PYEONG(평 단가) 가 설정되어 있으면 면적 기반으로 산출
+    land_price = None
+    unit_price = None
     try:
-        if area_pyeong is not None:
-            ap = float(area_pyeong)
-        elif area_m2 is not None:
-            ap = float(area_m2) / 3.305785
+        if LAND_UNIT_PRICE_WON_PER_PYEONG and float(LAND_UNIT_PRICE_WON_PER_PYEONG) > 0:
+            unit_price = float(LAND_UNIT_PRICE_WON_PER_PYEONG)
+            ap = None
+            if area_pyeong is not None:
+                ap = float(area_pyeong)
+            elif area_m2 is not None:
+                ap = float(area_m2) / 3.3058
+            if ap and ap > 0:
+                land_price = ap * unit_price
     except Exception:
-        ap = None
-
-    # 내부적으로 /api/land/price 로직 재사용 (최근 12개월 확장)
-    unit = None
-    total = None
-    source = "placeholder"
-    note = "토지가격 산정(추가 확인 필요)"
-    needs_confirm = True
-
-    # 1) data.go.kr RTMS 12개월
-    lawd_cd = (pnu[:5] if (pnu and pnu.isdigit() and len(pnu) >= 5) else "")
-    if DATA_GO_KR_SERVICE_KEY and lawd_cd and len(lawd_cd) == 5:
-        ym_list = _ym_list_recent(12)
-        for ym in ym_list:
-            try:
-                rt = _fetch_rtms_land_trade(lawd_cd, ym)
-                est = _rtms_estimate_unit_price_per_pyeong(rt.get("items") or [])
-                u = _try_float(est.get("unit_price_won_per_pyeong"), None)
-                if u and u > 0:
-                    unit = float(u)
-                    total = round(unit * ap) if (ap and ap > 0) else None
-                    source = "data.go.kr-rtms-landtrade"
-                    note = f"{est.get('note','실거래가 기반')} (표본 {est.get('sample_count',0)}건, {ym})"
-                    needs_confirm = False
-                    break
-            except Exception:
-                continue
-
-    # 2) ENV fallback
-    if unit is None and LAND_UNIT_PRICE_WON_PER_PYEONG and LAND_UNIT_PRICE_WON_PER_PYEONG > 0:
-        unit = float(LAND_UNIT_PRICE_WON_PER_PYEONG)
-        total = round(unit * ap) if (ap and ap > 0) else None
-        source = "env-default"
-        note = "ENV 기본 평단가 기반 추정치(추가 확인 필요)"
-        needs_confirm = True
-
-    # 3) Gemini fallback (address 필요)
-    if unit is None and address and GEMINI_API_KEY:
-        try:
-            j = _gemini_land_price_estimate(address)
-            u = _try_float(j.get("unit_price_won_per_pyeong"), None)
-            if u and u > 0:
-                unit = float(u)
-                total = round(unit * ap) if (ap and ap > 0) else None
-                source = "gemini-estimate"
-                note = (j.get("note") or "AI 추정치(추가 확인 필요)").strip()
-                needs_confirm = True
-        except Exception:
-            pass
+        land_price = None
+        unit_price = None
 
     payload = {
         "address": address or "확인 필요",
         "pnu": pnu,
         "area_m2": area_m2,
-        "area_pyeong": ap,
-        "land_price_won": total,
-        "unit_price_won_per_pyeong": unit,
-        "source": source,
-        "needs_confirm": needs_confirm,
-        "note": note,
+        "area_pyeong": area_pyeong,
+        "land_price_won": land_price,  # heuristic(옵션) or None
+        "unit_price_won_per_pyeong": unit_price,
+        "source": "heuristic" if land_price is not None else "placeholder",
+        "needs_confirm": True,
+        "note": "토지 시세 데이터 소스 확정 전: ENV 평단가가 있으면 면적 기반 heuristic 산출(확인 필요)"
     }
     return json_ok(**payload)
 
@@ -1838,6 +1495,189 @@ def api_land_price():
     )
     _cache_set(cache_key, payload)
     return json_ok(**payload)
+
+
+
+
+# ------------------------------------------------------------
+# Step2: Hardware selection + electrical spec + cost engine
+# ------------------------------------------------------------
+
+def _db_fetchone(sql, params=()):
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, params)
+            return cur.fetchone()
+    finally:
+        conn.close()
+
+def _db_fetchall(sql, params=()):
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, params)
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+def _pick_dc_cable(module_power_w, module_type, is_bifacial):
+    module_power_w = module_power_w or 0
+    module_type = (module_type or "")
+    hi = (module_power_w >= 600) or ("N-Type" in module_type) or bool(is_bifacial)
+    if hi:
+        return {"name":"H1Z2Z2-K 6sq", "unit_cost_per_m":2000, "reason":"고출력/고전류"}
+    return {"name":"H1Z2Z2-K 4sq", "unit_cost_per_m":1500, "reason":"일반"}
+
+def _pick_ac_cable(inverter_kw):
+    inverter_kw = inverter_kw or 0
+    if inverter_kw < 50:
+        return {"name":"F-CV 25sq", "unit_cost_per_m":10000}
+    if 50 <= inverter_kw <= 80:
+        return {"name":"F-CV 35sq", "unit_cost_per_m":15000}
+    if 81 <= inverter_kw <= 120:
+        return {"name":"F-CV 70sq", "unit_cost_per_m":25000}
+    return {"name":"F-CV 95sq 이상", "unit_cost_per_m":35000}
+
+def _connection_box_cost(is_integrated):
+    if is_integrated:
+        return {"required": False, "extra_cost_won": 0, "msg":"접속반 일체형 → 0원"}
+    return {"required": True, "extra_cost_won": 2_000_000, "msg":"접속반 분리형 → +200만원"}
+
+def _ai_comment(module_brand, module_type, inverter_brand, inverter_integrated):
+    korean_modules = {"한화큐셀","현대에너지","HD현대","신성이엔지","에스에너지","한솔테크닉스","탑선","서전","다스코"}
+    korean_inverters = {"LS산전","현대에너지","동양이엔피","효성","다쓰테크","윌링스","금비전자"}
+
+    is_km = module_brand in korean_modules
+    is_ki = inverter_brand in korean_inverters
+
+    if is_km and is_ki:
+        return "🏛️ 초기 비용은 높지만, 국산 기자재 사용으로 공공기관 입찰 시 가점 확보가 가능하며 A/S 리스크가 가장 낮습니다."
+    if ("N-Type" in (module_type or "")) and (inverter_brand in {"선그로우","화웨이"}) and inverter_integrated:
+        return "💰 현재 시장에서 ROI가 가장 높은 '국민 조합'입니다. N타입의 추가 발전량과 접속반 시공비 절감 효과로 원금 회수 기간을 획기적으로 단축합니다."
+    if (module_brand in {"JA솔라","트리나솔라","론지솔라","징코솔라","라이센","DMEGC","Seraphim","GCL","솔라스페이스"}) and (inverter_brand in {"굿위","그로와트"}):
+        return "⚡ 초기 자본 부담을 최소화한 구성입니다. 전선 규격(sq)만 권장 스펙대로 시공한다면 가장 빠르게 손익분기점에 도달할 수 있습니다."
+    return "📌 선택하신 조합은 표준 설계 범위 내입니다. 현장 케이블 거리/접속 방식에 따라 CAPEX가 달라질 수 있습니다."
+
+def _fmt_won(n):
+    try:
+        if n is None:
+            return None
+        return f"{int(round(n)):,}원"
+    except Exception:
+        return None
+
+@app.get("/api/hardware/modules")
+def api_hardware_modules():
+    rows = _db_fetchall("SELECT no, brand, model, power_w, module_type, efficiency_pct, price_won_per_w, is_bifacial, features FROM pv_modules ORDER BY no ASC;")
+    return jsonify({"ok": True, "items": rows})
+
+@app.get("/api/hardware/inverters")
+def api_hardware_inverters():
+    rows = _db_fetchall("SELECT no, brand, model, capacity_kw, topology, price_million_won, price_won, is_integrated_connection_box, features FROM inverters ORDER BY no ASC;")
+    return jsonify({"ok": True, "items": rows})
+
+@app.post("/api/hardware/design")
+def api_hardware_design():
+    body = request.get_json(force=True, silent=True) or {}
+
+    module_no = body.get("module_no")
+    inverter_no = body.get("inverter_no")
+
+    dc_length_m = float(body.get("dc_length_m") or 0)
+    ac_length_m = float(body.get("ac_length_m") or 0)
+
+    project_dc_kw = body.get("project_dc_kw")  # optional
+    panel_count = body.get("panel_count")      # optional
+
+    # If user didn't supply project_dc_kw, but provided panel_count, use it.
+    module = _db_fetchone("SELECT * FROM pv_modules WHERE no=%s;", (module_no,))
+    inv = _db_fetchone("SELECT * FROM inverters WHERE no=%s;", (inverter_no,))
+    if not module or not inv:
+        return jsonify({"ok": False, "msg": "선택된 기자재가 DB에 없습니다(번호 확인)."}), 400
+    if module.get("price_won_per_w") is None or module.get("power_w") is None:
+        return jsonify({"ok": False, "msg": "선택된 모듈의 가격/출력 정보가 미정입니다."}), 400
+    if inv.get("price_won") is None:
+        return jsonify({"ok": False, "msg": "선택된 인버터 가격 정보가 미정입니다."}), 400
+
+    power_w = int(module["power_w"])
+    price_w = int(module["price_won_per_w"])
+
+    if project_dc_kw is not None:
+        project_dc_kw = float(project_dc_kw)
+        if project_dc_kw <= 0:
+            project_dc_kw = None
+
+    if panel_count is not None:
+        try:
+            panel_count = int(panel_count)
+            if panel_count <= 0:
+                panel_count = None
+        except Exception:
+            panel_count = None
+
+    if project_dc_kw is None and panel_count is None:
+        return jsonify({"ok": False, "msg": "project_dc_kw 또는 panel_count 중 1개는 필요합니다."}), 400
+
+    if panel_count is None:
+        panel_count = math.ceil((project_dc_kw * 1000.0) / power_w)
+
+    dc_kw = (panel_count * power_w) / 1000.0
+
+    # Cable specs
+    dc = _pick_dc_cable(power_w, module.get("module_type"), module.get("is_bifacial"))
+    ac = _pick_ac_cable(inv.get("capacity_kw"))
+
+    # Costs
+    module_cost = panel_count * power_w * price_w  # won
+    inverter_cost = int(inv["price_won"])
+    dc_cable_cost = int(round(dc_length_m * dc["unit_cost_per_m"]))
+    ac_cable_cost = int(round(ac_length_m * ac["unit_cost_per_m"]))
+
+    cb = _connection_box_cost(bool(inv.get("is_integrated_connection_box")))
+    cb_cost = int(cb["extra_cost_won"])
+
+    hardware_cost = module_cost + inverter_cost
+    construction_cost = dc_cable_cost + ac_cable_cost + cb_cost
+
+    total_capex = hardware_cost + construction_cost
+
+    # ROI: if user supplies annual_cashflow_won, compute; else return "추가 확인 필요"
+    annual_cashflow = body.get("annual_cashflow_won")
+    roi_year = None
+    if annual_cashflow:
+        try:
+            annual_cashflow = float(annual_cashflow)
+            if annual_cashflow > 0:
+                roi_year = round(total_capex / annual_cashflow, 2)
+        except Exception:
+            roi_year = None
+
+    resp = {
+      "ok": True,
+      "selected_hardware": {
+        "module": f'{module["brand"]} {module["model"]} ({power_w}W)',
+        "inverter": f'{inv["brand"]} {inv["model"]} ({inv.get("capacity_kw")}kW)'
+      },
+      "electrical_spec": {
+        "dc_cable": f'{dc["name"]} ({dc["reason"]})',
+        "ac_cable": ac["name"],
+        "connection_box_required": cb["required"]
+      },
+      "financial_analysis": {
+        "module_count": panel_count,
+        "project_dc_kw": round(dc_kw, 2),
+        "hardware_cost_won": hardware_cost,
+        "construction_cost_won": construction_cost,
+        "total_capex_won": total_capex,
+        "hardware_cost": _fmt_won(hardware_cost),
+        "construction_cost": _fmt_won(construction_cost),
+        "total_capex_range": f'{_fmt_won(total_capex)} (케이블/접속반 포함, 기타 EPC는 별도)',
+        "expected_roi_year": (f"{roi_year}년" if roi_year is not None else "추가 확인 필요(연 순현금흐름 입력 필요)")
+      },
+      "ai_comment": _ai_comment(module["brand"], module.get("module_type"), inv["brand"], bool(inv.get("is_integrated_connection_box")))
+    }
+    return jsonify(resp)
 
 
 if __name__ == "__main__":
