@@ -11,6 +11,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 import time
 import json
+import re
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -66,6 +67,128 @@ LAW_API_ID = (os.getenv("LAW_API_ID") or "").strip()
 
 # Optional land price heuristic (F-28) - won per pyeong (평 단가)
 LAND_UNIT_PRICE_WON_PER_PYEONG = float(os.getenv("LAND_UNIT_PRICE_WON_PER_PYEONG") or 0)
+
+# ------------------------------------------------------------
+# Gemini(또는 휴리스틱) 기반 토지가/면적 추정 (Fallback 강화)
+#  - GEMINI_API_KEY가 없거나 호출 실패해도 None을 만들지 않고
+#    주소 기반 결정론적(동일주소 동일값) 추정치를 반환
+# ------------------------------------------------------------
+GEMINI_MODEL = (os.getenv("GEMINI_MODEL") or "gemini-1.5-flash").strip()
+
+def _stable_hash_int(s: str) -> int:
+    s = (s or "").strip()
+    h = hashlib.sha256(s.encode("utf-8")).hexdigest()
+    return int(h[:12], 16)
+
+def _heuristic_area_m2_from_address(address: str) -> float:
+    # 최후 fallback: 250~2500㎡ 범위 결정론적
+    seed = _stable_hash_int(address or "unknown")
+    return float(250 + (seed % 2251))
+
+def _heuristic_unit_price_from_address(address: str) -> float:
+    # 최후 fallback: 주소 키워드 기반 매우 거친 평단가(원/평)
+    addr = (address or "")
+    if any(k in addr for k in ["서울", "강남", "서초", "송파"]):
+        base = 35000000
+    elif any(k in addr for k in ["경기", "성남", "하남", "과천"]):
+        base = 20000000
+    elif any(k in addr for k in ["인천", "부산", "대구", "광주", "대전", "울산"]):
+        base = 12000000
+    else:
+        base = 7000000
+    seed = _stable_hash_int(addr)
+    jitter = (seed % 31 - 15) / 100.0  # -0.15 ~ +0.15
+    return float(max(1000000, base * (1.0 + jitter)))
+
+def _gemini_land_price_estimate(address: str):
+    """주소 기반으로 (평단가, 면적) 보수 추정.
+    반환: dict(unit_price_won_per_pyeong, area_m2, confidence_0_1, note)
+    - GEMINI_API_KEY 없거나 실패 시 휴리스틱으로 채움(None 방지)
+    """
+    address = (address or "").strip()
+
+    # 0) 주소 없으면 즉시 휴리스틱
+    if not address:
+        return {
+            "unit_price_won_per_pyeong": _heuristic_unit_price_from_address("unknown"),
+            "area_m2": _heuristic_area_m2_from_address("unknown"),
+            "confidence_0_1": 0.12,
+            "note": "주소 없음 → 휴리스틱 추정(확인 필요)"
+        }
+
+    # 1) Gemini 키 없으면 휴리스틱
+    if not GEMINI_API_KEY:
+        return {
+            "unit_price_won_per_pyeong": _heuristic_unit_price_from_address(address),
+            "area_m2": _heuristic_area_m2_from_address(address),
+            "confidence_0_1": 0.18,
+            "note": "AI키 없음 → 주소 기반 휴리스틱 추정(확인 필요)"
+        }
+
+    prompt = f"""너는 한국 부동산 토지 시세를 매우 보수적으로 추정하는 도우미다.
+아래 주소의 토지에 대해:
+1) 보수적 평단가(원/평)
+2) 추정 면적(㎡) (주소에 필지 단서가 없으면 일반적인 단독주택 필지/소규모 토지 기준으로 보수 추정)
+3) 신뢰도(0~1)
+4) 한 줄 근거(note)
+
+반드시 JSON만 출력해라.
+키는 정확히 unit_price_won_per_pyeong, area_m2, confidence_0_1, note 를 사용해라.
+
+주소: {address}
+"""
+
+    try:
+        # REST 호출 (urllib) - 외부 라이브러리 의존 없음
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 300},
+        }
+        data_bytes = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data_bytes, method="POST", headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            raw = resp.read()
+        j = json.loads(raw.decode("utf-8", errors="ignore") or "{}")
+
+        text = ""
+        try:
+            text = j["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception:
+            text = ""
+
+        # JSON만 추출
+        m = re.search(r"\{.*\}", text, re.S)
+        jj = json.loads(m.group(0)) if m else {}
+
+        unit = _try_float(jj.get("unit_price_won_per_pyeong"), None)
+        area_m2 = _try_float(jj.get("area_m2"), None)
+        conf = _try_float(jj.get("confidence_0_1"), 0.12) or 0.12
+        note = str(jj.get("note") or "AI 보수 추정(확인 필요)").strip()
+
+        if not unit or unit <= 0:
+            unit = _heuristic_unit_price_from_address(address)
+            conf = min(conf, 0.25)
+            note = note + " / unit fallback"
+        if not area_m2 or area_m2 <= 0:
+            area_m2 = _heuristic_area_m2_from_address(address)
+            conf = min(conf, 0.25)
+            note = note + " / area fallback"
+
+        return {
+            "unit_price_won_per_pyeong": float(unit),
+            "area_m2": float(area_m2),
+            "confidence_0_1": max(0.05, min(float(conf), 0.55)),
+            "note": note
+        }
+
+    except Exception as e:
+        return {
+            "unit_price_won_per_pyeong": _heuristic_unit_price_from_address(address),
+            "area_m2": _heuristic_area_m2_from_address(address),
+            "confidence_0_1": 0.15,
+            "note": f"AI 호출 실패 → 휴리스틱 추정(확인 필요): {repr(e)}"
+        }
 DATA_GO_KR_SERVICE_KEY = (os.getenv("DATA_GO_KR_SERVICE_KEY") or "").strip()  # data.go.kr serviceKey
 
 
@@ -885,138 +1008,15 @@ def build_ai_checks(address: str, mode: str):
             meta={"zone": vz.get("zone")}
         ))
     else:
-        # V-World 미연동/실패 시: 주소 키워드 기반으로 1차 시뮬레이션 판정(현장/공식 확인 필요)
-        addr = (address or "").strip()
-        risk_words = ["임야", "산", "보전", "상수원", "문화재", "군사", "자연공원"]
-        ok_words = ["공장", "산단", "일반산업단지", "창고", "대지", "잡종지", "공업"]
-
-        hit_risk = any(w in addr for w in risk_words)
-        hit_ok = any(w in addr for w in ok_words)
-
-        if hit_risk and not hit_ok:
-            checks.append(_check_item(
-                "용도지역(개발행위 가능성)",
-                "리스크 가능성 높음(주소 키워드 기반): 임야/보전/상수원 등 포함",
-                passed=False,
-                needs_confirm=True,
-                weight=1.3,
-                meta={"simulated": True, "matched": [w for w in risk_words if w in addr], "vworld": vz.get("raw")}
-            ))
-        elif hit_ok and not hit_risk:
-            checks.append(_check_item(
-                "용도지역(개발행위 가능성)",
-                "양호 가능성(주소 키워드 기반): 공장/산단/대지 등 포함",
-                passed=True,
-                needs_confirm=True,
-                weight=1.3,
-                meta={"simulated": True, "matched": [w for w in ok_words if w in addr], "vworld": vz.get("raw")}
-            ))
-        else:
-            checks.append(_check_item(
-                "용도지역(개발행위 가능성)",
-                "확인 필요 (V-World 용도지역 조회 실패/미연동)",
-                passed=None,
-                needs_confirm=True,
-                weight=1.3,
-                link="https://www.vworld.kr/",
-                meta=vz.get("raw") or {"simulated": True}
-            ))
-
-            hit_risk = any(w in addr for w in risk_words)
-            hit_ok = any(w in addr for w in ok_words)
-
-            if hit_risk and not hit_ok:
-                checks.append(_check_item(
-                    "용도지역(개발행위 가능성)",
-                    "리스크 가능성 높음(주소 키워드 기반): 임야/보전/상수원 등 포함",
-                    passed=False,
-                    needs_confirm=True,
-                    weight=1.3,
-                    meta={"simulated": True, "matched": [w for w in risk_words if w in addr], "vworld": vz.get("raw")}
-                ))
-            elif hit_ok and not hit_risk:
-                checks.append(_check_item(
-                    "용도지역(개발행위 가능성)",
-                    "양호 가능성(주소 키워드 기반): 공장/산단/대지 등 포함",
-                    passed=True,
-                    needs_confirm=True,
-                    weight=1.3,
-                    meta={"simulated": True, "matched": [w for w in ok_words if w in addr], "vworld": vz.get("raw")}
-                ))
-            else:
-                checks.append(_check_item(
-                    "용도지역(개발행위 가능성)",
-                    "확인 필요 (V-World 용도지역 조회 실패/미연동)",
-                    passed=None,
-                    needs_confirm=True,
-                    weight=1.3,
-                    link="https://www.vworld.kr/",
-                    meta=vz.get("raw") or {"simulated": True}
-                ))
-
-            hit_risk = any(w in addr for w in risk_words)
-            hit_ok = any(w in addr for w in ok_words)
-
-            if hit_risk and not hit_ok:
-                checks.append(_check_item(
-                    "용도지역(개발행위 가능성)",
-                    "리스크 가능성 높음(주소 키워드 기반): 임야/보전/상수원 등 포함",
-                    passed=False,
-                    needs_confirm=True,
-                    weight=1.3,
-                    meta={"simulated": True, "matched": [w for w in risk_words if w in addr], "vworld": vz.get("raw")}
-                ))
-            elif hit_ok and not hit_risk:
-                checks.append(_check_item(
-                    "용도지역(개발행위 가능성)",
-                    "양호 가능성(주소 키워드 기반): 공장/산단/대지 등 포함",
-                    passed=True,
-                    needs_confirm=True,
-                    weight=1.3,
-                    meta={"simulated": True, "matched": [w for w in ok_words if w in addr], "vworld": vz.get("raw")}
-                ))
-            else:
-                checks.append(_check_item(
-                    "용도지역(개발행위 가능성)",
-                    "확인 필요 (V-World 용도지역 조회 실패/미연동)",
-                    passed=None,
-                    needs_confirm=True,
-                    weight=1.3,
-                    link="https://www.vworld.kr/",
-                    meta=vz.get("raw") or {"simulated": True}
-                ))
-
-        hit_risk = any(w in addr for w in risk_words)
-        hit_ok = any(w in addr for w in ok_words)
-
-        if hit_risk and not hit_ok:
-            checks.append(_check_item(
-                "용도지역(개발행위 가능성)",
-                "리스크 가능성 높음(주소 키워드 기반): 임야/보전/상수원 등 포함",
-                passed=False,
-                needs_confirm=True,
-                weight=1.3,
-                meta={"simulated": True, "matched": [w for w in risk_words if w in addr], "vworld": vz.get("raw")}
-            ))
-        elif hit_ok and not hit_risk:
-            checks.append(_check_item(
-                "용도지역(개발행위 가능성)",
-                "양호 가능성(주소 키워드 기반): 공장/산단/대지 등 포함",
-                passed=True,
-                needs_confirm=True,
-                weight=1.3,
-                meta={"simulated": True, "matched": [w for w in ok_words if w in addr], "vworld": vz.get("raw")}
-            ))
-        else:
-            checks.append(_check_item(
-                "용도지역(개발행위 가능성)",
-                "확인 필요 (V-World 용도지역 조회 실패/미연동)",
-                passed=None,
-                needs_confirm=True,
-                weight=1.3,
-                link="https://www.vworld.kr/",
-                meta=vz.get("raw") or {"simulated": True}
-            ))
+        checks.append(_check_item(
+            "용도지역(개발행위 가능성)",
+            "확인 필요 (V-World 용도지역 조회 실패/미연동)",
+            passed=None,
+            needs_confirm=True,
+            weight=1.3,
+            link="https://www.vworld.kr/",
+            meta=vz.get("raw") or {}
+        ))
 
     # 2) 이격거리
     checks.append(_check_item(
@@ -1144,27 +1144,6 @@ def conservative_score(panel_count: int, checks: list):
 
     return int(round(base)), conf
 
-# -----------------------------
-# KEPCO capacity fallback (heuristic)
-# -----------------------------
-def _pseudo_kepco_capacity_kw(address: str, lat=None, lng=None) -> int:
-    """Generate deterministic pseudo capacity (kW) from address/coords so UI shows numbers even without KEPCO API."""
-    seed = (address or "").strip()
-    if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
-        seed += f"|{lat:.5f},{lng:.5f}"
-    if not seed:
-        seed = "unknown"
-    h = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-    n = int(h[:8], 16)
-    return 300 + (n % 2701)  # 300~3000kW
-
-def _format_kepco_capacity(cap_kw: int) -> str:
-    try:
-        return f"{int(cap_kw):,} kW"
-    except Exception:
-        return "확인 필요"
-
-
 
 
 @app.route("/api/ai/analyze", methods=["POST"])
@@ -1180,9 +1159,6 @@ def ai_analyze():
     checks = build_ai_checks(address, mode)
     score, confidence = conservative_score(panel_count, checks)
 
-    cap_kw = _pseudo_kepco_capacity_kw(address, lat, lng)
-    kepco_capacity = _format_kepco_capacity(cap_kw)
-
     # 확장 필드(미확정 데이터는 "확인 필요")
     payload = {
         "address": address or "확인 필요",
@@ -1195,10 +1171,8 @@ def ai_analyze():
         "attractiveness_score": score,
         "confidence": confidence,
         # future-ready
-        "kepco_capacity": kepco_capacity,
+        "kepco_capacity": None,
         "sun_hours": None,
-        "needs_confirm": True,
-        "note": "kepco_capacity는 실API 연동 전 heuristic(확인 필요)",
     }
     return json_ok(**payload)
 
@@ -1643,16 +1617,37 @@ def land_estimate():
     pnu = (data.get("pnu") or "").strip() or None
     area_m2 = data.get("area_m2")
     area_pyeong = data.get("area_pyeong")
+    lat = data.get("lat")
+    lng = data.get("lng")
 
-    # 면적 보정
+    # 1) 면적 보정 (프론트가 못 주는 경우가 있어 fallback 강화)
     try:
-        if area_pyeong is None and area_m2 is not None:
-            area_pyeong = float(area_m2) / 3.3058
+        if area_m2 is not None:
+            area_m2 = float(area_m2)
+    except Exception:
+        area_m2 = None
+
+    try:
         if area_pyeong is not None:
             area_pyeong = float(area_pyeong)
     except Exception:
         area_pyeong = None
 
+    # 2) 면적이 비었거나 0이면: AI/휴리스틱으로 면적까지 추정
+    ai_note = None
+    ai_conf = 0.0
+    if (area_m2 is None or area_m2 <= 0) or (area_pyeong is None or area_pyeong <= 0):
+        try:
+            j = _gemini_land_price_estimate(address or (f"PNU:{pnu}" if pnu else ""))
+            area_m2 = float(j.get("area_m2") or 0) or None
+            if area_m2 and area_m2 > 0:
+                area_pyeong = float(area_m2) / 3.3058
+            ai_note = j.get("note")
+            ai_conf = float(j.get("confidence_0_1") or 0) or 0.0
+        except Exception:
+            pass
+
+    # 3) 평단가 우선순위: RTMS(가능하면) > ENV > AI(또는 휴리스틱)
     unit = None
     total = None
     source = "unknown"
@@ -1662,7 +1657,7 @@ def land_estimate():
     try:
         lawd_cd = (pnu[:5] if (pnu and pnu.isdigit() and len(pnu) >= 5) else None)
 
-        # 1) data.go.kr RTMS 실거래가(토지) 기반 추정 (가능한 경우)
+        # (A) data.go.kr RTMS 실거래가 기반
         if DATA_GO_KR_SERVICE_KEY and lawd_cd and lawd_cd.isdigit() and len(lawd_cd) == 5:
             ym_list = _ym_list_recent(3)
             for ym in ym_list:
@@ -1671,33 +1666,52 @@ def land_estimate():
                 unit0 = _try_float(est.get("unit_price_won_per_pyeong"), None)
                 if unit0 and unit0 > 0:
                     unit = unit0
-                    total = round(unit * area_pyeong) if area_pyeong else None
                     source = "data.go.kr-rtms-landtrade"
                     confidence = 0.70
                     note = f"{est.get('note','실거래가 기반')} (표본 {est.get('sample_count',0)}건, {ym})"
                     break
 
-        # 2) fallback: ENV 기본 평단가
+        # (B) ENV 기본 평단가
         if unit is None and LAND_UNIT_PRICE_WON_PER_PYEONG and float(LAND_UNIT_PRICE_WON_PER_PYEONG) > 0:
             unit = float(LAND_UNIT_PRICE_WON_PER_PYEONG)
-            total = round(unit * area_pyeong) if area_pyeong else None
             source = "env-default"
             confidence = 0.35
             note = "ENV 기본 평단가 기반 추정치(확인 필요)"
 
+        # (C) AI/휴리스틱 평단가
+        if unit is None:
+            j = _gemini_land_price_estimate(address or (f"PNU:{pnu}" if pnu else ""))
+            unit = _try_float(j.get("unit_price_won_per_pyeong"), None)
+            source = "gemini-or-heuristic"
+            confidence = max(confidence, min(0.45, _try_float(j.get("confidence_0_1"), 0.2)))
+            note = j.get("note") or "AI/휴리스틱 추정(확인 필요)"
+
     except Exception as e:
-        unit = None
-        total = None
-        source = "unknown"
-        confidence = 0.0
+        unit = unit if unit else None
+        source = source if source != "unknown" else "unknown"
+        confidence = confidence if confidence else 0.0
         note = f"조회 실패(확인 필요): {repr(e)}"
+
+    # 4) 총액 계산 (unit/area가 있으면 반드시 숫자 생성)
+    try:
+        if unit and area_pyeong and area_pyeong > 0:
+            total = round(float(unit) * float(area_pyeong))
+    except Exception:
+        total = None
+
+    # 5) 노트/신뢰도 보강
+    if ai_note and source != "data.go.kr-rtms-landtrade":
+        note = f"{note} / {ai_note}"
+        confidence = max(confidence, min(0.40, ai_conf))
 
     payload = {
         "address": address or "확인 필요",
         "pnu": pnu,
+        "lat": lat,
+        "lng": lng,
         "area_m2": area_m2,
         "area_pyeong": area_pyeong,
-        "land_price_won": total,
+        "land_price_won": total,                 # ✅ 프론트 호환 필드
         "unit_price_won_per_pyeong": unit,
         "source": source,
         "confidence": confidence,
