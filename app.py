@@ -979,6 +979,51 @@ def checks_analyze():
     )
 
 
+# ------------------------------------------------------------
+# F-16.5: AI 분석(8대 체크/점수)용 기본 헬퍼 (500 방지)
+# ------------------------------------------------------------
+def build_ai_checks(address: str, mode: str):
+    """
+    기존 프론트(UI)가 기대하는 형태로 'checks' 리스트를 반환.
+    실제 규제/데이터는 /api/checks/analyze 에서 계산하고,
+    여기서는 AI 요약카드가 500으로 죽지 않도록 "기본값 + 안내" 제공.
+    """
+    checks = [
+        {"key": "zoning", "title": "용도지역", "status": "확인 필요", "detail": "V-World(토지이용계획) 연동 결과를 확인하세요."},
+        {"key": "ecology", "title": "생태자연도", "status": "확인 필요", "detail": "V-World(생태자연도) 연동 결과를 확인하세요."},
+        {"key": "heritage", "title": "문화재 규제", "status": "확인 필요", "detail": "V-World(문화재보존관리지도) 연동 결과를 확인하세요."},
+        {"key": "setback", "title": "이격거리", "status": "확인 필요", "detail": "조례/AI 분석 및 거리측정 연동이 필요합니다."},
+        {"key": "grid", "title": "한전 여유용량", "status": "확인 필요", "detail": "KEPCO(분산전원 연계정보) 조회 필요"},
+        {"key": "slope", "title": "경사도", "status": "확인 필요", "detail": "DEM/지형 기반 경사도 계산 필요"},
+        {"key": "insolation", "title": "일사량", "status": "확인 필요", "detail": "기상청/추정 일사량 계산 필요"},
+        {"key": "land_price", "title": "토지가격", "status": "확인 필요", "detail": "실거래/공시지가 기반 추정 필요"},
+    ]
+    # 지붕 모드인 경우 문구만 약간 변경
+    if (mode or "").lower() == "roof":
+        checks[0]["detail"] = "지붕 모드: 용도지역 영향은 낮지만 기본 확인 권장"
+    return checks
+
+def conservative_score(panel_count: int, checks):
+    """
+    보수적 점수(0~100) + 신뢰도(%) 반환. (프론트 표시용)
+    """
+    base = 60
+    try:
+        pc = int(panel_count or 0)
+    except Exception:
+        pc = 0
+    # 패널 수가 많을수록 약간 가점(최대 15)
+    base += min(15, pc // 200)
+    # 확인 필요 개수만큼 감점(최대 30)
+    unknowns = 0
+    for c in (checks or []):
+        if (c or {}).get("status") in ("확인 필요", "WARNING", "주의"):
+            unknowns += 1
+    score = max(0, min(100, base - min(30, unknowns * 3)))
+    confidence = max(0.25, min(0.99, 0.85 - unknowns * 0.04))
+    return score, f"{confidence*100:.1f}%"
+
+
 @app.route("/api/ai/analyze", methods=["POST"])
 def ai_analyze():
     data = request.get_json(silent=True) or {}
