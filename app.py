@@ -1342,23 +1342,73 @@ def report_pdf():
 @app.route("/api/infra/kepco", methods=["GET"])
 def infra_kepco():
     """
-    Query params:
-      bbox = "minLng,minLat,maxLng,maxLat"
-      z    = zoom level
-    Returns:
-      items: substations [{id,name,lat,lng,remaining_mw,available_year,status}]
-      lines: lines       [{id,coords:[[lat,lng],[lat,lng],...],remaining_mw,available_year,status}]
+    KEPCO 분산전원 연계정보(여유용량) 조회.
+    Query:
+      pnu(권장) 또는 metroCd/cityCd
+    Return:
+      data(rows) + summary + kepco_capacity(문자열)
+      (items/lines도 유지: 프론트 호환)
     """
-    bbox = (request.args.get("bbox") or "").strip()
-    z = int(request.args.get("z") or 0)
-    # 데이터 소스 미확정: 구조만 제공
-    return json_ok(
-        bbox=bbox,
-        z=z,
+    pnu = (request.args.get("pnu") or "").strip()
+    metroCd = (request.args.get("metroCd") or "").strip()
+    cityCd = (request.args.get("cityCd") or "").strip()
+
+    if (not metroCd) and pnu and pnu.isdigit() and len(pnu) >= 5:
+        metroCd = pnu[:2]
+        cityCd = pnu[2:5]
+
+    if not metroCd or not cityCd:
+        return json_ok(items=[], lines=[], rows=[], summary={"row_count": 0, "status": "확인 필요"}, kepco_capacity="확인 필요")
+
+    # 5분 캐시
+    cache_key = f"KEPCO:{metroCd}-{cityCd}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return json_ok(**cached)
+
+    url = "https://bigdata.kepco.co.kr/openapi/v1/dispersedGeneration.do"
+    params = {"metroCd": metroCd, "cityCd": cityCd, "apiKey": PUBLIC_KEPCO_KEY, "returnType": "json"}
+
+    rows = []
+    last_err = None
+    for i in range(3):
+        try:
+            q = url + "?" + urllib.parse.urlencode(params)
+            with urllib.request.urlopen(q, timeout=10) as resp:
+                j = json.loads(resp.read().decode("utf-8"))
+            rows = j.get("data", []) or []
+            break
+        except Exception as e:
+            last_err = e
+            time.sleep(0.4 * (i + 1))
+
+    def to_float(x):
+        try:
+            return float(str(x).strip())
+        except Exception:
+            return None
+
+    max_v1 = max([to_float(d.get("vol1")) or 0 for d in rows], default=0)
+    max_v2 = max([to_float(d.get("vol2")) or 0 for d in rows], default=0)
+    max_v3 = max([to_float(d.get("vol3")) or 0 for d in rows], default=0)
+
+    status = "가능"
+    if rows and (max_v3 == 0 or max_v2 == 0 or max_v1 == 0):
+        status = "불가"
+    elif rows and (min(max_v1, max_v2, max_v3) < 1000):
+        status = "주의"
+    elif not rows:
+        status = "확인 필요"
+
+    payload = dict(
         items=[],
         lines=[],
-        note="KEPCO 데이터 소스/키/스키마 미확정: 현재는 구조만 제공(확인 필요)"
+        rows=rows,
+        summary={"row_count": len(rows), "max_vol1": max_v1, "max_vol2": max_v2, "max_vol3": max_v3, "status": status},
+        kepco_capacity=f"변전소:{max_v1:.0f} / 변압기:{max_v2:.0f} / DL:{max_v3:.0f} → {status}" if rows else "확인 필요",
     )
+    _cache_set(cache_key, payload, ttl_sec=300)
+    return json_ok(**payload)
 
 @app.route("/api/infra/existing", methods=["GET"])
 def infra_existing():
@@ -1428,40 +1478,85 @@ def solar_optimize():
 # ------------------------------------------------------------
 @app.route("/api/land/estimate", methods=["POST"])
 def land_estimate():
+    """
+    프론트 통합결과 카드용 토지가격.
+    - 가능하면 /api/land/price(실거래/ENV/Gemini fallback)를 이용해 unit/total을 계산
+    - 항상 land_price_won(총액) 또는 unit_price_won_per_pyeong(평단가) 중 하나라도 최대한 채움
+    """
     data = request.get_json(silent=True) or {}
     address = (data.get("address") or "").strip()
     pnu = (data.get("pnu") or "").strip() or None
     area_m2 = data.get("area_m2")
     area_pyeong = data.get("area_pyeong")
 
-    # 데이터 소스 확정 전 "옵션 heuristic":
-    # - ENV LAND_UNIT_PRICE_WON_PER_PYEONG(평 단가) 가 설정되어 있으면 면적 기반으로 산출
-    land_price = None
-    unit_price = None
+    # 면적 보정
+    ap = None
     try:
-        if LAND_UNIT_PRICE_WON_PER_PYEONG and float(LAND_UNIT_PRICE_WON_PER_PYEONG) > 0:
-            unit_price = float(LAND_UNIT_PRICE_WON_PER_PYEONG)
-            ap = None
-            if area_pyeong is not None:
-                ap = float(area_pyeong)
-            elif area_m2 is not None:
-                ap = float(area_m2) / 3.3058
-            if ap and ap > 0:
-                land_price = ap * unit_price
+        if area_pyeong is not None:
+            ap = float(area_pyeong)
+        elif area_m2 is not None:
+            ap = float(area_m2) / 3.305785
     except Exception:
-        land_price = None
-        unit_price = None
+        ap = None
+
+    # 내부적으로 /api/land/price 로직 재사용 (최근 12개월 확장)
+    unit = None
+    total = None
+    source = "placeholder"
+    note = "토지가격 산정(추가 확인 필요)"
+    needs_confirm = True
+
+    # 1) data.go.kr RTMS 12개월
+    lawd_cd = (pnu[:5] if (pnu and pnu.isdigit() and len(pnu) >= 5) else "")
+    if DATA_GO_KR_SERVICE_KEY and lawd_cd and len(lawd_cd) == 5:
+        ym_list = _ym_list_recent(12)
+        for ym in ym_list:
+            try:
+                rt = _fetch_rtms_land_trade(lawd_cd, ym)
+                est = _rtms_estimate_unit_price_per_pyeong(rt.get("items") or [])
+                u = _try_float(est.get("unit_price_won_per_pyeong"), None)
+                if u and u > 0:
+                    unit = float(u)
+                    total = round(unit * ap) if (ap and ap > 0) else None
+                    source = "data.go.kr-rtms-landtrade"
+                    note = f"{est.get('note','실거래가 기반')} (표본 {est.get('sample_count',0)}건, {ym})"
+                    needs_confirm = False
+                    break
+            except Exception:
+                continue
+
+    # 2) ENV fallback
+    if unit is None and LAND_UNIT_PRICE_WON_PER_PYEONG and LAND_UNIT_PRICE_WON_PER_PYEONG > 0:
+        unit = float(LAND_UNIT_PRICE_WON_PER_PYEONG)
+        total = round(unit * ap) if (ap and ap > 0) else None
+        source = "env-default"
+        note = "ENV 기본 평단가 기반 추정치(추가 확인 필요)"
+        needs_confirm = True
+
+    # 3) Gemini fallback (address 필요)
+    if unit is None and address and GEMINI_API_KEY:
+        try:
+            j = _gemini_land_price_estimate(address)
+            u = _try_float(j.get("unit_price_won_per_pyeong"), None)
+            if u and u > 0:
+                unit = float(u)
+                total = round(unit * ap) if (ap and ap > 0) else None
+                source = "gemini-estimate"
+                note = (j.get("note") or "AI 추정치(추가 확인 필요)").strip()
+                needs_confirm = True
+        except Exception:
+            pass
 
     payload = {
         "address": address or "확인 필요",
         "pnu": pnu,
         "area_m2": area_m2,
-        "area_pyeong": area_pyeong,
-        "land_price_won": land_price,  # heuristic(옵션) or None
-        "unit_price_won_per_pyeong": unit_price,
-        "source": "heuristic" if land_price is not None else "placeholder",
-        "needs_confirm": True,
-        "note": "토지 시세 데이터 소스 확정 전: ENV 평단가가 있으면 면적 기반 heuristic 산출(확인 필요)"
+        "area_pyeong": ap,
+        "land_price_won": total,
+        "unit_price_won_per_pyeong": unit,
+        "source": source,
+        "needs_confirm": needs_confirm,
+        "note": note,
     }
     return json_ok(**payload)
 
