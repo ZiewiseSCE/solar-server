@@ -1540,7 +1540,7 @@ def infra_kepco():
             note="KEPCO_API_URL/KEPCO_KEY 미설정 → 모의 용량 표시(확인 필요)",
             needs_confirm=True,
         )
-try:
+    try:
         params = {"serviceKey": api_key}
         if pnu:
             params["pnu"] = pnu
