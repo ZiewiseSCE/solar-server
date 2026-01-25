@@ -739,10 +739,32 @@ def ai_analyze():
     panel_count = int(data.get("panel_count") or 0)
     setback_m = float(data.get("setback_m") or 0)
 
+    # optional: PNU for KEPCO lookup
+    pnu = (data.get("pnu") or "").strip()
+
     checks = build_ai_checks(address, mode)
     score, confidence = conservative_score(panel_count, checks)
 
-    # 확장 필드(미확정 데이터는 "확인 필요")
+    kepco_capacity = None
+    if PUBLIC_KEPCO_KEY and pnu and len(pnu) >= 5 and pnu[:5].isdigit():
+        try:
+            metroCd = pnu[:2]
+            cityCd = pnu[2:5]
+            out = kepco_dispered_generation_query({"metroCd": metroCd, "cityCd": cityCd, "returnType": "json"}, api_key=PUBLIC_KEPCO_KEY)
+            rows = out.get("data") or []
+            max_vol3 = max([_to_float_num(r.get("vol3")) for r in rows if _to_float_num(r.get("vol3")) is not None] or [None])
+            max_vol2 = max([_to_float_num(r.get("vol2")) for r in rows if _to_float_num(r.get("vol2")) is not None] or [None])
+            max_vol1 = max([_to_float_num(r.get("vol1")) for r in rows if _to_float_num(r.get("vol1")) is not None] or [None])
+            pretty=[]
+            if max_vol1 is not None: pretty.append(f"변전소 여유 {max_vol1:g}")
+            if max_vol2 is not None: pretty.append(f"변압기 여유 {max_vol2:g}")
+            if max_vol3 is not None: pretty.append(f"DL 여유 {max_vol3:g}")
+            kepco_capacity = " / ".join(pretty) if pretty else None
+        except Exception:
+            # keep silent: UI will show '확인 필요'
+            kepco_capacity = None
+
+    # 확장 필드
     payload = {
         "address": address or "확인 필요",
         "mode": mode,
@@ -753,8 +775,7 @@ def ai_analyze():
         "checks": checks,
         "attractiveness_score": score,
         "confidence": confidence,
-        # future-ready
-        "kepco_capacity": None,
+        "kepco_capacity": kepco_capacity,
         "sun_hours": None,
     }
     return json_ok(**payload)
@@ -1041,29 +1062,135 @@ def report_pdf():
 
 
 # ------------------------------------------------------------
+def _to_float_num(val):
+    """Convert numeric-like strings to float. Returns None if empty/invalid."""
+    if val is None:
+        return None
+    try:
+        s = str(val).strip()
+        if s == "" or s.lower() in ("null", "none"):
+            return None
+        s = s.replace(",", "")
+        return float(s)
+    except Exception:
+        return None
+
+
+def kepco_dispered_generation_query(params: dict, api_key: str, timeout_sec: int = 12):
+    """
+    Call KEPCO '분산전원 연계정보' API.
+    Endpoint: https://bigdata.kepco.co.kr/openapi/v1/dispersedGeneration.do
+    """
+    base = "https://bigdata.kepco.co.kr/openapi/v1/dispersedGeneration.do"
+    q = {k: v for k, v in (params or {}).items() if v not in (None, "", [])}
+    q["apiKey"] = api_key
+    q.setdefault("returnType", "json")
+    url = base + "?" + urllib.parse.urlencode(q, doseq=True)
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+        body = resp.read().decode("utf-8", errors="replace")
+    try:
+        obj = json.loads(body)
+    except Exception:
+        # Some errors may return non-json even when returnType=json
+        return {"raw": body, "data": [], "error": "KEPCO response is not JSON"}
+    rows = obj.get("data") or obj.get("Data") or obj.get("DATA") or []
+    if not isinstance(rows, list):
+        rows = []
+    return {"raw": obj, "data": rows, "error": None}
+
 # F-25/26: Infra layer APIs (연동 준비 상태)
 #  - 실제 한전/기설치 데이터 소스 확정 시 이 엔드포인트 내부만 교체하면 프론트가 그대로 동작
 # ------------------------------------------------------------
 @app.route("/api/infra/kepco", methods=["GET"])
 def infra_kepco():
     """
-    Query params:
-      bbox = "minLng,minLat,maxLng,maxLat"
-      z    = zoom level
-    Returns:
-      items: substations [{id,name,lat,lng,remaining_mw,available_year,status}]
-      lines: lines       [{id,coords:[[lat,lng],[lat,lng],...],remaining_mw,available_year,status}]
+    KEPCO 분산전원 연계정보 조회(주소/법정코드 기반).
+    Query params (any combination):
+      - pnu: 19-digit PNU (법정동코드 10자리 + 지번)
+        * If metroCd/cityCd not provided, derives metroCd=pnu[:2], cityCd=pnu[2:5]
+      - metroCd, cityCd, addrLidong, addrLi, addrJibun, substCd
+      - returnType (optional): json|xml (default json)
+
+    Note:
+      KEPCO response does NOT include lat/lng. This endpoint returns 'rows' for UI/Report,
+      and keeps legacy fields 'items/lines' empty for map overlay compatibility.
     """
-    bbox = (request.args.get("bbox") or "").strip()
-    z = int(request.args.get("z") or 0)
-    # 데이터 소스 미확정: 구조만 제공
-    return json_ok(
-        bbox=bbox,
-        z=z,
-        items=[],
-        lines=[],
-        note="KEPCO 데이터 소스/키/스키마 미확정: 현재는 구조만 제공(확인 필요)"
-    )
+    api_key = PUBLIC_KEPCO_KEY
+    if not api_key:
+        return json_ok(ok=False, error="KEPCO_KEY is not configured on server")
+
+    pnu = (request.args.get("pnu") or "").strip()
+    metroCd = (request.args.get("metroCd") or "").strip()
+    cityCd = (request.args.get("cityCd") or "").strip()
+
+    # Derive 법정코드 from PNU when possible
+    if pnu and (not metroCd or not cityCd) and len(pnu) >= 5 and pnu[:5].isdigit():
+        metroCd = metroCd or pnu[:2]
+        cityCd = cityCd or pnu[2:5]
+
+    params = {
+        "metroCd": metroCd or None,
+        "cityCd": cityCd or None,
+        "addrLidong": (request.args.get("addrLidong") or "").strip() or None,
+        "addrLi": (request.args.get("addrLi") or "").strip() or None,
+        "addrJibun": (request.args.get("addrJibun") or "").strip() or None,
+        "substCd": (request.args.get("substCd") or "").strip() or None,
+        "returnType": (request.args.get("returnType") or "json").strip().lower(),
+    }
+
+    try:
+        out = kepco_dispered_generation_query(params, api_key=api_key)
+        rows = out.get("data") or []
+        # summarize max available capacities (vol1/vol2/vol3)
+        max_vol1 = max([_to_float_num(r.get("vol1")) for r in rows if _to_float_num(r.get("vol1")) is not None] or [None])
+        max_vol2 = max([_to_float_num(r.get("vol2")) for r in rows if _to_float_num(r.get("vol2")) is not None] or [None])
+        max_vol3 = max([_to_float_num(r.get("vol3")) for r in rows if _to_float_num(r.get("vol3")) is not None] or [None])
+
+        def _status():
+            vols = []
+            for r in rows[:50]:
+                for k in ("vol1","vol2","vol3"):
+                    v = _to_float_num(r.get(k))
+                    if v is not None:
+                        vols.append(v)
+            if not rows:
+                return "데이터 없음"
+            if any(v == 0 for v in vols):
+                return "불가(여유용량 0 포함)"
+            if any(v is None for v in [_to_float_num(rows[0].get("vol1")), _to_float_num(rows[0].get("vol2")), _to_float_num(rows[0].get("vol3"))]):
+                return "확인 필요"
+            return "가능"
+
+        summary = {
+            "row_count": len(rows),
+            "max_vol1": max_vol1,
+            "max_vol2": max_vol2,
+            "max_vol3": max_vol3,
+            "status": _status(),
+        }
+
+        # Create a compact human-readable string for UI
+        pretty = []
+        if max_vol1 is not None: pretty.append(f"변전소 여유 {max_vol1:g}")
+        if max_vol2 is not None: pretty.append(f"변압기 여유 {max_vol2:g}")
+        if max_vol3 is not None: pretty.append(f"DL 여유 {max_vol3:g}")
+        capacity_text = " / ".join(pretty) if pretty else "확인 필요"
+
+        return json_ok(
+            ok=True,
+            query=params,
+            derived={"pnu": pnu or None, "metroCd": metroCd or None, "cityCd": cityCd or None},
+            rows=rows,
+            summary=summary,
+            kepco_capacity=capacity_text,
+            # legacy fields for existing UI overlay
+            items=[],
+            lines=[],
+            note="KEPCO 분산전원 연계정보 API 연동"
+        )
+    except Exception as e:
+        return json_ok(ok=False, error=str(e), query=params, derived={"pnu": pnu or None, "metroCd": metroCd or None, "cityCd": cityCd or None})
 
 @app.route("/api/infra/existing", methods=["GET"])
 def infra_existing():
