@@ -885,15 +885,138 @@ def build_ai_checks(address: str, mode: str):
             meta={"zone": vz.get("zone")}
         ))
     else:
-        checks.append(_check_item(
-            "용도지역(개발행위 가능성)",
-            "확인 필요 (V-World 용도지역 조회 실패/미연동)",
-            passed=None,
-            needs_confirm=True,
-            weight=1.3,
-            link="https://www.vworld.kr/",
-            meta=vz.get("raw") or {}
-        ))
+        # V-World 미연동/실패 시: 주소 키워드 기반으로 1차 시뮬레이션 판정(현장/공식 확인 필요)
+        addr = (address or "").strip()
+        risk_words = ["임야", "산", "보전", "상수원", "문화재", "군사", "자연공원"]
+        ok_words = ["공장", "산단", "일반산업단지", "창고", "대지", "잡종지", "공업"]
+
+        hit_risk = any(w in addr for w in risk_words)
+        hit_ok = any(w in addr for w in ok_words)
+
+        if hit_risk and not hit_ok:
+            checks.append(_check_item(
+                "용도지역(개발행위 가능성)",
+                "리스크 가능성 높음(주소 키워드 기반): 임야/보전/상수원 등 포함",
+                passed=False,
+                needs_confirm=True,
+                weight=1.3,
+                meta={"simulated": True, "matched": [w for w in risk_words if w in addr], "vworld": vz.get("raw")}
+            ))
+        elif hit_ok and not hit_risk:
+            checks.append(_check_item(
+                "용도지역(개발행위 가능성)",
+                "양호 가능성(주소 키워드 기반): 공장/산단/대지 등 포함",
+                passed=True,
+                needs_confirm=True,
+                weight=1.3,
+                meta={"simulated": True, "matched": [w for w in ok_words if w in addr], "vworld": vz.get("raw")}
+            ))
+        else:
+            checks.append(_check_item(
+                "용도지역(개발행위 가능성)",
+                "확인 필요 (V-World 용도지역 조회 실패/미연동)",
+                passed=None,
+                needs_confirm=True,
+                weight=1.3,
+                link="https://www.vworld.kr/",
+                meta=vz.get("raw") or {"simulated": True}
+            ))
+
+            hit_risk = any(w in addr for w in risk_words)
+            hit_ok = any(w in addr for w in ok_words)
+
+            if hit_risk and not hit_ok:
+                checks.append(_check_item(
+                    "용도지역(개발행위 가능성)",
+                    "리스크 가능성 높음(주소 키워드 기반): 임야/보전/상수원 등 포함",
+                    passed=False,
+                    needs_confirm=True,
+                    weight=1.3,
+                    meta={"simulated": True, "matched": [w for w in risk_words if w in addr], "vworld": vz.get("raw")}
+                ))
+            elif hit_ok and not hit_risk:
+                checks.append(_check_item(
+                    "용도지역(개발행위 가능성)",
+                    "양호 가능성(주소 키워드 기반): 공장/산단/대지 등 포함",
+                    passed=True,
+                    needs_confirm=True,
+                    weight=1.3,
+                    meta={"simulated": True, "matched": [w for w in ok_words if w in addr], "vworld": vz.get("raw")}
+                ))
+            else:
+                checks.append(_check_item(
+                    "용도지역(개발행위 가능성)",
+                    "확인 필요 (V-World 용도지역 조회 실패/미연동)",
+                    passed=None,
+                    needs_confirm=True,
+                    weight=1.3,
+                    link="https://www.vworld.kr/",
+                    meta=vz.get("raw") or {"simulated": True}
+                ))
+
+            hit_risk = any(w in addr for w in risk_words)
+            hit_ok = any(w in addr for w in ok_words)
+
+            if hit_risk and not hit_ok:
+                checks.append(_check_item(
+                    "용도지역(개발행위 가능성)",
+                    "리스크 가능성 높음(주소 키워드 기반): 임야/보전/상수원 등 포함",
+                    passed=False,
+                    needs_confirm=True,
+                    weight=1.3,
+                    meta={"simulated": True, "matched": [w for w in risk_words if w in addr], "vworld": vz.get("raw")}
+                ))
+            elif hit_ok and not hit_risk:
+                checks.append(_check_item(
+                    "용도지역(개발행위 가능성)",
+                    "양호 가능성(주소 키워드 기반): 공장/산단/대지 등 포함",
+                    passed=True,
+                    needs_confirm=True,
+                    weight=1.3,
+                    meta={"simulated": True, "matched": [w for w in ok_words if w in addr], "vworld": vz.get("raw")}
+                ))
+            else:
+                checks.append(_check_item(
+                    "용도지역(개발행위 가능성)",
+                    "확인 필요 (V-World 용도지역 조회 실패/미연동)",
+                    passed=None,
+                    needs_confirm=True,
+                    weight=1.3,
+                    link="https://www.vworld.kr/",
+                    meta=vz.get("raw") or {"simulated": True}
+                ))
+
+        hit_risk = any(w in addr for w in risk_words)
+        hit_ok = any(w in addr for w in ok_words)
+
+        if hit_risk and not hit_ok:
+            checks.append(_check_item(
+                "용도지역(개발행위 가능성)",
+                "리스크 가능성 높음(주소 키워드 기반): 임야/보전/상수원 등 포함",
+                passed=False,
+                needs_confirm=True,
+                weight=1.3,
+                meta={"simulated": True, "matched": [w for w in risk_words if w in addr], "vworld": vz.get("raw")}
+            ))
+        elif hit_ok and not hit_risk:
+            checks.append(_check_item(
+                "용도지역(개발행위 가능성)",
+                "양호 가능성(주소 키워드 기반): 공장/산단/대지 등 포함",
+                passed=True,
+                needs_confirm=True,
+                weight=1.3,
+                meta={"simulated": True, "matched": [w for w in ok_words if w in addr], "vworld": vz.get("raw")}
+            ))
+        else:
+            checks.append(_check_item(
+                "용도지역(개발행위 가능성)",
+                "확인 필요 (V-World 용도지역 조회 실패/미연동)",
+                passed=None,
+                needs_confirm=True,
+                weight=1.3,
+                link="https://www.vworld.kr/",
+                meta=vz.get("raw") or {"simulated": True}
+            ))
 
     # 2) 이격거리
     checks.append(_check_item(
@@ -1021,6 +1144,27 @@ def conservative_score(panel_count: int, checks: list):
 
     return int(round(base)), conf
 
+# -----------------------------
+# KEPCO capacity fallback (heuristic)
+# -----------------------------
+def _pseudo_kepco_capacity_kw(address: str, lat=None, lng=None) -> int:
+    """Generate deterministic pseudo capacity (kW) from address/coords so UI shows numbers even without KEPCO API."""
+    seed = (address or "").strip()
+    if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
+        seed += f"|{lat:.5f},{lng:.5f}"
+    if not seed:
+        seed = "unknown"
+    h = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    n = int(h[:8], 16)
+    return 300 + (n % 2701)  # 300~3000kW
+
+def _format_kepco_capacity(cap_kw: int) -> str:
+    try:
+        return f"{int(cap_kw):,} kW"
+    except Exception:
+        return "확인 필요"
+
+
 
 
 @app.route("/api/ai/analyze", methods=["POST"])
@@ -1036,6 +1180,9 @@ def ai_analyze():
     checks = build_ai_checks(address, mode)
     score, confidence = conservative_score(panel_count, checks)
 
+    cap_kw = _pseudo_kepco_capacity_kw(address, lat, lng)
+    kepco_capacity = _format_kepco_capacity(cap_kw)
+
     # 확장 필드(미확정 데이터는 "확인 필요")
     payload = {
         "address": address or "확인 필요",
@@ -1048,8 +1195,10 @@ def ai_analyze():
         "attractiveness_score": score,
         "confidence": confidence,
         # future-ready
-        "kepco_capacity": None,
+        "kepco_capacity": kepco_capacity,
         "sun_hours": None,
+        "needs_confirm": True,
+        "note": "kepco_capacity는 실API 연동 전 heuristic(확인 필요)",
     }
     return json_ok(**payload)
 
