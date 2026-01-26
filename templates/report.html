@@ -5,7 +5,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Solar Pathfinder Report</title>
-  <script src="https://cdn.tailwindcss.com">// -------- Re-run Deep analysis (best-effort) --------
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+// -------- Re-run Deep analysis (best-effort) --------
 async function rerunDeep(){
   const btn = document.getElementById("rerunDeepBtn");
   const msg = document.getElementById("rerunDeepMsg");
@@ -77,7 +79,7 @@ document.getElementById("rerunDeepBtn")?.addEventListener("click", rerunDeep);
                 구매매력도 <span class="ml-1 text-base text-emerald-100">{{ ai_score }}</span>
               </div>
               <div class="px-3 py-1 rounded-full bg-amber-400/10 border border-amber-400/25 text-amber-200 text-xs font-bold">
-                한전 용량: <span class="ml-1 text-amber-100">{{ kepco_capacity }}</span>
+                한전 용량: <span id="kepcoCapacityText" class="ml-1 text-amber-100">{{ kepco_capacity }}</span>
               </div>
             </div>
 
@@ -135,25 +137,25 @@ document.getElementById("rerunDeepBtn")?.addEventListener("click", rerunDeep);
         <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mt-6">
           <div class="rounded-2xl bg-gradient-to-br from-slate-900/60 to-slate-900/20 border border-white/10 p-4">
             <div class="text-xs text-slate-300/80 font-bold">총 사업비</div>
-            <div class="text-lg font-extrabold mt-1">{{ finance.totalCostWon|default(0) | int | format_won }}</div>
+            <div class="text-lg font-extrabold mt-1"><span id="kpiTotalCost">{{ finance.totalCostWon|default(0) | int | format_won }}</span></div>
             <div class="text-[11px] text-slate-400/80 mt-2">※ 추정치</div>
           </div>
 
           <div class="rounded-2xl bg-gradient-to-br from-indigo-900/50 to-indigo-900/20 border border-white/10 p-4">
             <div class="text-xs text-indigo-200/90 font-bold">연 수익(기본)</div>
-            <div class="text-lg font-extrabold mt-1">{{ finance.annualRevenueWon|default(0) | int | format_won }}</div>
+            <div class="text-lg font-extrabold mt-1"><span id="kpiAnnualRevenue">{{ finance.annualRevenueWon|default(0) | int | format_won }}</span></div>
             <div class="text-[11px] text-indigo-200/70 mt-2">시나리오로 변동</div>
           </div>
 
           <div class="rounded-2xl bg-gradient-to-br from-emerald-900/50 to-emerald-900/20 border border-white/10 p-4">
             <div class="text-xs text-emerald-200/90 font-bold">월 상환액(PF)</div>
-            <div class="text-lg font-extrabold mt-1">{{ finance.monthlyDebtWon|default(0) | int | format_won }}</div>
-            <div class="text-[11px] text-emerald-200/70 mt-2">총이자 {{ finance.totalInterestWon|default(0) | int | format_won }}</div>
+            <div class="text-lg font-extrabold mt-1"><span id="kpiMonthlyDebt">{{ finance.monthlyDebtWon|default(0) | int | format_won }}</span></div>
+            <div class="text-[11px] text-emerald-200/70 mt-2">총이자 <span id="kpiTotalInterest">{{ finance.totalInterestWon|default(0) | int | format_won }}</span></div>
           </div>
 
           <div class="rounded-2xl bg-gradient-to-br from-amber-900/50 to-amber-900/20 border border-white/10 p-4">
             <div class="text-xs text-amber-200/90 font-bold">자본회수기간</div>
-            <div class="text-lg font-extrabold mt-1">{{ finance.paybackYears if finance.paybackYears else "> 25" }} 년</div>
+            <div class="text-lg font-extrabold mt-1"><span id="kpiPayback">{{ finance.paybackYears if finance.paybackYears else "> 25" }}</span> 년</div>
             <div class="text-[11px] text-amber-200/70 mt-2">※ 보수적 추정</div>
           </div>
         </div>
@@ -313,30 +315,136 @@ document.getElementById("rerunDeepBtn")?.addEventListener("click", rerunDeep);
   const dscrAvgRaw = (typeof roi.dscr_avg === "number") ? roi.dscr_avg : null;
 
 
-// -------- Module/Inverter catalog (Report editable) --------
-const MODULES = [
-  { id:"t1", name:"TOPCon 640W", eff:1.00 },
-  { id:"p1", name:"PERC 550W", eff:0.96 },
-  { id:"h1", name:"HJT 700W", eff:1.03 },
-];
-const INVERTERS = [
-  { id:"s100", name:"스트링 100kW", eff:1.00 },
-  { id:"s60",  name:"스트링 60kW",  eff:0.99 },
-  { id:"c250", name:"중대형 250kW", eff:1.01 },
-];
-function initModuleInverterUI(){
+// -------- Module/Inverter catalog (fetched from backend) --------
+let MODULES = [];
+let INVERTERS = [];
+
+// Convert backend rows -> option model
+function _mapModuleRow(row){
+  const id = String(row.no ?? row.id ?? "");
+  const powerW = (row.power_w!=null) ? Number(row.power_w) : null;
+  const effPct = (row.efficiency_pct!=null) ? Number(row.efficiency_pct) : null;
+  const pricePerW = (row.price_won_per_w!=null) ? Number(row.price_won_per_w) : null;
+
+  // revenue factor: baseline 20% 효율을 1.0으로 (보수)
+  const effFactor = effPct ? Math.max(0.90, Math.min(1.08, effPct / 20.0)) : 1.0;
+
+  return {
+    id,
+    name: `${row.brand||""} ${row.model||""}`.trim() + (powerW?` · ${powerW}W`:""),
+    eff: effFactor,
+    powerW,
+    pricePerW,
+  };
+}
+function _mapInverterRow(row){
+  const id = String(row.no ?? row.id ?? "");
+  const capKw = (row.capacity_kw!=null) ? Number(row.capacity_kw) : null;
+  const priceWon = (row.price_won!=null) ? Number(row.price_won) : ((row.price_million_won!=null)? Number(row.price_million_won)*1_000_000 : null);
+
+  // revenue factor: topology 기반 보수 가중(거의 1.0)
+  const topo = String(row.topology||"").toLowerCase();
+  const effFactor = topo.includes("central") ? 1.005 : 1.0;
+
+  return {
+    id,
+    name: `${row.brand||""} ${row.model||""}`.trim() + (capKw?` · ${capKw}kW`:""),
+    eff: effFactor,
+    capKw,
+    priceWon,
+  };
+}
+
+async function initModuleInverterUI(){
   const ms = document.getElementById("moduleSel");
   const is = document.getElementById("inverterSel");
-  if(ms) ms.innerHTML = MODULES.map(m=>`<option value="${m.id}">${m.name}</option>`).join("");
-  if(is) is.innerHTML = INVERTERS.map(i=>`<option value="${i.id}">${i.name}</option>`).join("");
+
+  // skeleton
+  if(ms) ms.innerHTML = `<option value="">불러오는 중...</option>`;
+  if(is) is.innerHTML = `<option value="">불러오는 중...</option>`;
+
+  try{
+    const [mr, ir] = await Promise.all([
+      fetch("/api/hardware/modules", {credentials:"include"}),
+      fetch("/api/hardware/inverters", {credentials:"include"})
+    ]);
+    const mj = await mr.json().catch(()=>null);
+    const ij = await ir.json().catch(()=>null);
+
+    MODULES = (mj && mj.ok && Array.isArray(mj.items)) ? mj.items.map(_mapModuleRow) : [];
+    INVERTERS = (ij && ij.ok && Array.isArray(ij.items)) ? ij.items.map(_mapInverterRow) : [];
+
+    // fallback 최소 1개
+    if(!MODULES.length) MODULES = [{id:"", name:"모듈 목록 없음", eff:1.0}];
+    if(!INVERTERS.length) INVERTERS = [{id:"", name:"인버터 목록 없음", eff:1.0}];
+
+    if(ms) ms.innerHTML = MODULES.map(m=>`<option value="${m.id}">${m.name}</option>`).join("");
+    if(is) is.innerHTML = INVERTERS.map(v=>`<option value="${v.id}">${v.name}</option>`).join("");
+
+    // default: 첫 항목
+    if(ms && !ms.value) ms.value = MODULES[0].id;
+    if(is && !is.value) is.value = INVERTERS[0].id;
+
+  }catch(e){
+    if(ms) ms.innerHTML = `<option value="">불러오기 실패</option>`;
+    if(is) is.innerHTML = `<option value="">불러오기 실패</option>`;
+  }
 }
 function selectedEffFactor(){
   const ms = document.getElementById("moduleSel");
   const is = document.getElementById("inverterSel");
-  const m = MODULES.find(x=>x.id === (ms?.value||"t1")) || MODULES[0];
-  const i = INVERTERS.find(x=>x.id === (is?.value||"s100")) || INVERTERS[0];
+  const m = MODULES.find(x=>x.id === String(ms?.value||"")) || MODULES[0];
+  const i = INVERTERS.find(x=>x.id === String(is?.value||"")) || INVERTERS[0];
   // revenue factor
   return (m.eff||1.0) * (i.eff||1.0);
+
+
+function selectedCostDeltaYear1(){
+  // 보수적: 선택 기자재 단가가 '기본값(첫 항목)' 대비 비싸면 1년차 CF에서 차감, 싸면 가산.
+  // 정확한 BOS/공사비까지는 반영하지 않고, '기자재 변경에 따른 체감'을 만들기 위한 UI용 보정이다.
+  try{
+    const ms = document.getElementById("moduleSel");
+    const is = document.getElementById("inverterSel");
+    const m0 = MODULES[0];
+    const i0 = INVERTERS[0];
+    const m = MODULES.find(x=>x.id === String(ms?.value||"")) || m0;
+    const inv = INVERTERS.find(x=>x.id === String(is?.value||"")) || i0;
+
+    const baseCost = Number(payload?.finance?.totalCostWon || 0) || 0;
+    if(baseCost <= 0) return 0;
+
+    // 모듈 비용 비중 45%, 인버터 12% 가정(나머지는 BOS/공사/인허가 등)
+    const modShare = 0.45, invShare = 0.12;
+
+    const mFactor = (m?.pricePerW && m0?.pricePerW) ? (m.pricePerW / m0.pricePerW) : 1.0;
+    const iFactor = (inv?.priceWon && i0?.priceWon) ? (inv.priceWon / i0.priceWon) : 1.0;
+
+    const delta = baseCost * (modShare * (mFactor - 1.0) + invShare * (iFactor - 1.0));
+    return Math.round(delta);
+  }catch(e){ return 0; }
+}
+
+function updateKpiFromSeries(cfNo, cfWith){
+  // KPI 카드 일부는 서버 렌더 값이라, 클라이언트 재계산 시 함께 업데이트
+  try{
+    const baseCost = Number(payload?.finance?.totalCostWon || 0) || 0;
+    const delta = selectedCostDeltaYear1();
+    const costEl = document.getElementById("kpiTotalCost");
+    if(costEl) costEl.innerText = fmtWon(baseCost + Math.max(0, delta));
+
+    const annualRevEl = document.getElementById("kpiAnnualRevenue");
+    // 연수익은 1년차 현금흐름(토지비 제외)로 근사(보수)
+    if(annualRevEl && cfNo && cfNo.length) annualRevEl.innerText = fmtWon(cfNo[0]);
+
+    const pbEl = document.getElementById("kpiPayback");
+    if(pbEl && cfWith && cfWith.length){
+      const cost = baseCost + Math.max(0, delta);
+      const y1 = Math.max(1, cfWith[0] || 0);
+      const pb = (cost / y1);
+      pbEl.innerText = (isFinite(pb) ? (pb > 25 ? "> 25" : pb.toFixed(1)) : "확인 필요");
+    }
+  }catch(e){}
+}
 }
 
 // -------- Mode: land vs roof (from server) --------
@@ -372,10 +480,17 @@ initModuleInverterUI();
   const effFactor = selectedEffFactor();
   // 기본 현금흐름은 payload에서 받은 연도별 현금흐름(추정) 기반.
   // 시나리오/모듈/인버터 선택은 "수익(=현금흐름)에 비례"로 보수적 적용.
-  const cfNo = cfNoRaw.map(v => Math.round(v * scenarioFactor * effFactor));
+  const deltaCapex = selectedCostDeltaYear1();
+  const cfNo = cfNoRaw.map((v, idx) => {
+    const vv = Math.round(v * scenarioFactor * effFactor);
+    return (idx===0 ? Math.round(vv - deltaCapex) : vv);
+  });
 
   const baseWith = (landMode === "own") ? cfNoRaw : cfWithRaw;
-  let cfWith = baseWith.map(v => Math.round(v * scenarioFactor * effFactor));
+  let cfWith = baseWith.map((v, idx) => {
+    const vv = Math.round(v * scenarioFactor * effFactor);
+    return (idx===0 ? Math.round(vv - deltaCapex) : vv);
+  });
 
   // 지붕형: 임대료는 With 쪽(실제 사업성)에서 OPEX로 차감 반영
   if(MODE === "roof"){
@@ -496,6 +611,7 @@ initModuleInverterUI();
   function recomputeRoiMetrics(){
     const rate = parseFloat(document.getElementById("discountRate")?.value || "6") || 6;
     const {cfNo, cfWith} = getSeries();
+    updateKpiFromSeries(cfNo, cfWith);
 
     // Update charts
     if(chartNo){ chartNo.data.datasets[0].data = cfNo; chartNo.update(); }
@@ -565,6 +681,17 @@ document.getElementById("recalcRoi")?.addEventListener("click", (e)=>{ e.prevent
 document.getElementById("moduleSel")?.addEventListener("change", (e)=>{ recomputeRoiMetrics(); });
 document.getElementById("inverterSel")?.addEventListener("change", (e)=>{ recomputeRoiMetrics(); });
 document.getElementById("roofRentAnnual")?.addEventListener("input", (e)=>{ recomputeRoiMetrics(); });
+  // Mission-5: 한전 용량 표시 (없으면 빨간색 "조회 불가")
+  try{
+    const el = document.getElementById("kepcoCapacityText");
+    const v = String(payload?.ai_analysis?.kepco_capacity || payload?.kepco_capacity || "{{ kepco_capacity }}");
+    if(el){
+      if(!v || v.includes("확인 필요") || v.includes("조회 불가")){
+        el.textContent = "조회 불가 (직접 문의)";
+        el.classList.add("text-red-400");
+      }
+    }
+  }catch(e){}
   recomputeRoiMetrics();
 </script>
 </body>
