@@ -1434,18 +1434,18 @@ def report():
     kepco_capacity = (form.get("kepco_capacity") or "").strip() or "확인 필요"
     date = (form.get("date") or "").strip() or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-mode = (form.get("mode") or "").strip() or "roof"
-lat = form.get("lat")
-lng = form.get("lng")
-pnu = (form.get("pnu") or "").strip()
-try:
-    lat = float(lat) if lat not in (None, "", "null") else None
-except Exception:
-    lat = None
-try:
-    lng = float(lng) if lng not in (None, "", "null") else None
-except Exception:
-    lng = None
+    mode = (form.get("mode") or "").strip() or "roof"
+    lat = form.get("lat")
+    lng = form.get("lng")
+    pnu = (form.get("pnu") or "").strip()
+    try:
+        lat = float(lat) if lat not in (None, "", "null") else None
+    except Exception:
+        lat = None
+    try:
+        lng = float(lng) if lng not in (None, "", "null") else None
+    except Exception:
+        lng = None
 
     def _json_load(s):
         try:
