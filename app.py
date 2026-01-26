@@ -1311,7 +1311,10 @@ def _merge_ordinance_into_checks(checks: list, ordinance: dict):
     return checks
 
 
-def _kepco_capacity_lookup_best_effort(pnu: str | None, address: str | None = None):
+def _kepco_capacity_lookup_best_effort(
+    pnu: Optional[str],
+    address: Optional[str] = None
+):
     """Deep 전용: 실제 한전 OpenAPI가 설정된 경우에만 조회.
     - 설정/조회 실패 시 None 반환(가짜 숫자 금지)
     """
@@ -2877,4 +2880,5 @@ def api_hardware_design():
 if __name__ == "__main__":
     port = int(os.getenv("PORT") or 5000)
     app.run(host="0.0.0.0", port=port, debug=True)
+
 
