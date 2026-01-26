@@ -1518,7 +1518,7 @@ except Exception:
     land_price = _format_won(land_price_won) if land_price_won is not None else "확인 필요"
 
     return render_template(
-        \"report.html\",
+        "report.html",
         address=address,
         capacity=capacity,
         kepco_capacity=kepco_capacity,
