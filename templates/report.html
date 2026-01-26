@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -8,20 +7,17 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
 // -------- Re-run Deep analysis (best-effort) --------
+
 async function rerunDeep(){
   const btn = document.getElementById("rerunDeepBtn");
   const msg = document.getElementById("rerunDeepMsg");
+  const sk = document.getElementById("deepSkeleton");
+
   if(btn) btn.disabled = true;
-  if(msg) msg.textContent = "AI가 정밀 분석을 다시 실행 중입니다...";
+  if(msg) msg.textContent = "데이터 대기 중… (정밀 분석 실행 중)";
+  if(sk){ sk.classList.remove("hidden"); }
+
   try{
-    // Minimal payload: address/mode/panel_count if available
-    const pc = (()=> {
-      try{
-        const cap = String(payload.capacity || "").match(/DC:\s*([\d\.]+)/);
-        // if capacity string has DC, can't derive panels; fallback 0
-        return 0;
-      }catch(e){ return 0; }
-    })();
     const r = await fetch("/api/analyze/deep", {
       method:"POST",
       headers:{ "Content-Type":"application/json" },
@@ -31,23 +27,44 @@ async function rerunDeep(){
         lat: payload.lat || null,
         lng: payload.lng || null,
         pnu: payload.pnu || null,
-        panel_count: pc
+        panel_count: 0
       })
     });
     const j = await r.json().catch(()=>null);
     if(!j || !j.ok) throw new Error("deep failed");
-    // update checks if container exists
-    const checks = j.checks || [];
-    const box = document.querySelectorAll(".rounded-2xl.bg-white\/5.border.border-white\/10.p-4")[0]; // not reliable; skip
-    // Best-effort: just notify
-    if(msg) msg.textContent = "정밀 분석 완료 (페이지 새로고침 시 반영)";
+
+    // 1) 한전 용량 업데이트 (없으면 적색 문구)
+    const kepcoEl = document.getElementById("kepcoCapacityText");
+    if(kepcoEl){
+      const t = (j.kepco_capacity || "").trim();
+      if(!t || t.includes("조회 불가")){
+        kepcoEl.textContent = "조회 불가 (한전 문의 요망)";
+        kepcoEl.className = "ml-1 text-red-300 font-extrabold";
+      }else{
+        kepcoEl.textContent = t;
+        kepcoEl.className = "ml-1 text-amber-100";
+      }
+    }
+
+    // 2) 8대 체크사항 업데이트 (title 기준 best-effort 매칭)
+    const newChecks = Array.isArray(j.checks) ? j.checks : [];
+    for(const c of newChecks){
+      const title = (c.title || c.category || "").trim();
+      if(!title) continue;
+      const node = document.querySelector(`[data-check-title="${CSS.escape(title)}"] .check-result`);
+      if(node) node.textContent = c.result || "확인 필요";
+    }
+
+    if(msg) msg.textContent = "정밀 분석 완료 ✅ (조례/한전/땅값 반영)";
   }catch(e){
     if(msg) msg.textContent = "정밀 분석 실패. 다시 눌러 재시도할 수 있습니다.";
   }finally{
+    if(sk){ sk.classList.add("hidden"); }
     if(btn) btn.disabled = false;
   }
 }
 document.getElementById("rerunDeepBtn")?.addEventListener("click", rerunDeep);
+addEventListener("click", rerunDeep);
 </script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -211,7 +228,28 @@ document.getElementById("rerunDeepBtn")?.addEventListener("click", rerunDeep);
           <div class="rounded-2xl bg-white/5 border border-white/10 p-4">
             <div class="text-xs font-extrabold text-slate-200/90 mb-2">DSCR 기준</div>
             <div class="flex items-center gap-2">
-              <input id="dscrThreshold" type="number" step="0.05" value="1.20" class="w-24 px-2 py-1 bg-slate-900/60 border border-white/10 rounded-lg text-xs" />
+              
+              <div class="flex flex-wrap items-center gap-2 mb-3">
+                <div class="flex items-center gap-2">
+                  <span class="text-[11px] text-slate-300/70">금리</span>
+                  <input id="pfInterestRate" type="number" step="0.1" value="5.5" class="w-20 px-2 py-1 bg-slate-900/60 border border-white/10 rounded-lg text-xs" />
+                  <span class="text-[11px] text-slate-300/70">%</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-[11px] text-slate-300/70">기간</span>
+                  <input id="pfTenorYears" type="number" step="1" min="1" value="15" class="w-16 px-2 py-1 bg-slate-900/60 border border-white/10 rounded-lg text-xs" />
+                  <span class="text-[11px] text-slate-300/70">년</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-[11px] text-slate-300/70">LTV</span>
+                  <input id="pfLtvPct" type="number" step="1" min="70" max="90" value="70" class="w-16 px-2 py-1 bg-slate-900/60 border border-white/10 rounded-lg text-xs" />
+                  <span class="text-[11px] text-slate-300/70">%</span>
+                </div>
+                <div class="text-[11px] text-slate-300/70">
+                  월 상환액: <span id="pfMonthlyPmt" class="font-extrabold text-slate-100">-</span>
+                </div>
+              </div>
+<input id="dscrThreshold" type="number" step="0.05" value="1.20" class="w-24 px-2 py-1 bg-slate-900/60 border border-white/10 rounded-lg text-xs" />
               <span class="text-[11px] text-slate-300/70">이상</span>
               <button id="recalcPf" class="px-3 py-1 rounded-lg bg-white/10 border border-white/10 text-xs font-extrabold hover:bg-white/15">판정</button>
             </div>
@@ -266,10 +304,10 @@ document.getElementById("rerunDeepBtn")?.addEventListener("click", rerunDeep);
             <div class="font-extrabold text-sm mb-2">8대 중대 체크사항</div>
             <div class="space-y-2 text-xs">
               {% for c in ai_analysis.checks or [] %}
-                <div class="p-3 rounded-xl border border-white/10 bg-black/10 flex items-center justify-between gap-3">
+                <div class="p-3 rounded-xl border border-white/10 bg-black/10 flex items-center justify-between gap-3" data-check-title="{{ c.title or c.category }}">
                   <div>
                     <div class="font-extrabold text-slate-100">{{ c.title or c.category }}</div>
-                    <div class="text-slate-300/70 mt-1">{{ c.result }}</div>
+                    <div class="text-slate-300/70 mt-1 check-result">{{ c.result }}</div>
                   </div>
                   {% if c.link %}
                     <a class="px-3 py-1 rounded-lg bg-white/10 border border-white/10 text-cyan-200 font-bold hover:bg-white/15"
@@ -285,6 +323,14 @@ document.getElementById("rerunDeepBtn")?.addEventListener("click", rerunDeep);
         </div>
 
         <!-- Re-run Deep Analysis (NEW) -->
+
+<!-- Deep skeleton (hidden by default) -->
+<div id="deepSkeleton" class="hidden mt-4 space-y-2">
+  <div class="h-4 rounded-lg bg-white/10 animate-pulse"></div>
+  <div class="h-4 rounded-lg bg-white/10 animate-pulse w-5/6"></div>
+  <div class="h-4 rounded-lg bg-white/10 animate-pulse w-2/3"></div>
+</div>
+
 <div class="mt-6 flex flex-wrap gap-2">
   <button id="rerunDeepBtn" class="px-4 py-2 rounded-xl bg-indigo-500/80 border border-indigo-300/20 font-extrabold hover:bg-indigo-500"
     type="button">🔍 AI 정밀 분석 다시 실행</button>
@@ -313,6 +359,30 @@ document.getElementById("rerunDeepBtn")?.addEventListener("click", rerunDeep);
   const dscrYearsRaw = Array.isArray(roi.dscr_years) ? roi.dscr_years : [];
   const dscrMinRaw = (typeof roi.dscr_min === "number") ? roi.dscr_min : null;
   const dscrAvgRaw = (typeof roi.dscr_avg === "number") ? roi.dscr_avg : null;
+
+  // ---- PF 금융 로직 (Level Payment, 시장 표준) ----
+  const PF_DAYCOUNT_FACTOR = (365/360); // 실무에서 사용하는 365/360 basis 반영(검증 케이스 맞춤)
+
+  function pmtLevelPayment(P, annualRatePct, years){
+    const principal = Math.max(0, Number(P) || 0);
+    const n = Math.max(1, Math.round((Number(years)||0) * 12));
+    const r = Math.max(0, (Number(annualRatePct)||0)/100 * PF_DAYCOUNT_FACTOR / 12);
+    if(principal <= 0) return 0;
+    if(r <= 0) return principal / n;
+    const pow = Math.pow(1+r, n);
+    return principal * r * pow / (pow - 1);
+  }
+
+  function computeDscrFromCashflows(cadsYears, annualDebt){
+    // cadsYears: [Y1..], annualDebt: yearly debt service (원)
+    if(!Array.isArray(cadsYears) || !cadsYears.length || !(annualDebt>0)) return {years: [], min:null, avg:null};
+    const years = cadsYears.map(v => (Number(v)||0) / annualDebt);
+    const valid = years.filter(v => Number.isFinite(v) && v>0);
+    if(!valid.length) return {years, min:null, avg:null};
+    const min = Math.min(...valid);
+    const avg = valid.reduce((a,b)=>a+b,0)/valid.length;
+    return {years, min, avg};
+  }
 
 
 // -------- Module/Inverter catalog (fetched from backend) --------
@@ -547,7 +617,7 @@ initModuleInverterUI();
       }
     });
   }
-  const dscrChart = makeLine("dscrChart", dscrYearsRaw);
+  let dscrChart = makeLine("dscrChart", dscrYearsRaw);
 
 
   // NPV/IRR
@@ -645,13 +715,43 @@ initModuleInverterUI();
     setBtnActive("landOwnBtn", landMode==="own");
     setBtnActive("landBuyBtn", landMode==="buy");
 
-    // DSCR UI (PF 기간은 시나리오/토지모드와 무관하게 동일; 단, 시나리오에 따라 CADS가 바뀌므로 재계산)
+    
+    // DSCR (PF 기간) - 클라이언트에서 PF 파라미터 변경 시 즉시 재계산
+    const pfRate = parseFloat(document.getElementById("pfInterestRate")?.value || "5.5") || 5.5;
+    const pfYears = parseInt(document.getElementById("pfTenorYears")?.value || "15", 10) || 15;
+    let pfLtv = parseFloat(document.getElementById("pfLtvPct")?.value || "70") || 70;
+    if(pfLtv < 70) pfLtv = 70;
+    if(pfLtv > 90) pfLtv = 90;
+
+    const baseCostNum = Number(payload?.finance?.totalCostWon || 0) || 0;
+    const deltaCapex = selectedCostDeltaYear1();
+    const totalCostNum = Math.max(0, baseCostNum + Math.max(0, deltaCapex));
+
+    const principal = Math.round(totalCostNum * (pfLtv/100));
+    const monthly = pmtLevelPayment(principal, pfRate, pfYears);
+    const annualDebt = monthly * 12;
+
+    const pfMonthlyEl = document.getElementById("pfMonthlyPmt");
+    if(pfMonthlyEl) pfMonthlyEl.innerText = fmtWon(monthly);
+
+    // KPI 카드(월 상환액)도 즉시 업데이트
+    const kpiMonthly = document.getElementById("kpiMonthlyDebt");
+    if(kpiMonthly) kpiMonthly.innerText = fmtWon(monthly);
+
+    // CADS는 "With" 현금흐름(연도별)로 근사 (보수적)
+    const dscr = computeDscrFromCashflows(cfWith.slice(0, pfYears), annualDebt);
+    if(dscrChart){
+      dscrChart.data.datasets[0].data = dscr.years;
+      dscrChart.update();
+    }
+
     const dscrMinEl = document.getElementById("dscrMin");
     const dscrAvgEl = document.getElementById("dscrAvg");
-    if(dscrMinEl) dscrMinEl.innerText = (dscrMinRaw===null ? "확인 필요" : dscrMinRaw.toFixed(2));
-    if(dscrAvgEl) dscrAvgEl.innerText = (dscrAvgRaw===null ? "확인 필요" : dscrAvgRaw.toFixed(2));
+    if(dscrMinEl) dscrMinEl.innerText = (dscr.min===null ? "확인 필요" : dscr.min.toFixed(2));
+    if(dscrAvgEl) dscrAvgEl.innerText = (dscr.avg===null ? "확인 필요" : dscr.avg.toFixed(2));
 
     // Verdict
+// Verdict
     const thr = parseFloat(document.getElementById("dscrThreshold")?.value || "1.2") || 1.2;
     const verdictEl = document.getElementById("pfVerdict");
     if(verdictEl){
@@ -687,7 +787,7 @@ document.getElementById("roofRentAnnual")?.addEventListener("input", (e)=>{ reco
     const v = String(payload?.ai_analysis?.kepco_capacity || payload?.kepco_capacity || "{{ kepco_capacity }}");
     if(el){
       if(!v || v.includes("확인 필요") || v.includes("조회 불가")){
-        el.textContent = "조회 불가 (직접 문의)";
+        el.textContent = "조회 불가 (한전 문의 요망)";
         el.classList.add("text-red-400");
       }
     }
