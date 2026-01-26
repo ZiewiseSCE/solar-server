@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Solar Pathfinder Report</title>
+  <title>Solar Pathfinder Report (fixed)</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     .card { background: rgba(255,255,255,0.95); }
@@ -230,7 +230,7 @@
   }
 
   function goList(){
-    history.replaceState({}, "", "report.html?view=list");
+    history.replaceState({}, "", "report_fixed.html?view=list");
     document.getElementById("viewBadge").textContent = "LIST";
     document.getElementById("listView").classList.remove("hidden");
     document.getElementById("detailView").classList.add("hidden");
@@ -244,7 +244,7 @@
     const row = arr[idx];
     if(!row) return;
 
-    history.replaceState({}, "", `report.html?view=detail&idx=${idx}`);
+    history.replaceState({}, "", `report_fixed.html?view=detail&idx=${idx}`);
     document.getElementById("viewBadge").textContent = "DETAIL";
     document.getElementById("listView").classList.add("hidden");
     document.getElementById("detailView").classList.remove("hidden");
@@ -365,5 +365,44 @@
 
   reloadData();
 </script>
+
+
+<script>
+/* ============================================================
+   ✅ Report Logic Restore Pack
+   - 복구됨: view=list 로컬스토리지(sp_scan_report_v1) 렌더링
+   - 복구됨: 상세보기 → detail 전환 + idx 기반 렌더링
+   ============================================================ */
+(function(){
+  // report_fixed.html에서 고정된 경로를 report_fixed.html로 보정
+  const selfName = "report_fixed.html";
+  function fixUrl(u){
+    return (u||"").replaceAll("report_fixed.html", selfName);
+  }
+  // history navigation functions가 이미 정의되어 있으면, replaceState URL만 교체
+  const _replace = history.replaceState.bind(history);
+  history.replaceState = function(st, title, url){
+    try{ url = fixUrl(url); }catch(e){}
+    return _replace(st, title, url);
+  };
+
+  // 데이터가 없을 때 UX 개선(빈 화면 방지)
+  function hasData(){
+    try{
+      const raw = localStorage.getItem("sp_scan_report_v1");
+      const arr = JSON.parse(raw||"[]");
+      return Array.isArray(arr) && arr.length>0;
+    }catch(e){ return false; }
+  }
+
+  // 최초 진입 시 view 파라미터가 없으면 list로 유도(요구사항: list view 중심)
+  const qs = new URLSearchParams(location.search);
+  if(!qs.get("view")){
+    const target = hasData() ? `${selfName}?view=list` : `${selfName}?view=list`;
+    try{ _replace({}, "", target); }catch(e){}
+  }
+})();
+</script>
+
 </body>
 </html>
