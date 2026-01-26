@@ -1346,8 +1346,240 @@ def conservative_score(panel_count: int, checks: list):
 
 
 
-@app.route("/api/ai/analyze", methods=["POST"])
-def ai_analyze():
+# ============================================================
+# Mission 1/2/3: 2-Step Architecture (Basic/Fast + Deep/Slow)
+# ============================================================
+
+def _vworld_geocode_best_effort(address: str):
+    """주소->좌표 (best-effort). 키 없거나 실패하면 None. 타임아웃 짧게."""
+    if not PUBLIC_VWORLD_KEY or not address:
+        return None
+    try:
+        geocode_url = "https://api.vworld.kr/req/address"
+        q = {
+            "service": "address",
+            "request": "getCoord",
+            "version": "2.0",
+            "crs": "EPSG:4326",
+            "address": address,
+            "format": "json",
+            "type": "road",
+            "key": PUBLIC_VWORLD_KEY,
+        }
+        u = geocode_url + "?" + urllib.parse.urlencode(q)
+        req = urllib.request.Request(u, method="GET")
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            raw = resp.read()
+        j = json.loads(raw.decode("utf-8", "ignore"))
+        if j.get("response", {}).get("status") == "OK":
+            pt = j["response"]["result"]["point"]
+            return {"lat": float(pt["y"]), "lng": float(pt["x"]), "source": "vworld"}
+    except Exception:
+        return None
+    return None
+
+def _basic_generation_finance(panel_count: int, module_power_w: float = 640.0, sun_hours: float = 3.6):
+    """클릭 즉시 보여줄 Fast 추정치(서버측)."""
+    pc = max(0, int(panel_count or 0))
+    mw = float(module_power_w or 640.0)
+    dc_kw = (pc * mw) / 1000.0
+    PR = 0.90
+    annual_kwh_y1 = dc_kw * float(sun_hours or 3.6) * 365.0 * PR
+    return {
+        "dc_kw": round(dc_kw, 3),
+        "annual_kwh_y1": round(annual_kwh_y1, 1),
+        "sun_hours_used": float(sun_hours or 3.6),
+        "note": "Basic(FAST) 추정치 — 정밀 분석/실측/계통검토 전제",
+    }
+
+def _gemini_generate_text(prompt: str, max_tokens: int = 250) -> str:
+    """Gemini REST 호출(urllib)."""
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": int(max_tokens), "temperature": 0.2},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=18) as resp:
+        raw = resp.read()
+    j = json.loads(raw.decode("utf-8", "ignore"))
+    # best-effort extract
+    cand = (j.get("candidates") or [{}])[0]
+    parts = (cand.get("content") or {}).get("parts") or []
+    texts = [p.get("text", "") for p in parts if isinstance(p, dict)]
+    return "\n".join([t for t in texts if t]).strip()
+
+def _json_extract_best_effort(txt: str):
+    try:
+        m = re.search(r"\{.*\}", txt, re.S)
+        if not m:
+            return None
+        return json.loads(m.group(0))
+    except Exception:
+        return None
+
+def _gemini_ordinance_analyze(address: str):
+    """AI로 '태양광 이격거리 조례 성향' 추론 (확인필수 주석 포함)."""
+    if not GEMINI_API_KEY or not address:
+        return {
+            "road_setback_m": None,
+            "regulation": None,
+            "note": "조회 불가 (GEMINI_API_KEY 미설정) — 확인 필요",
+        }
+
+    prompt = f"""너는 태양광 인허가 실무 보조 AI다.
+아래 주소의 '지자체 태양광 이격거리 조례 성향'을 보수적으로 추론해라.
+
+주소: {address}
+
+반드시 JSON만 출력:
+{{
+  "road_setback_m": (도로 이격거리 추정 m, 숫자 또는 null),
+  "regulation": ("완화" 또는 "엄격" 또는 "중간" 중 하나),
+  "note": "※ AI 분석 결과(확인 필수). 근거/조문은 반드시 지자체에 최종 확인"
+}}
+
+규칙:
+- 모르면 null로 둬라. 억지로 숫자 만들지 마라.
+- 과장 금지, 보수적으로.
+""".strip()
+
+    try:
+        resp = _gemini_generate_text(prompt, max_tokens=220)
+        _inc_usage("law")
+        j = _json_extract_best_effort(resp or "")
+        if not j:
+            return {"road_setback_m": None, "regulation": None, "note": "※ AI 분석 결과(확인 필수) — 응답 파싱 실패"}
+        rsm = j.get("road_setback_m", None)
+        try:
+            rsm = int(rsm) if rsm is not None else None
+        except Exception:
+            rsm = None
+        reg = (j.get("regulation") or "").strip()
+        if reg not in ("완화", "엄격", "중간"):
+            reg = None
+        note = (j.get("note") or "※ AI 분석 결과(확인 필수)").strip()
+        return {"road_setback_m": rsm, "regulation": reg, "note": note}
+    except Exception:
+        return {"road_setback_m": None, "regulation": None, "note": "※ AI 분석 결과(확인 필수) — Gemini 호출 실패"}
+
+def _kepco_capacity_text_by_pnu(pnu: str) -> str:
+    """한전 OpenAPI best-effort. 실패/미설정/미파싱 시 '조회 불가 (한전 문의 필요)'"""
+    pnu = (pnu or "").strip()
+    api_key = (PUBLIC_KEPCO_KEY or "").strip()
+    api_url = (os.getenv("KEPCO_API_URL") or "").strip()
+    if not api_url or not api_key or not pnu:
+        return "조회 불가 (한전 문의 필요)"
+    try:
+        params = {"serviceKey": api_key, "pnu": pnu}
+        url = api_url + ("?" if "?" not in api_url else "&") + urllib.parse.urlencode(params, doseq=True)
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            raw = resp.read()
+        cap, _meta = _kepco_best_effort_parse(raw)
+        return cap if cap else "조회 불가 (한전 문의 필요)"
+    except Exception:
+        return "조회 불가 (한전 문의 필요)"
+
+def build_ai_checks_v2(address: str, lat=None, lng=None, mode: str = "roof", ordinance=None, kepco_capacity: str = None):
+    """Mission3 반영한 8대 체크 (Roof vs Land 지능화)."""
+    mode = (mode or "roof").strip().lower()
+    address = (address or "").strip()
+    checks = []
+
+    # 용도지역: 기존 로직 재사용
+    vz = {}
+    if lat is not None and lng is not None:
+        vz = _vworld_get_zoning_point(lat, lng)
+    if not (vz.get("ok") and vz.get("zone")):
+        vz = _vworld_get_zoning(address)
+
+    if vz.get("ok") and vz.get("zone"):
+        checks.append(_check_item(
+            "용도지역(개발행위 가능성)",
+            f"조회됨: {vz['zone']}",
+            passed=None,
+            needs_confirm=vz.get("needs_confirm", False),
+            weight=1.3,
+            link="https://www.vworld.kr/",
+            meta={"zone": vz.get("zone")}
+        ))
+    else:
+        guess = _zone_guess_from_address(address)
+        checks.append(_check_item(
+            "용도지역(개발행위 가능성)",
+            f"확인 필요 ({guess})",
+            passed=None,
+            needs_confirm=True,
+            weight=1.3,
+            link="https://www.vworld.kr/"
+        ))
+
+    # 이격거리/경사도/생태자연도: Roof는 PASS 처리
+    if mode == "roof":
+        checks.append(_check_item("이격거리(경계/도로/시설)", "PASS: 해당 없음 (건물형)", passed=True, needs_confirm=False, weight=1.2, meta={"status": "PASS"}))
+        checks.append(_check_item("경사도(토공/구조 위험)", "PASS: 해당 없음 (건물형)", passed=True, needs_confirm=False, weight=1.1, meta={"status": "PASS"}))
+        checks.append(_check_item("생태자연도/보전지역", "PASS: 해당 없음 (건물형)", passed=True, needs_confirm=False, weight=1.0, meta={"status": "PASS"}))
+    else:
+        # Land: ordinance 기반 표시(없으면 확인 필요)
+        if ordinance and (ordinance.get("road_setback_m") is not None or ordinance.get("regulation")):
+            rsm = ordinance.get("road_setback_m")
+            reg = ordinance.get("regulation") or "확인 필요"
+            note = ordinance.get("note") or "※ AI 분석 결과(확인 필수)"
+            msg = f"도로 이격거리 추정: {rsm}m / 규제강도: {reg}\n{note}"
+            checks.append(_check_item("이격거리(경계/도로/시설)", msg, passed=None, needs_confirm=True, weight=1.2, meta={"ordinance": ordinance}))
+        else:
+            checks.append(_check_item("이격거리(경계/도로/시설)", "확인 필요 (지자체 조례/현장 기준 이격거리 측정 필요)", passed=None, needs_confirm=True, weight=1.2))
+
+        checks.append(_check_item("경사도(토공/구조 위험)", "V-World 데이터 없음 (DEM/경사도 연동 필요)", passed=None, needs_confirm=True, weight=1.1))
+        checks.append(_check_item("생태자연도/보전지역", "확인 필요 (환경규제/보전지역 중첩 여부 확인 필요)", passed=None, needs_confirm=True, weight=1.0))
+
+    # 계통연계(한전)
+    cap = kepco_capacity or "조회 불가 (한전 문의 필요)"
+    needs = True if ("조회 불가" in cap or "문의" in cap) else False
+    checks.append(_check_item("계통연계(한전 선로/변전소)", cap, passed=None, needs_confirm=needs, weight=1.4))
+
+    # 나머지(보수적으로)
+    checks.append(_check_item("민원/경관(주변수용성)", "확인 필요 (인근 주거지/민원 가능성 사전 협의 필요)", passed=None, needs_confirm=True, weight=1.0))
+    checks.append(_check_item("구조/시공(접근로/장비반입)", "확인 필요 (진입로 폭/장비 접근성 확인 필요)", passed=None, needs_confirm=True, weight=0.9))
+    checks.append(_check_item("토지비/사업성", "확인 필요 (토지비/임대/인허가 비용 반영 필요)", passed=None, needs_confirm=True, weight=1.2))
+    return checks
+
+@app.route("/api/analyze/basic", methods=["POST"])
+def analyze_basic():
+    t0 = time.time()
+    data = request.get_json(silent=True) or {}
+
+    address = (data.get("address") or "").strip()
+    mode = (data.get("mode") or "roof").strip().lower()
+    lat = data.get("lat")
+    lng = data.get("lng")
+    panel_count = int(data.get("panel_count") or 0)
+    module_power_w = float(data.get("module_power_w") or 640.0)
+
+    if (lat is None or lng is None) and address:
+        g = _vworld_geocode_best_effort(address)
+        if g:
+            lat, lng = g["lat"], g["lng"]
+
+    basic = _basic_generation_finance(panel_count, module_power_w=module_power_w, sun_hours=float(data.get("sun_hours") or 3.6))
+
+    return json_ok(
+        mode=mode,
+        address=address or "확인 필요",
+        lat=lat,
+        lng=lng,
+        panel_count=panel_count,
+        basic=basic,
+        deep_pending=True,
+        elapsed_ms=int((time.time() - t0) * 1000),
+    )
+
+@app.route("/api/analyze/deep", methods=["POST"])
+def analyze_deep():
     data = request.get_json(silent=True) or {}
     address = (data.get("address") or "").strip()
     mode = (data.get("mode") or "roof").strip().lower()
@@ -1355,30 +1587,54 @@ def ai_analyze():
     lng = data.get("lng")
     panel_count = int(data.get("panel_count") or 0)
     setback_m = float(data.get("setback_m") or 0)
+    pnu = (data.get("pnu") or "").strip()
 
-    checks = build_ai_checks(address, lat=lat, lng=lng, mode=mode)
+    ordinance = None
+    if mode == "land" and address:
+        ordinance = _gemini_ordinance_analyze(address)
+
+    kepco_capacity = _kepco_capacity_text_by_pnu(pnu) if pnu else "조회 불가 (한전 문의 필요)"
+
+    checks = build_ai_checks_v2(
+        address=address,
+        lat=lat, lng=lng,
+        mode=mode,
+        ordinance=ordinance,
+        kepco_capacity=kepco_capacity
+    )
     score, confidence = conservative_score(panel_count, checks)
-    law_text = _fetch_law_ordinance_summary(address)
-    ai_summary = _build_ai_summary(address or '확인 필요', checks, law_text)
 
-    # 확장 필드(미확정 데이터는 "확인 필요")
-    payload = {
-        "address": address or "확인 필요",
-        "mode": mode,
-        "lat": lat,
-        "lng": lng,
-        "panel_count": panel_count,
-        "setback_m": setback_m,
-        "checks": checks,
-        "law_text": law_text,
-        "ai_summary": ai_summary,
-        "attractiveness_score": score,
-        "confidence": confidence,
-        # future-ready
-        "kepco_capacity": None,
-        "sun_hours": None,
-    }
-    return json_ok(**payload)
+    law_text = _fetch_law_ordinance_summary(address) if address else "확인 필요"
+    ai_summary = _build_ai_summary(address or "확인 필요", checks, law_text)
+
+    land_price = None
+    try:
+        land_price = _gemini_land_price_estimate(address) if address else None
+    except Exception:
+        land_price = None
+
+    return json_ok(
+        address=address or "확인 필요",
+        mode=mode,
+        lat=lat,
+        lng=lng,
+        pnu=pnu or None,
+        panel_count=panel_count,
+        setback_m=setback_m,
+        ordinance=ordinance,
+        kepco_capacity=kepco_capacity,
+        checks=checks,
+        law_text=law_text,
+        ai_summary=ai_summary,
+        attractiveness_score=score,
+        confidence=confidence,
+        land_price_estimate=land_price,
+    )
+
+@app.route("/api/ai/analyze", methods=["POST"])
+def ai_analyze():
+    # 하위호환: 기존 프론트는 /api/ai/analyze를 호출함 → Deep로 라우팅
+    return analyze_deep()
 
 
 # ------------------------------------------------------------
@@ -1796,7 +2052,7 @@ def infra_kepco():
       - bbox=minLng,minLat,maxLng,maxLat&z=... (레이어용)
     Env:
       - KEPCO_KEY (PUBLIC_KEPCO_KEY)
-      - KEPCO_API_URL (실제 한전 OpenAPI 엔드포인트)
+      - KEPCO_API_URL (실제 dispersedGeneration 등 한전 OpenAPI 엔드포인트)
     """
     _inc_usage('kepco')
     pnu = (request.args.get("pnu") or "").strip()
@@ -1806,21 +2062,20 @@ def infra_kepco():
     api_key = (PUBLIC_KEPCO_KEY or "").strip()
     api_url = (os.getenv("KEPCO_API_URL") or "").strip()
 
+    # ✅ 시뮬레이션 금지: 키/URL 없으면 솔직히 "조회 불가"
     if not api_url or not api_key:
-        # Fallback: deterministic simulated capacity so UI does not stay empty
-        seed = pnu or (request.args.get("address") or "").strip() or bbox or "unknown"
-        sim = _simulate_kepco_capacity_text(seed)
         return json_ok(
             pnu=pnu or None,
             bbox=bbox or None,
             z=z,
             items=[],
             lines=[],
-            kepco_capacity=sim,
-            source="simulated",
-            note="KEPCO_API_URL/KEPCO_KEY 미설정 → 모의 용량 표시(확인 필요)",
+            kepco_capacity="조회 불가 (한전 문의 필요)",
+            source="unavailable",
+            note="KEPCO_API_URL/KEPCO_KEY 미설정",
             needs_confirm=True,
         )
+
     try:
         params = {"serviceKey": api_key}
         if pnu:
@@ -1840,7 +2095,7 @@ def infra_kepco():
             pnu=pnu or None,
             bbox=bbox or None,
             z=z,
-            kepco_capacity=cap,
+            kepco_capacity=cap if cap else "조회 불가 (한전 문의 필요)",
             items=[],
             lines=[],
             source="kepco-openapi",
@@ -1854,7 +2109,7 @@ def infra_kepco():
             z=z,
             items=[],
             lines=[],
-            kepco_capacity=None,
+            kepco_capacity="조회 불가 (한전 문의 필요)",
             source="kepco-openapi",
             needs_confirm=True,
             note="KEPCO 호출 실패(엔드포인트/파라미터/응답 스키마 확인 필요)",
@@ -1862,6 +2117,7 @@ def infra_kepco():
         )
 
 
+# ------------------------------------------------------------
 # ------------------------------------------------------------
 # F-27: 지역별 일사량/날씨 기반 최적 방위각/경사각 (연동 준비 상태)
 #  - 데이터 소스 확정 전까지는 "확인 필요" + 구조만 제공
