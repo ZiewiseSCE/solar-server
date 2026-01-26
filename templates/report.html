@@ -1,10 +1,52 @@
+
 <!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Solar Pathfinder Report</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.tailwindcss.com">// -------- Re-run Deep analysis (best-effort) --------
+async function rerunDeep(){
+  const btn = document.getElementById("rerunDeepBtn");
+  const msg = document.getElementById("rerunDeepMsg");
+  if(btn) btn.disabled = true;
+  if(msg) msg.textContent = "AI가 정밀 분석을 다시 실행 중입니다...";
+  try{
+    // Minimal payload: address/mode/panel_count if available
+    const pc = (()=> {
+      try{
+        const cap = String(payload.capacity || "").match(/DC:\s*([\d\.]+)/);
+        // if capacity string has DC, can't derive panels; fallback 0
+        return 0;
+      }catch(e){ return 0; }
+    })();
+    const r = await fetch("/api/analyze/deep", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({
+        address: payload.address || "",
+        mode: MODE,
+        lat: payload.lat || null,
+        lng: payload.lng || null,
+        pnu: payload.pnu || null,
+        panel_count: pc
+      })
+    });
+    const j = await r.json().catch(()=>null);
+    if(!j || !j.ok) throw new Error("deep failed");
+    // update checks if container exists
+    const checks = j.checks || [];
+    const box = document.querySelectorAll(".rounded-2xl.bg-white\/5.border.border-white\/10.p-4")[0]; // not reliable; skip
+    // Best-effort: just notify
+    if(msg) msg.textContent = "정밀 분석 완료 (페이지 새로고침 시 반영)";
+  }catch(e){
+    if(msg) msg.textContent = "정밀 분석 실패. 다시 눌러 재시도할 수 있습니다.";
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+document.getElementById("rerunDeepBtn")?.addEventListener("click", rerunDeep);
+</script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body class="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 text-slate-100">
@@ -52,6 +94,13 @@
                 <button id="landBuyBtn" class="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/10 text-xs font-bold">구매</button>
               </div>
 
+<!-- Roof rent (NEW) -->
+<div id="roofRentBox" class="hidden flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10">
+  <div class="text-[11px] text-slate-200/80 font-bold">지붕임대(연)</div>
+  <input id="roofRentAnnual" type="number" step="10000" value="0" class="w-32 px-2 py-1 bg-slate-900/60 border border-white/10 rounded-lg text-xs" />
+  <span class="text-[11px] text-slate-300/80">원/년</span>
+</div>
+
               <div class="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10">
                 <div class="text-[11px] text-slate-200/80 font-bold">시나리오</div>
                 <select id="scenarioSel" class="bg-slate-900/60 border border-white/10 rounded-lg px-2 py-1 text-xs">
@@ -68,6 +117,16 @@
                 <button id="recalcRoi" class="px-3 py-1 rounded-lg bg-slate-100 text-slate-900 font-extrabold text-xs hover:bg-white">재계산</button>
               </div>
             </div>
+
+<!-- Module / Inverter (NEW) -->
+<div class="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10">
+  <div class="text-[11px] text-slate-200/80 font-bold">모듈</div>
+  <select id="moduleSel" class="bg-slate-900/60 border border-white/10 rounded-lg px-2 py-1 text-xs min-w-[140px]">
+  </select>
+  <div class="text-[11px] text-slate-200/80 font-bold ml-2">인버터</div>
+  <select id="inverterSel" class="bg-slate-900/60 border border-white/10 rounded-lg px-2 py-1 text-xs min-w-[140px]">
+  </select>
+</div>
 
           </div>
         </div>
@@ -223,7 +282,14 @@
           </div>
         </div>
 
-        <!-- Actions -->
+        <!-- Re-run Deep Analysis (NEW) -->
+<div class="mt-6 flex flex-wrap gap-2">
+  <button id="rerunDeepBtn" class="px-4 py-2 rounded-xl bg-indigo-500/80 border border-indigo-300/20 font-extrabold hover:bg-indigo-500"
+    type="button">🔍 AI 정밀 분석 다시 실행</button>
+  <div id="rerunDeepMsg" class="text-xs text-slate-300/80 flex items-center"></div>
+</div>
+
+<!-- Actions -->
         <div class="flex flex-wrap gap-2 mt-6">
           <form method="POST" action="/api/report/pdf">
             <input type="hidden" name="payload" value="{{ payload_json|e }}">
@@ -246,6 +312,45 @@
   const dscrMinRaw = (typeof roi.dscr_min === "number") ? roi.dscr_min : null;
   const dscrAvgRaw = (typeof roi.dscr_avg === "number") ? roi.dscr_avg : null;
 
+
+// -------- Module/Inverter catalog (Report editable) --------
+const MODULES = [
+  { id:"t1", name:"TOPCon 640W", eff:1.00 },
+  { id:"p1", name:"PERC 550W", eff:0.96 },
+  { id:"h1", name:"HJT 700W", eff:1.03 },
+];
+const INVERTERS = [
+  { id:"s100", name:"스트링 100kW", eff:1.00 },
+  { id:"s60",  name:"스트링 60kW",  eff:0.99 },
+  { id:"c250", name:"중대형 250kW", eff:1.01 },
+];
+function initModuleInverterUI(){
+  const ms = document.getElementById("moduleSel");
+  const is = document.getElementById("inverterSel");
+  if(ms) ms.innerHTML = MODULES.map(m=>`<option value="${m.id}">${m.name}</option>`).join("");
+  if(is) is.innerHTML = INVERTERS.map(i=>`<option value="${i.id}">${i.name}</option>`).join("");
+}
+function selectedEffFactor(){
+  const ms = document.getElementById("moduleSel");
+  const is = document.getElementById("inverterSel");
+  const m = MODULES.find(x=>x.id === (ms?.value||"t1")) || MODULES[0];
+  const i = INVERTERS.find(x=>x.id === (is?.value||"s100")) || INVERTERS[0];
+  // revenue factor
+  return (m.eff||1.0) * (i.eff||1.0);
+}
+
+// -------- Mode: land vs roof (from server) --------
+const MODE = (payload && payload.mode) ? payload.mode : "land"; // "land"|"roof"
+if(MODE === "roof"){
+  // Hide land buy/own controls in roof mode; show rent
+  const landBtns = document.getElementById("landOwnBtn")?.parentElement;
+  const landBox = landBtns ? landBtns.parentElement : null;
+  if(landBox) landBox.classList.add("hidden");
+  document.getElementById("roofRentBox")?.classList.remove("hidden");
+  landMode = "own"; // not used
+}
+initModuleInverterUI();
+
   // State
   let landMode = (landPrice && landPrice > 0) ? "buy" : "own"; // buy | own
   let scenarioFactor = parseFloat(document.getElementById("scenarioSel")?.value || "1.0") || 1.0;
@@ -264,11 +369,25 @@
   }
 
   function getSeries(){
-    const cfNo = cfNoRaw.map(v => Math.round(v * scenarioFactor));
-    const baseWith = (landMode === "own") ? cfNoRaw : cfWithRaw;
-    const cfWith = baseWith.map(v => Math.round(v * scenarioFactor));
-    return {cfNo, cfWith};
+  const effFactor = selectedEffFactor();
+  // 기본 현금흐름은 payload에서 받은 연도별 현금흐름(추정) 기반.
+  // 시나리오/모듈/인버터 선택은 "수익(=현금흐름)에 비례"로 보수적 적용.
+  const cfNo = cfNoRaw.map(v => Math.round(v * scenarioFactor * effFactor));
+
+  const baseWith = (landMode === "own") ? cfNoRaw : cfWithRaw;
+  let cfWith = baseWith.map(v => Math.round(v * scenarioFactor * effFactor));
+
+  // 지붕형: 임대료는 With 쪽(실제 사업성)에서 OPEX로 차감 반영
+  if(MODE === "roof"){
+    const rent = parseFloat(document.getElementById("roofRentAnnual")?.value || "0") || 0;
+    if(rent > 0){
+      // cfWithRaw는 Y1..Y25 형태로 가정(원본 코드 라벨이 Y1부터)
+      cfWith = cfWith.map((v, idx)=> Math.round(v - rent)); // 간단히 연 임대료 차감(보수)
+    }
   }
+
+  return {cfNo, cfWith};
+}
 
   const labels = (cfNoRaw.length ? cfNoRaw : cfWithRaw).map((_, i) => `Y${i+1}`);
 
@@ -443,9 +562,10 @@ document.getElementById("recalcRoi")?.addEventListener("click", (e)=>{ e.prevent
   // init state
   setBtnActive("landOwnBtn", landMode==="own");
   setBtnActive("landBuyBtn", landMode==="buy");
+document.getElementById("moduleSel")?.addEventListener("change", (e)=>{ recomputeRoiMetrics(); });
+document.getElementById("inverterSel")?.addEventListener("change", (e)=>{ recomputeRoiMetrics(); });
+document.getElementById("roofRentAnnual")?.addEventListener("input", (e)=>{ recomputeRoiMetrics(); });
   recomputeRoiMetrics();
 </script>
 </body>
 </html>
-
-
