@@ -3,406 +3,162 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Solar Pathfinder Report (fixed)</title>
+  <title>Solar Pathfinder 리포트</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
   <style>
-    .card { background: rgba(255,255,255,0.95); }
-    .pill { border: 1px solid rgba(148,163,184,0.6); }
-    .stickyTop { position: sticky; top: 0; z-index: 50; backdrop-filter: blur(6px); }
+    .card { background: rgba(255,255,255,0.95); border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+    .fade-in { animation: fadeIn 0.3s ease-in; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
   </style>
 </head>
-<body class="bg-slate-100 min-h-screen">
-  <div class="stickyTop bg-white/80 border-b border-slate-200">
-    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+<body class="bg-slate-100 min-h-screen text-slate-800 font-sans">
+
+  <div class="sticky top-0 z-50 bg-white/80 backdrop-blur border-b border-slate-200 shadow-sm">
+    <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
       <div class="flex items-center gap-2">
-        <div class="text-lg font-extrabold text-slate-800">Solar Pathfinder 리포트</div>
-        <div id="viewBadge" class="text-xs px-2 py-1 rounded-full pill text-slate-600 bg-white">LIST</div>
+        <div class="w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center text-white font-bold shadow">R</div>
+        <h1 class="text-lg font-extrabold text-slate-800">분석 리포트</h1>
+        <span id="viewModeBadge" class="ml-2 text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-600 font-bold">DETAIL</span>
       </div>
-      <div class="flex items-center gap-2">
-        <button id="backToListBtn" class="hidden px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-sm"
-                onclick="goList()">← 리스트</button>
-        <button id="deepBtnTop" class="hidden px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-sm"
-                onclick="rerunDeep()">🔄 AI 정밀 분석</button>
+      <div>
+        <button id="btnBackToList" class="hidden px-3 py-1.5 text-sm font-bold bg-white border border-slate-300 rounded hover:bg-slate-50 transition" onclick="goListView()">
+          <i class="ph-bold ph-list"></i> 목록으로
+        </button>
+        <button class="px-3 py-1.5 text-sm font-bold bg-blue-600 text-white rounded hover:bg-blue-700 transition shadow" onclick="window.print()">
+          <i class="ph-bold ph-printer"></i> 인쇄
+        </button>
       </div>
     </div>
   </div>
 
-  <main class="max-w-6xl mx-auto px-4 py-6">
-    <!-- LIST -->
-    <section id="listView" class="space-y-4">
-      <div class="card rounded-2xl shadow-sm border border-slate-200 p-4">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="text-sm text-slate-600">
-            전수 스캔 결과 리스트 (localStorage: <span class="font-mono">sp_scan_report_v1</span>)
-          </div>
-          <div class="flex items-center gap-2">
-            <button class="px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-sm"
-                    onclick="reloadData()">새로고침</button>
-            <button class="px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-sm"
-                    onclick="clearData()">로컬 데이터 삭제</button>
-          </div>
-        </div>
+  <div class="max-w-5xl mx-auto p-4 fade-in">
+    
+    <div id="listView" class="hidden space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-xl font-bold flex items-center gap-2">
+          <i class="ph-fill ph-radar text-indigo-600"></i> 전수 스캔 결과
+        </h2>
+        <button class="text-sm text-indigo-600 hover:underline" onclick="runBatchAI()">🔄 전체 AI 재분석</button>
       </div>
 
-      <div class="card rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        <div class="overflow-x-auto">
-          <table class="min-w-full text-sm">
-            <thead class="bg-slate-50 text-slate-600">
-              <tr>
-                <th class="text-left px-4 py-3">순위</th>
-                <th class="text-left px-4 py-3">주소</th>
-                <th class="text-left px-4 py-3">예상 수익률(IRR)</th>
-                <th class="text-left px-4 py-3">8대 체크 상태</th>
-                <th class="text-right px-4 py-3">상세</th>
-              </tr>
-            </thead>
-            <tbody id="listBody" class="divide-y divide-slate-200 bg-white"></tbody>
-          </table>
-        </div>
-        <div id="emptyHint" class="hidden p-6 text-center text-slate-500">
-          표시할 데이터가 없습니다. (스캔 후 자동으로 생성됩니다)
-        </div>
+      <div class="overflow-hidden rounded-xl border border-slate-200 shadow-sm bg-white">
+        <table class="w-full text-sm text-left">
+          <thead class="bg-slate-50 text-slate-500 font-bold border-b">
+            <tr>
+              <th class="px-4 py-3 w-16 text-center">순위</th>
+              <th class="px-4 py-3">주소지</th>
+              <th class="px-4 py-3 w-24 text-right">수익률(IRR)</th>
+              <th class="px-4 py-3 w-32 text-center">8대 체크</th>
+              <th class="px-4 py-3 w-24 text-center">관리</th>
+            </tr>
+          </thead>
+          <tbody id="scanResultTableBody" class="divide-y divide-slate-100">
+            <tr class="hover:bg-slate-50 cursor-pointer transition">
+              <td class="px-4 py-3 text-center font-mono text-slate-400">1</td>
+              <td class="px-4 py-3 font-medium">데이터 로딩 중...</td>
+              <td class="px-4 py-3 text-right text-orange-600 font-bold">-</td>
+              <td class="px-4 py-3 text-center">-</td>
+              <td class="px-4 py-3 text-center"><button class="px-2 py-1 bg-white border rounded shadow-sm text-xs">보기</button></td>
+            </tr>
+          </tbody>
+        </table>
       </div>
-    </section>
+    </div>
 
-    <!-- DETAIL -->
-    <section id="detailView" class="hidden space-y-4">
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <!-- 8 checks -->
-        <div class="card rounded-2xl shadow-sm border border-slate-200 p-4">
-          <div class="flex items-center justify-between mb-3">
-            <div class="font-extrabold text-slate-800">✅ 8대 체크사항</div>
-            <div id="checkSummaryPill" class="text-xs px-2 py-1 rounded-full pill bg-white text-slate-600">-</div>
-          </div>
-          <div id="checksGrid" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
-        </div>
-
-        <!-- PF -->
-        <div class="card rounded-2xl shadow-sm border border-slate-200 p-4">
-          <div class="flex items-center justify-between mb-3">
-            <div class="font-extrabold text-slate-800">💰 PF 수익성 분석</div>
-            <div id="irrPill" class="text-xs px-2 py-1 rounded-full pill bg-white text-slate-600">IRR: -</div>
-          </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div class="bg-slate-50 border border-slate-200 rounded-xl p-3">
-              <div class="text-xs text-slate-500">자본회수기간</div>
-              <div id="paybackText" class="text-lg font-extrabold text-slate-800">-</div>
-            </div>
-            <div class="bg-slate-50 border border-slate-200 rounded-xl p-3">
-              <div class="text-xs text-slate-500">예상 월수익</div>
-              <div id="monthlyProfitText" class="text-lg font-extrabold text-slate-800">-</div>
-            </div>
-            <div class="bg-slate-50 border border-slate-200 rounded-xl p-3">
-              <div class="text-xs text-slate-500">예상 월수익 IRR</div>
-              <div id="monthlyIrrText" class="text-lg font-extrabold text-slate-800">-</div>
-            </div>
-            <div class="bg-slate-50 border border-slate-200 rounded-xl p-3">
-              <div class="text-xs text-slate-500">주소</div>
-              <div id="addrText" class="text-sm font-bold text-slate-800 break-all">-</div>
-            </div>
-          </div>
-        </div>
+    <div id="detailView" class="">
+      <div class="p-8 text-center text-slate-400 border-2 border-dashed border-slate-300 rounded-xl">
+        <p>여기에 상세 리포트 내용이 표시됩니다.</p>
+        <p class="text-xs mt-2">(report_latest.html의 내용을 이 div 안에 복사하세요)</p>
       </div>
+    </div>
 
-      <!-- expand sections -->
-      <details class="card rounded-2xl shadow-sm border border-slate-200 p-4">
-        <summary class="cursor-pointer font-bold text-slate-700">발전량 상세</summary>
-        <pre id="solarDetail" class="mt-3 text-xs bg-slate-950 text-slate-100 rounded-xl p-3 overflow-auto">-</pre>
-      </details>
+  </div>
 
-      <details class="card rounded-2xl shadow-sm border border-slate-200 p-4">
-        <summary class="cursor-pointer font-bold text-slate-700">기자재 스펙</summary>
-        <pre id="equipDetail" class="mt-3 text-xs bg-slate-950 text-slate-100 rounded-xl p-3 overflow-auto">-</pre>
-      </details>
+  <script>
+    /* ================= 뷰어 로직 ================= */
+    
+    document.addEventListener('DOMContentLoaded', () => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const viewMode = urlParams.get('view');
 
-      <!-- Deep analysis area (kept compatible with previous report_latest.html) -->
-      <div class="card rounded-2xl shadow-sm border border-slate-200 p-4">
-        <div class="flex items-center justify-between gap-3">
-          <div class="font-extrabold text-slate-800">🔎 AI 정밀 분석</div>
-          <button id="rerunDeepBtn" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-sm"
-                  onclick="rerunDeep()">🔄 AI 정밀 분석</button>
-        </div>
-        <div id="rerunDeepMsg" class="text-sm text-slate-600 mt-2">상단 버튼으로 정밀 분석을 실행할 수 있습니다.</div>
-        <div id="deepSkeleton" class="hidden mt-3">
-          <div class="animate-pulse space-y-2">
-            <div class="h-3 bg-slate-200 rounded"></div>
-            <div class="h-3 bg-slate-200 rounded w-5/6"></div>
-            <div class="h-3 bg-slate-200 rounded w-4/6"></div>
-          </div>
-        </div>
-        <pre id="deepResult" class="mt-3 text-xs bg-slate-950 text-slate-100 rounded-xl p-3 overflow-auto hidden"></pre>
-      </div>
-    </section>
-  </main>
-
-<script>
-  function qs(k){ return new URLSearchParams(location.search).get(k); }
-  function safe(v, d="-"){ return (v===0 || v) ? v : d; }
-
-  function loadScanData(){
-    try{
-      const raw = localStorage.getItem("sp_scan_report_v1");
-      const arr = raw ? JSON.parse(raw) : [];
-      return Array.isArray(arr) ? arr : [];
-    }catch(e){ return []; }
-  }
-
-  function saveScanData(arr){
-    try{ localStorage.setItem("sp_scan_report_v1", JSON.stringify(arr||[])); }catch(e){}
-  }
-
-  function clearData(){
-    if(confirm("로컬 데이터를 삭제할까요?")){
-      try{ localStorage.removeItem("sp_scan_report_v1"); }catch(e){}
-      reloadData();
-    }
-  }
-
-  function badgeStatusFromChecks(checks){
-    // checks can be array of {label, status} or object
-    let pass = 0, warn = 0, fail = 0, total = 0;
-    const norm = [];
-    if(Array.isArray(checks)){
-      for(const c of checks){
-        total++;
-        const st = (c.status||c.state||c.result||"").toString().toLowerCase();
-        if(st.includes("pass") || st.includes("적합")) pass++;
-        else if(st.includes("warn") || st.includes("주의")) warn++;
-        else if(st.includes("fail") || st.includes("불가") || st.includes("위험")) fail++;
-        norm.push({label: c.label||c.name||("체크"+total), status: c.status||c.state||c.result||"UNKNOWN", detail: c.detail||c.reason||""});
-      }
-    } else if(checks && typeof checks === "object") {
-      for(const [k,v] of Object.entries(checks)){
-        total++;
-        const st = (v.status||v.state||v.result||v||"").toString();
-        const stL = st.toLowerCase();
-        if(stL.includes("pass") || st.includes("적합")) pass++;
-        else if(stL.includes("warn") || st.includes("주의")) warn++;
-        else if(stL.includes("fail") || st.includes("불가") || st.includes("위험")) fail++;
-        norm.push({label:k, status: st, detail: v.detail||v.reason||""});
-      }
-    }
-    let label = "확인 필요";
-    let cls = "bg-slate-100 text-slate-700";
-    if(fail>0){ label="주의"; cls="bg-rose-100 text-rose-700"; }
-    else if(warn>0){ label="주의"; cls="bg-amber-100 text-amber-700"; }
-    else if(pass>0){ label="적합"; cls="bg-emerald-100 text-emerald-700"; }
-    return {label, cls, counts:{pass,warn,fail,total}, items:norm};
-  }
-
-  function fmtIrr(row){
-    const irr = row.irr ?? row.finance?.irr ?? row.finance?.irr_pct ?? row.finance?.irrPercent;
-    if(irr === null || irr === undefined || irr === "") return "-";
-    const n = Number(irr);
-    if(!isFinite(n)) return String(irr);
-    return (n>1 ? n.toFixed(1) : (n*100).toFixed(1)) + "%";
-  }
-
-  function renderList(){
-    const arr = loadScanData();
-    const tbody = document.getElementById("listBody");
-    const empty = document.getElementById("emptyHint");
-    tbody.innerHTML = "";
-
-    if(!arr.length){
-      empty.classList.remove("hidden");
-      return;
-    }
-    empty.classList.add("hidden");
-
-    arr.forEach((row, i)=>{
-      const checks = badgeStatusFromChecks(row.checks || row.ai?.checks || row.ai?.ai_checks);
-      const pill = `<span class="inline-flex items-center px-2 py-1 rounded-full text-xs ${checks.cls}">${checks.label}</span>`;
-      const tr = document.createElement("tr");
-      tr.className = "hover:bg-slate-50";
-      tr.innerHTML = `
-        <td class="px-4 py-3 font-mono text-slate-600">${safe(row.rank, i+1)}</td>
-        <td class="px-4 py-3 font-bold text-slate-800">${safe(row.address)}</td>
-        <td class="px-4 py-3 text-slate-700">${fmtIrr(row)}</td>
-        <td class="px-4 py-3">${pill}</td>
-        <td class="px-4 py-3 text-right">
-          <button class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold"
-                  onclick="openDetail(${i})">상세보기</button>
-        </td>
-      `;
-      tbody.appendChild(tr);
-    });
-  }
-
-  function goList(){
-    history.replaceState({}, "", "report_fixed.html?view=list");
-    document.getElementById("viewBadge").textContent = "LIST";
-    document.getElementById("listView").classList.remove("hidden");
-    document.getElementById("detailView").classList.add("hidden");
-    document.getElementById("backToListBtn").classList.add("hidden");
-    document.getElementById("deepBtnTop").classList.add("hidden");
-    renderList();
-  }
-
-  function openDetail(idx){
-    const arr = loadScanData();
-    const row = arr[idx];
-    if(!row) return;
-
-    history.replaceState({}, "", `report_fixed.html?view=detail&idx=${idx}`);
-    document.getElementById("viewBadge").textContent = "DETAIL";
-    document.getElementById("listView").classList.add("hidden");
-    document.getElementById("detailView").classList.remove("hidden");
-    document.getElementById("backToListBtn").classList.remove("hidden");
-    document.getElementById("deepBtnTop").classList.remove("hidden");
-
-    // Header info
-    document.getElementById("addrText").textContent = safe(row.address);
-
-    // 8 checks
-    const checks = badgeStatusFromChecks(row.checks || row.ai?.checks || row.ai?.ai_checks);
-    const sum = `${checks.label} (PASS:${checks.counts.pass} / WARN:${checks.counts.warn} / FAIL:${checks.counts.fail})`;
-    const pill = document.getElementById("checkSummaryPill");
-    pill.textContent = sum;
-
-    const grid = document.getElementById("checksGrid");
-    grid.innerHTML = "";
-    (checks.items.length ? checks.items : Array.from({length:8}).map((_,i)=>({label:`체크 ${i+1}`, status:"확인 필요"}))).forEach(c=>{
-      const st = (c.status||"").toString();
-      const stL = st.toLowerCase();
-      let cls = "bg-slate-50 border-slate-200 text-slate-700";
-      if(stL.includes("pass") || st.includes("적합")) cls="bg-emerald-50 border-emerald-200 text-emerald-700";
-      else if(stL.includes("warn") || st.includes("주의")) cls="bg-amber-50 border-amber-200 text-amber-700";
-      else if(stL.includes("fail") || st.includes("불가") || st.includes("위험")) cls="bg-rose-50 border-rose-200 text-rose-700";
-
-      const div = document.createElement("div");
-      div.className = `border rounded-xl p-3 ${cls}`;
-      div.innerHTML = `
-        <div class="text-xs font-bold">${safe(c.label)}</div>
-        <div class="text-sm font-extrabold mt-1">${safe(st, "확인 필요")}</div>
-        ${c.detail ? `<div class="text-xs mt-1 opacity-80">${c.detail}</div>` : ``}
-      `;
-      grid.appendChild(div);
+        if (viewMode === 'list') {
+            showListView();
+        } else {
+            showDetailView(); // 기본값
+        }
     });
 
-    // PF
-    const f = row.finance || {};
-    const payback = f.pf_payback_years || f.payback_years || f.payback || row.ai?.payback_years;
-    const monthlyProfit = f.monthly_profit_won || f.monthly_profit || row.ai?.monthly_profit_won;
-    const irr = row.irr ?? f.irr ?? f.irr_pct ?? f.irrPercent;
-
-    document.getElementById("paybackText").textContent = (payback!==undefined && payback!==null) ? `${Number(payback).toFixed(1)}년` : "-";
-    document.getElementById("monthlyProfitText").textContent = (monthlyProfit!==undefined && monthlyProfit!==null) ? `${Number(monthlyProfit).toLocaleString()}원` : "-";
-    document.getElementById("monthlyIrrText").textContent = fmtIrr(row);
-    document.getElementById("irrPill").textContent = `IRR: ${fmtIrr(row)}`;
-
-    // Details
-    document.getElementById("solarDetail").textContent = JSON.stringify(row.ai?.solar_opt || row.ai?.solar || row.finance?.solar_opt || {}, null, 2);
-    document.getElementById("equipDetail").textContent = JSON.stringify({
-      module: row.ai?.module || row.meta?.module,
-      inverter: row.ai?.inverter || row.meta?.inverter,
-      capacity: row.meta?.capacity,
-      kepco_capacity: row.meta?.kepco_capacity
-    }, null, 2);
-
-    // keep deep target address for API
-    window.__deepTarget = { address: row.address, lat: row.meta?.lat, lng: row.meta?.lng, pnu: row.meta?.pnu };
-  }
-
-  function reloadData(){
-    const view = (qs("view") || "list").toLowerCase();
-    if(view === "detail"){
-      const idx = parseInt(qs("idx") || "0", 10);
-      openDetail(isFinite(idx) ? idx : 0);
-    } else {
-      goList();
+    function showListView() {
+        document.getElementById('listView').classList.remove('hidden');
+        document.getElementById('detailView').classList.add('hidden');
+        document.getElementById('btnBackToList').classList.add('hidden'); // 리스트에선 안보임
+        document.getElementById('viewModeBadge').textContent = "LIST";
+        document.getElementById('viewModeBadge').className = "ml-2 text-xs px-2 py-0.5 rounded bg-indigo-100 text-indigo-600 font-bold";
+        
+        renderScanTable();
     }
-  }
 
-  // -------- Deep analysis (best-effort) --------
-  async function rerunDeep(){
-    const btn = document.getElementById("rerunDeepBtn");
-    const btnTop = document.getElementById("deepBtnTop");
-    const msg = document.getElementById("rerunDeepMsg");
-    const sk = document.getElementById("deepSkeleton");
-    const out = document.getElementById("deepResult");
-
-    if(btn) btn.disabled = true;
-    if(btnTop) btnTop.disabled = true;
-    if(msg) msg.textContent = "데이터 대기 중… (정밀 분석 실행 중)";
-    if(sk) sk.classList.remove("hidden");
-    if(out) out.classList.add("hidden");
-
-    try{
-      const payload = window.__deepTarget || {};
-      const r = await fetch("/api/analyze/deep", {
-        method:"POST",
-        headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({
-          address: payload.address || "",
-          lat: payload.lat ?? null,
-          lng: payload.lng ?? null,
-          pnu: payload.pnu || ""
-        })
-      });
-      const j = await r.json().catch(()=>null);
-      if(!r.ok) throw new Error((j && (j.message||j.error)) || ("HTTP "+r.status));
-      if(msg) msg.textContent = "정밀 분석 완료";
-      if(out){
-        out.textContent = JSON.stringify(j, null, 2);
-        out.classList.remove("hidden");
-      }
-    }catch(e){
-      if(msg) msg.textContent = "정밀 분석 실패: " + (e && e.message ? e.message : e);
-    }finally{
-      if(sk) sk.classList.add("hidden");
-      if(btn) btn.disabled = false;
-      if(btnTop) btnTop.disabled = false;
+    function showDetailView() {
+        document.getElementById('listView').classList.add('hidden');
+        document.getElementById('detailView').classList.remove('hidden');
+        
+        // 리스트에서 들어온 경우에만 '목록으로' 버튼 표시
+        const urlParams = new URLSearchParams(window.location.search);
+        if(urlParams.get('from') === 'list') {
+            document.getElementById('btnBackToList').classList.remove('hidden');
+        }
+        
+        document.getElementById('viewModeBadge').textContent = "DETAIL";
+        document.getElementById('viewModeBadge').className = "ml-2 text-xs px-2 py-0.5 rounded bg-orange-100 text-orange-600 font-bold";
     }
-  }
 
-  // expose
-  window.openDetail = openDetail;
-  window.goList = goList;
-  window.reloadData = reloadData;
-  window.clearData = clearData;
-  window.rerunDeep = rerunDeep;
+    function goListView() {
+        // URL 변경 없이 뷰만 전환 (SPA 느낌)
+        showListView();
+        history.pushState(null, '', '?view=list');
+    }
 
-  reloadData();
-</script>
+    function renderScanTable() {
+        const tbody = document.getElementById('scanResultTableBody');
+        const rawData = localStorage.getItem('sp_scan_results');
+        
+        if (!rawData) {
+            tbody.innerHTML = `<tr><td colspan="5" class="px-4 py-8 text-center text-slate-400">저장된 스캔 결과가 없습니다. 지도로 돌아가 '전수 스캔'을 수행하세요.</td></tr>`;
+            return;
+        }
 
+        const data = JSON.parse(rawData); // Array expected
+        tbody.innerHTML = ''; // Clear
 
-<script>
-/* ============================================================
-   ✅ Report Logic Restore Pack
-   - 복구됨: view=list 로컬스토리지(sp_scan_report_v1) 렌더링
-   - 복구됨: 상세보기 → detail 전환 + idx 기반 렌더링
-   ============================================================ */
-(function(){
-  // report_fixed.html에서 고정된 경로를 report_fixed.html로 보정
-  const selfName = "report_fixed.html";
-  function fixUrl(u){
-    return (u||"").replaceAll("report_fixed.html", selfName);
-  }
-  // history navigation functions가 이미 정의되어 있으면, replaceState URL만 교체
-  const _replace = history.replaceState.bind(history);
-  history.replaceState = function(st, title, url){
-    try{ url = fixUrl(url); }catch(e){}
-    return _replace(st, title, url);
-  };
+        // 정렬: IRR 내림차순
+        data.sort((a, b) => (b.irr || 0) - (a.irr || 0));
 
-  // 데이터가 없을 때 UX 개선(빈 화면 방지)
-  function hasData(){
-    try{
-      const raw = localStorage.getItem("sp_scan_report_v1");
-      const arr = JSON.parse(raw||"[]");
-      return Array.isArray(arr) && arr.length>0;
-    }catch(e){ return false; }
-  }
+        data.forEach((item, index) => {
+            const tr = document.createElement('tr');
+            tr.className = "hover:bg-slate-50 cursor-pointer transition border-b border-slate-100";
+            tr.onclick = () => {
+                // 상세 보기 클릭 시: 데이터를 로컬스토리지 임시 슬롯에 넣거나, URL로 전달
+                // 여기서는 간단히 뷰 전환만 시뮬레이션
+                showDetailView();
+                // TODO: item 데이터를 상세 뷰에 바인딩하는 로직 필요 (기존 report.html의 로직 활용)
+            };
 
-  // 최초 진입 시 view 파라미터가 없으면 list로 유도(요구사항: list view 중심)
-  const qs = new URLSearchParams(location.search);
-  if(!qs.get("view")){
-    const target = hasData() ? `${selfName}?view=list` : `${selfName}?view=list`;
-    try{ _replace({}, "", target); }catch(e){}
-  }
-})();
-</script>
+            // 8대 체크 상태 판별 (예시)
+            const checkStatus = item.checks_pass ? 
+                `<span class="text-green-600 font-bold text-xs bg-green-100 px-2 py-1 rounded">적합</span>` : 
+                `<span class="text-red-600 font-bold text-xs bg-red-100 px-2 py-1 rounded">주의</span>`;
 
+            tr.innerHTML = `
+                <td class="px-4 py-3 text-center font-mono text-slate-500">${index + 1}</td>
+                <td class="px-4 py-3 font-medium text-slate-700">${item.address || '주소 미상'}</td>
+                <td class="px-4 py-3 text-right text-orange-600 font-extrabold">${item.irr || 0}%</td>
+                <td class="px-4 py-3 text-center">${checkStatus}</td>
+                <td class="px-4 py-3 text-center"><i class="ph-bold ph-caret-right text-slate-300"></i></td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+  </script>
 </body>
 </html>
