@@ -1110,6 +1110,192 @@ def _fetch_law_ordinance_summary(address: str) -> str:
         return base + " 주소 키워드상 농지 가능성이 있어 농지전용 허가 및 배수·농업기반시설 영향 검토가 필요합니다."
     return base + " 용도지역/지목/인접시설물에 따라 허가 요건이 달라질 수 있어 사전 협의가 권장됩니다."
 
+
+def _gemini_ordinance_analyze(address: str):
+    """AI 조례/이격거리 분석 (Deep 전용).
+    반환: dict(road_setback_m_text, regulation_strength, note, confidence_0_1)
+    - 실패/키없음 시에도 None이 아니라 '조례 확인 필요' 기본값을 반환한다.
+    """
+    address = (address or "").strip()
+    base = {
+        "road_setback_m_text": "조례 확인 필요",
+        "regulation_strength": "조례 확인 필요",
+        "note": "지자체 조례/이격거리/경관·환경 규제는 지역·입지에 따라 상이합니다. 관할 지자체에 확인 필요",
+        "confidence_0_1": 0.0,
+    }
+    if not address:
+        base["note"] = "주소 없음 → 조례 확인 필요"
+        return base
+
+    if not GEMINI_API_KEY:
+        # 키 없으면 휴리스틱만
+        base["confidence_0_1"] = 0.05
+        base["note"] = "AI키 없음 → 조례 확인 필요(직접 확인)"
+        return base
+
+    prompt = f"""너는 한국 태양광 인허가 실무 보조 AI다.
+아래 주소(행정구역 기준)에 대해 '태양광 관련 조례/이격거리'를 최대한 보수적으로 요약해라.
+반드시 JSON만 출력해라. 다른 텍스트 출력 금지.
+키는 정확히 road_setback_m_text, regulation_strength, note, confidence_0_1 를 사용해라.
+
+- road_setback_m_text: 도로/주거/시설 이격거리 관련 핵심을 숫자 단위(m) 포함하여 '가능하면' 요약. 확실치 않으면 '조례 확인 필요'라고 써라.
+- regulation_strength: '낮음/보통/높음/매우 높음/조례 확인 필요' 중 하나로만 출력.
+- note: 1~2문장. 관할 지자체 확인/조례명 힌트가 있으면 포함.
+- confidence_0_1: 0~1
+
+주소: {address}
+"""
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 260},
+        }
+        data_bytes = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data_bytes, method="POST", headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=14) as resp:
+            raw = resp.read()
+        j = json.loads(raw.decode("utf-8", errors="ignore") or "{}")
+
+        text = ""
+        try:
+            text = j["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception:
+            text = ""
+
+        m = re.search(r"\{.*\}", text, re.S)
+        jj = json.loads(m.group(0)) if m else {}
+
+        setback = str(jj.get("road_setback_m_text") or "").strip() or "조례 확인 필요"
+        strength = str(jj.get("regulation_strength") or "").strip() or "조례 확인 필요"
+        if strength not in ["낮음", "보통", "높음", "매우 높음", "조례 확인 필요"]:
+            strength = "조례 확인 필요"
+        note = str(jj.get("note") or base["note"]).strip()
+        conf = _try_float(jj.get("confidence_0_1"), 0.15) or 0.15
+        conf = max(0.0, min(1.0, conf))
+
+        return {
+            "road_setback_m_text": setback,
+            "regulation_strength": strength,
+            "note": note,
+            "confidence_0_1": conf,
+        }
+    except Exception:
+        # Fallback must still return something
+        base["confidence_0_1"] = 0.0
+        return base
+
+
+def build_basic_checks(address: str, mode: str = "roof"):
+    """Basic(0.5s)용: 외부 연동/AI 없이 8대 체크사항 기본틀만 반환."""
+    mode = (mode or "roof").strip().lower()
+    address = (address or "").strip()
+    checks = []
+    checks.append(_check_item("용도지역(개발행위 가능성)", "확인 필요 (빠른 분석: 심화 분석에서 조회)", passed=None, needs_confirm=True, weight=1.3))
+    checks.append(_check_item("이격거리(경계/도로/시설)", "확인 필요 (심화 분석에서 조례/기준 검토)", passed=None, needs_confirm=True, weight=1.2))
+    checks.append(_check_item("경사도(토공/구조 위험)", "확인 필요 (심화 분석에서 지형/현장 확인)", passed=None, needs_confirm=True, weight=1.1))
+    checks.append(_check_item("일사/그늘(발전량 리스크)", "확인 필요 (일사량/그늘 데이터 연동 전)", passed=None, needs_confirm=True, weight=1.2))
+    checks.append(_check_item("계통연계(한전 용량/거리)", "확인 필요 (한전 조회/현장 확인 필요)", passed=None, needs_confirm=True, weight=1.4, link="https://www.kepco.co.kr/"))
+    checks.append(_check_item("인허가/행위제한(농지·산지·보전·도시계획)", "확인 필요 (지자체 조례/법령 검토 필요)", passed=None, needs_confirm=True, weight=1.2))
+    checks.append(_check_item("접근성/공사성(진입로·장비 반입)", "확인 필요 (진입로/장비 동선 현장 확인)", passed=None, needs_confirm=True, weight=1.0))
+    checks.append(_check_item("민원/경관/환경(수용성)", "확인 필요 (주변 수용성/환경 규제 검토)", passed=None, needs_confirm=True, weight=1.0))
+    return checks
+
+
+def _solar_heuristic(lat, mode: str = "roof"):
+    """solar_optimize의 핵심 로직만 재사용하기 위한 내부 헬퍼."""
+    sun_hours = None
+    az = 180
+    tilt = 20
+    try:
+        if lat is not None:
+            lat_f = float(lat)
+            tilt = max(10, min(35, int(round(lat_f - 10))))
+            t = max(0.0, min(1.0, (lat_f - 33.0) / (38.5 - 33.0)))
+            sun_hours = 3.9 - 0.5 * t
+    except Exception:
+        sun_hours = None
+        tilt = 20
+
+    return {"sun_hours": sun_hours, "azimuth_deg": az, "tilt_deg": tilt, "source": "heuristic", "needs_confirm": True}
+
+
+def _basic_profitability(panel_count: int, sun_hours: float | None):
+    """0.5초 목표: 외부 데이터 없이 보수적 추정."""
+    try:
+        pc = int(panel_count or 0)
+    except Exception:
+        pc = 0
+    # 기본 가정(보수): 모듈 550W, PR 0.80, 단가 180원/kWh, CAPEX 120만원/kW
+    module_kw = 0.55
+    pr = 0.80
+    unit_rev = 180.0
+    capex_per_kw = 1_200_000.0
+
+    capacity_kw = max(0.0, pc * module_kw)
+    sh = float(sun_hours) if (sun_hours is not None and isinstance(sun_hours, (int, float))) else 3.6  # fallback
+    annual_kwh = capacity_kw * sh * 365.0 * pr
+    annual_rev = annual_kwh * unit_rev
+    capex = capacity_kw * capex_per_kw
+    payback = (capex / annual_rev) if (annual_rev > 0) else None
+
+    return {
+        "assumptions": {"module_kw": module_kw, "pr": pr, "unit_revenue_won_per_kwh": unit_rev, "capex_won_per_kw": capex_per_kw, "sun_hours_used": sh},
+        "capacity_kw": round(capacity_kw, 2),
+        "annual_kwh": int(round(annual_kwh)),
+        "annual_revenue_won": int(round(annual_rev)),
+        "capex_won": int(round(capex)),
+        "payback_years": (round(payback, 1) if payback is not None else None),
+        "needs_confirm": True,
+    }
+
+
+def _merge_ordinance_into_checks(checks: list, ordinance: dict):
+    """Mission-4: AI 조례 분석 결과를 8대 체크사항(checks)에 덮어씌움."""
+    if not isinstance(checks, list):
+        return checks
+    ord_setback = (ordinance or {}).get("road_setback_m_text") or "조례 확인 필요"
+    ord_strength = (ordinance or {}).get("regulation_strength") or "조례 확인 필요"
+    ord_note = (ordinance or {}).get("note") or ""
+
+    for c in checks:
+        try:
+            title = (c.get("title") or "")
+            if "이격거리" in title:
+                c["result"] = f"AI 조례 요약: {ord_setback}"
+                c["needs_confirm"] = (ord_setback == "조례 확인 필요")
+                c["meta"] = {**(c.get("meta") or {}), "ai_ordinance_note": ord_note, "ai_regulation_strength": ord_strength}
+            if "인허가" in title or "행위제한" in title:
+                c["result"] = f"AI 규제 강도: {ord_strength} (조례/법령 추가 확인)"
+                c["needs_confirm"] = (ord_strength == "조례 확인 필요")
+                c["meta"] = {**(c.get("meta") or {}), "ai_ordinance_note": ord_note}
+        except Exception:
+            continue
+    return checks
+
+
+def _kepco_capacity_lookup_best_effort(pnu: str | None, address: str | None = None):
+    """Deep 전용: 실제 한전 OpenAPI가 설정된 경우에만 조회.
+    - 설정/조회 실패 시 None 반환(가짜 숫자 금지)
+    """
+    pnu = (pnu or "").strip() or None
+    api_key = (PUBLIC_KEPCO_KEY or "").strip()
+    api_url = (os.getenv("KEPCO_API_URL") or "").strip()
+    if not api_url or not api_key or not pnu:
+        return {"kepco_capacity": None, "needs_confirm": True, "source": "unavailable", "note": "조회 불가 (직접 문의)"}
+    try:
+        params = {"serviceKey": api_key, "pnu": pnu}
+        url = api_url + ("?" if "?" not in api_url else "&") + urllib.parse.urlencode(params, doseq=True)
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=14) as resp:
+            raw = resp.read()
+        cap, meta = _kepco_best_effort_parse(raw)
+        if not cap:
+            return {"kepco_capacity": None, "needs_confirm": True, "source": "kepco-openapi", "note": "조회 불가 (직접 문의)", "meta": meta}
+        return {"kepco_capacity": str(cap), "needs_confirm": False, "source": "kepco-openapi", "meta": meta}
+    except Exception as e:
+        return {"kepco_capacity": None, "needs_confirm": True, "source": "error", "note": "조회 불가 (직접 문의)", "error": str(e)[:180]}
+
 def _build_ai_summary(address: str, checks: list, law_text: str) -> str:
     """Generates concise AI-style executive summary. Uses Gemini if available, otherwise heuristic."""
     try:
@@ -1357,6 +1543,13 @@ def ai_analyze():
     setback_m = float(data.get("setback_m") or 0)
 
     checks = build_ai_checks(address, lat=lat, lng=lng, mode=mode)
+    # Backward-compat: /api/ai/analyze == deep-lite (includes ordinance AI when possible)
+    try:
+        ordinance_ai = _gemini_ordinance_analyze(address)
+        checks = _merge_ordinance_into_checks(checks, ordinance_ai)
+    except Exception:
+        ordinance_ai = None
+
     score, confidence = conservative_score(panel_count, checks)
     law_text = _fetch_law_ordinance_summary(address)
     ai_summary = _build_ai_summary(address or '확인 필요', checks, law_text)
@@ -1377,6 +1570,135 @@ def ai_analyze():
         # future-ready
         "kepco_capacity": None,
         "sun_hours": None,
+    }
+    return json_ok(**payload)
+
+
+# ------------------------------------------------------------
+# Mission-2: Analyze API split (Basic vs Deep)
+# ------------------------------------------------------------
+@app.post("/api/analyze/basic")
+def analyze_basic():
+    """Fast (<0.5s 목표): 주소/발전량/기본 수익성만 반환 (외부/AI 호출 없음)."""
+    data = request.get_json(silent=True) or {}
+    address = (data.get("address") or "").strip()
+    mode = (data.get("mode") or "roof").strip().lower()
+    lat = data.get("lat")
+    lng = data.get("lng")
+    pnu = (data.get("pnu") or "").strip() or None
+    panel_count = int(data.get("panel_count") or 0)
+
+    solar = _solar_heuristic(lat, mode=mode)
+    finance_basic = _basic_profitability(panel_count, solar.get("sun_hours"))
+
+    checks = build_basic_checks(address, mode=mode)
+    score, confidence = conservative_score(panel_count, checks)
+
+    payload = {
+        "address": address or "확인 필요",
+        "mode": mode,
+        "lat": lat,
+        "lng": lng,
+        "pnu": pnu,
+        "panel_count": panel_count,
+        "checks": checks,
+        "solar": solar,
+        "finance_basic": finance_basic,
+        "attractiveness_score": score,
+        "confidence": confidence,
+        # Deep 전용 필드 자리
+        "law_text": None,
+        "ai_summary": None,
+        "kepco_capacity": None,
+        "land_estimate": None,
+        "ordinance_ai": None,
+        "phase": "basic",
+    }
+    return json_ok(**payload)
+
+
+@app.post("/api/analyze/deep")
+def analyze_deep():
+    """Slow: AI 조례 분석 + 한전 용량 조회 + 땅값 추정 포함."""
+    data = request.get_json(silent=True) or {}
+    address = (data.get("address") or "").strip()
+    mode = (data.get("mode") or "roof").strip().lower()
+    lat = data.get("lat")
+    lng = data.get("lng")
+    pnu = (data.get("pnu") or "").strip() or None
+    panel_count = int(data.get("panel_count") or 0)
+
+    # 1) 8대 체크사항 (기존 build_ai_checks: vworld 등 best-effort)
+    checks = build_ai_checks(address, lat=lat, lng=lng, mode=mode)
+
+    # 2) Mission-4: AI 조례 분석 연결 + 결과 병합 (실패해도 기본값 반환)
+    try:
+        ordinance_ai = _gemini_ordinance_analyze(address)
+    except Exception:
+        ordinance_ai = {
+            "road_setback_m_text": "조례 확인 필요",
+            "regulation_strength": "조례 확인 필요",
+            "note": "AI 분석 실패 → 조례 확인 필요",
+            "confidence_0_1": 0.0,
+        }
+    checks = _merge_ordinance_into_checks(checks, ordinance_ai)
+
+    # 3) 법/조례 요약 텍스트 + AI 총평
+    law_text = _fetch_law_ordinance_summary(address)
+    ai_summary = _build_ai_summary(address or "확인 필요", checks, law_text)
+
+    # 4) 한전 용량 (Mission-5: 가짜 숫자 금지)
+    kepco = _kepco_capacity_lookup_best_effort(pnu, address=address)
+
+    # 5) 땅값 추정 (AI/휴리스틱 best-effort)
+    land = None
+    try:
+        j = _gemini_land_price_estimate(address or (f"PNU:{pnu}" if pnu else ""))
+        unit = _try_float(j.get("unit_price_won_per_pyeong"), None)
+        area_m2 = _try_float(j.get("area_m2"), None)
+        area_p = (area_m2 / 3.3058) if (area_m2 and area_m2 > 0) else None
+        total = (unit * area_p) if (unit and area_p) else None
+        land = {
+            "unit_price_won_per_pyeong": unit,
+            "area_m2": area_m2,
+            "area_pyeong": (round(area_p, 1) if area_p else None),
+            "land_price_won": (int(round(total)) if total else None),
+            "confidence_0_1": _try_float(j.get("confidence_0_1"), 0.0),
+            "note": j.get("note"),
+            "source": ("gemini" if GEMINI_API_KEY else "heuristic"),
+            "needs_confirm": True,
+        }
+    except Exception as e:
+        land = {
+            "unit_price_won_per_pyeong": None,
+            "area_m2": None,
+            "area_pyeong": None,
+            "land_price_won": None,
+            "confidence_0_1": 0.0,
+            "note": "땅값 추정 실패 → 확인 필요",
+            "source": "error",
+            "needs_confirm": True,
+        }
+
+    score, confidence = conservative_score(panel_count, checks)
+
+    payload = {
+        "address": address or "확인 필요",
+        "mode": mode,
+        "lat": lat,
+        "lng": lng,
+        "pnu": pnu,
+        "panel_count": panel_count,
+        "checks": checks,
+        "law_text": law_text,
+        "ai_summary": ai_summary,
+        "attractiveness_score": score,
+        "confidence": confidence,
+        "kepco_capacity": (kepco.get("kepco_capacity") if isinstance(kepco, dict) else None),
+        "kepco": kepco,
+        "land_estimate": land,
+        "ordinance_ai": ordinance_ai,
+        "phase": "deep",
     }
     return json_ok(**payload)
 
@@ -1791,19 +2113,11 @@ def _kepco_best_effort_parse(raw_bytes: bytes):
 
 
 def _simulate_kepco_capacity_text(seed_str: str) -> str:
-    """Deterministic simulated KEPCO capacity text (for demo/fallback).
-    Always returns a non-empty Korean string like '4MW 이상'.
+    """Fallback text when KEPCO capacity cannot be retrieved.
+    Mission-5: Do NOT show fake numbers; explicitly mark unavailable.
     """
-    s = (seed_str or "unknown").strip()
-    seed = _stable_hash_int(s)
-    r = seed % 1000
-    if r < 220:
-        return "4MW 이상"
-    if r < 520:
-        return "2~4MW"
-    if r < 820:
-        return "1~2MW"
-    return "1MW 미만"
+    return "조회 불가 (직접 문의)"
+
 
 @app.route("/api/infra/existing", methods=["GET"])
 def infra_existing():
