@@ -1220,6 +1220,25 @@ def _solar_heuristic(lat, mode: str = "roof"):
     return {"sun_hours": sun_hours, "azimuth_deg": az, "tilt_deg": tilt, "source": "heuristic", "needs_confirm": True}
 
 
+
+def _pmt_level_payment(principal_won: float, annual_rate_pct: float, years: int, daycount_factor: float = 365/360) -> float:
+    """
+    Mission(PF): 원리금 균등(Level Payment) PMT.
+    PMT = P * r * (1+r)^n / ((1+r)^n - 1)
+    - r: 월 이자율(연이율 * daycount_factor / 12)
+    검증: P=3.8억, 5.5%, 15년 -> 월 약 312만원(연 약 3,747만원) 수준.
+    """
+    P = max(0.0, float(principal_won or 0.0))
+    years = max(1, int(years or 1))
+    n = years * 12
+    r = max(0.0, (float(annual_rate_pct or 0.0) / 100.0) * float(daycount_factor) / 12.0)
+    if P <= 0:
+        return 0.0
+    if r <= 0:
+        return P / n
+    pow_ = (1.0 + r) ** n
+    return P * r * pow_ / (pow_ - 1.0)
+
 def _basic_profitability(panel_count: int, sun_hours: float | None):
     """0.5초 목표: 외부 데이터 없이 보수적 추정."""
     try:
@@ -1239,6 +1258,18 @@ def _basic_profitability(panel_count: int, sun_hours: float | None):
     capex = capacity_kw * capex_per_kw
     payback = (capex / annual_rev) if (annual_rev > 0) else None
 
+    # PF(시장 표준) 기본값: 15년 / 5.5% / LTV 70%
+    pf_years = 15
+    pf_rate = 5.5
+    ltv = 0.70
+    principal = capex * ltv
+    monthly_debt = _pmt_level_payment(principal, pf_rate, pf_years)
+    annual_debt = monthly_debt * 12.0
+    # CADS(보수): 매출의 85%를 가용현금흐름으로 근사
+    cads = annual_rev * 0.85
+    dscr = (cads / annual_debt) if (annual_debt > 0) else None
+
+
     return {
         "assumptions": {"module_kw": module_kw, "pr": pr, "unit_revenue_won_per_kwh": unit_rev, "capex_won_per_kw": capex_per_kw, "sun_hours_used": sh},
         "capacity_kw": round(capacity_kw, 2),
@@ -1246,6 +1277,11 @@ def _basic_profitability(panel_count: int, sun_hours: float | None):
         "annual_revenue_won": int(round(annual_rev)),
         "capex_won": int(round(capex)),
         "payback_years": (round(payback, 1) if payback is not None else None),
+        "pf_defaults": {"tenor_years": 15, "interest_rate_pct": 5.5, "ltv_pct": 70},
+        "loan_principal_won": int(round(principal)),
+        "monthly_debt_won": int(round(monthly_debt)),
+        "annual_debt_won": int(round(annual_debt)),
+        "dscr_estimate": (round(dscr, 2) if dscr is not None else None),
         "needs_confirm": True,
     }
 
@@ -1282,7 +1318,7 @@ def _kepco_capacity_lookup_best_effort(pnu: str | None, address: str | None = No
     api_key = (PUBLIC_KEPCO_KEY or "").strip()
     api_url = (os.getenv("KEPCO_API_URL") or "").strip()
     if not api_url or not api_key or not pnu:
-        return {"kepco_capacity": None, "needs_confirm": True, "source": "unavailable", "note": "조회 불가 (직접 문의)"}
+        return {"kepco_capacity": None, "needs_confirm": True, "source": "unavailable", "note": "조회 불가 (한전 문의 요망)"}
     try:
         params = {"serviceKey": api_key, "pnu": pnu}
         url = api_url + ("?" if "?" not in api_url else "&") + urllib.parse.urlencode(params, doseq=True)
@@ -1291,10 +1327,10 @@ def _kepco_capacity_lookup_best_effort(pnu: str | None, address: str | None = No
             raw = resp.read()
         cap, meta = _kepco_best_effort_parse(raw)
         if not cap:
-            return {"kepco_capacity": None, "needs_confirm": True, "source": "kepco-openapi", "note": "조회 불가 (직접 문의)", "meta": meta}
+            return {"kepco_capacity": None, "needs_confirm": True, "source": "kepco-openapi", "note": "조회 불가 (한전 문의 요망)", "meta": meta}
         return {"kepco_capacity": str(cap), "needs_confirm": False, "source": "kepco-openapi", "meta": meta}
     except Exception as e:
-        return {"kepco_capacity": None, "needs_confirm": True, "source": "error", "note": "조회 불가 (직접 문의)", "error": str(e)[:180]}
+        return {"kepco_capacity": None, "needs_confirm": True, "source": "error", "note": "조회 불가 (한전 문의 요망)", "error": str(e)[:180]}
 
 def _build_ai_summary(address: str, checks: list, law_text: str) -> str:
     """Generates concise AI-style executive summary. Uses Gemini if available, otherwise heuristic."""
@@ -2116,7 +2152,7 @@ def _simulate_kepco_capacity_text(seed_str: str) -> str:
     """Fallback text when KEPCO capacity cannot be retrieved.
     Mission-5: Do NOT show fake numbers; explicitly mark unavailable.
     """
-    return "조회 불가 (직접 문의)"
+    return "조회 불가 (한전 문의 요망)"
 
 
 @app.route("/api/infra/existing", methods=["GET"])
