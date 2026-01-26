@@ -1805,6 +1805,27 @@ def _simulate_kepco_capacity_text(seed_str: str) -> str:
         return "1~2MW"
     return "1MW 미만"
 
+@app.route("/api/infra/existing", methods=["GET"])
+def infra_existing():
+    """Existing PV plants (best-effort).
+    Frontend calls this to render nearby existing plants layer.
+    We keep it fail-safe: never raise 500.
+    Query: bbox=minLng,minLat,maxLng,maxLat&z=...
+    """
+    bbox = (request.args.get("bbox") or "").strip()
+    z = int(request.args.get("z") or 0)
+
+    # If you later have a reliable data source, implement here.
+    # For now: return empty safely (commercial policy: do not fabricate).
+    return json_ok(
+        bbox=bbox or None,
+        z=z,
+        items=[],
+        source="unavailable",
+        note="기설치 태양광 데이터 소스 미연동",
+        needs_confirm=True,
+    )
+
 @app.route("/api/infra/kepco", methods=["GET"])
 def infra_kepco():
     """
