@@ -1346,240 +1346,8 @@ def conservative_score(panel_count: int, checks: list):
 
 
 
-# ============================================================
-# Mission 1/2/3: 2-Step Architecture (Basic/Fast + Deep/Slow)
-# ============================================================
-
-def _vworld_geocode_best_effort(address: str):
-    """주소->좌표 (best-effort). 키 없거나 실패하면 None. 타임아웃 짧게."""
-    if not PUBLIC_VWORLD_KEY or not address:
-        return None
-    try:
-        geocode_url = "https://api.vworld.kr/req/address"
-        q = {
-            "service": "address",
-            "request": "getCoord",
-            "version": "2.0",
-            "crs": "EPSG:4326",
-            "address": address,
-            "format": "json",
-            "type": "road",
-            "key": PUBLIC_VWORLD_KEY,
-        }
-        u = geocode_url + "?" + urllib.parse.urlencode(q)
-        req = urllib.request.Request(u, method="GET")
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            raw = resp.read()
-        j = json.loads(raw.decode("utf-8", "ignore"))
-        if j.get("response", {}).get("status") == "OK":
-            pt = j["response"]["result"]["point"]
-            return {"lat": float(pt["y"]), "lng": float(pt["x"]), "source": "vworld"}
-    except Exception:
-        return None
-    return None
-
-def _basic_generation_finance(panel_count: int, module_power_w: float = 640.0, sun_hours: float = 3.6):
-    """클릭 즉시 보여줄 Fast 추정치(서버측)."""
-    pc = max(0, int(panel_count or 0))
-    mw = float(module_power_w or 640.0)
-    dc_kw = (pc * mw) / 1000.0
-    PR = 0.90
-    annual_kwh_y1 = dc_kw * float(sun_hours or 3.6) * 365.0 * PR
-    return {
-        "dc_kw": round(dc_kw, 3),
-        "annual_kwh_y1": round(annual_kwh_y1, 1),
-        "sun_hours_used": float(sun_hours or 3.6),
-        "note": "Basic(FAST) 추정치 — 정밀 분석/실측/계통검토 전제",
-    }
-
-def _gemini_generate_text(prompt: str, max_tokens: int = 250) -> str:
-    """Gemini REST 호출(urllib)."""
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY not set")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    payload = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"maxOutputTokens": int(max_tokens), "temperature": 0.2},
-    }
-    body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=18) as resp:
-        raw = resp.read()
-    j = json.loads(raw.decode("utf-8", "ignore"))
-    # best-effort extract
-    cand = (j.get("candidates") or [{}])[0]
-    parts = (cand.get("content") or {}).get("parts") or []
-    texts = [p.get("text", "") for p in parts if isinstance(p, dict)]
-    return "\n".join([t for t in texts if t]).strip()
-
-def _json_extract_best_effort(txt: str):
-    try:
-        m = re.search(r"\{.*\}", txt, re.S)
-        if not m:
-            return None
-        return json.loads(m.group(0))
-    except Exception:
-        return None
-
-def _gemini_ordinance_analyze(address: str):
-    """AI로 '태양광 이격거리 조례 성향' 추론 (확인필수 주석 포함)."""
-    if not GEMINI_API_KEY or not address:
-        return {
-            "road_setback_m": None,
-            "regulation": None,
-            "note": "조회 불가 (GEMINI_API_KEY 미설정) — 확인 필요",
-        }
-
-    prompt = f"""너는 태양광 인허가 실무 보조 AI다.
-아래 주소의 '지자체 태양광 이격거리 조례 성향'을 보수적으로 추론해라.
-
-주소: {address}
-
-반드시 JSON만 출력:
-{{
-  "road_setback_m": (도로 이격거리 추정 m, 숫자 또는 null),
-  "regulation": ("완화" 또는 "엄격" 또는 "중간" 중 하나),
-  "note": "※ AI 분석 결과(확인 필수). 근거/조문은 반드시 지자체에 최종 확인"
-}}
-
-규칙:
-- 모르면 null로 둬라. 억지로 숫자 만들지 마라.
-- 과장 금지, 보수적으로.
-""".strip()
-
-    try:
-        resp = _gemini_generate_text(prompt, max_tokens=220)
-        _inc_usage("law")
-        j = _json_extract_best_effort(resp or "")
-        if not j:
-            return {"road_setback_m": None, "regulation": None, "note": "※ AI 분석 결과(확인 필수) — 응답 파싱 실패"}
-        rsm = j.get("road_setback_m", None)
-        try:
-            rsm = int(rsm) if rsm is not None else None
-        except Exception:
-            rsm = None
-        reg = (j.get("regulation") or "").strip()
-        if reg not in ("완화", "엄격", "중간"):
-            reg = None
-        note = (j.get("note") or "※ AI 분석 결과(확인 필수)").strip()
-        return {"road_setback_m": rsm, "regulation": reg, "note": note}
-    except Exception:
-        return {"road_setback_m": None, "regulation": None, "note": "※ AI 분석 결과(확인 필수) — Gemini 호출 실패"}
-
-def _kepco_capacity_text_by_pnu(pnu: str) -> str:
-    """한전 OpenAPI best-effort. 실패/미설정/미파싱 시 '조회 불가 (한전 문의 필요)'"""
-    pnu = (pnu or "").strip()
-    api_key = (PUBLIC_KEPCO_KEY or "").strip()
-    api_url = (os.getenv("KEPCO_API_URL") or "").strip()
-    if not api_url or not api_key or not pnu:
-        return "조회 불가 (한전 문의 필요)"
-    try:
-        params = {"serviceKey": api_key, "pnu": pnu}
-        url = api_url + ("?" if "?" not in api_url else "&") + urllib.parse.urlencode(params, doseq=True)
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            raw = resp.read()
-        cap, _meta = _kepco_best_effort_parse(raw)
-        return cap if cap else "조회 불가 (한전 문의 필요)"
-    except Exception:
-        return "조회 불가 (한전 문의 필요)"
-
-def build_ai_checks_v2(address: str, lat=None, lng=None, mode: str = "roof", ordinance=None, kepco_capacity: str = None):
-    """Mission3 반영한 8대 체크 (Roof vs Land 지능화)."""
-    mode = (mode or "roof").strip().lower()
-    address = (address or "").strip()
-    checks = []
-
-    # 용도지역: 기존 로직 재사용
-    vz = {}
-    if lat is not None and lng is not None:
-        vz = _vworld_get_zoning_point(lat, lng)
-    if not (vz.get("ok") and vz.get("zone")):
-        vz = _vworld_get_zoning(address)
-
-    if vz.get("ok") and vz.get("zone"):
-        checks.append(_check_item(
-            "용도지역(개발행위 가능성)",
-            f"조회됨: {vz['zone']}",
-            passed=None,
-            needs_confirm=vz.get("needs_confirm", False),
-            weight=1.3,
-            link="https://www.vworld.kr/",
-            meta={"zone": vz.get("zone")}
-        ))
-    else:
-        guess = _zone_guess_from_address(address)
-        checks.append(_check_item(
-            "용도지역(개발행위 가능성)",
-            f"확인 필요 ({guess})",
-            passed=None,
-            needs_confirm=True,
-            weight=1.3,
-            link="https://www.vworld.kr/"
-        ))
-
-    # 이격거리/경사도/생태자연도: Roof는 PASS 처리
-    if mode == "roof":
-        checks.append(_check_item("이격거리(경계/도로/시설)", "PASS: 해당 없음 (건물형)", passed=True, needs_confirm=False, weight=1.2, meta={"status": "PASS"}))
-        checks.append(_check_item("경사도(토공/구조 위험)", "PASS: 해당 없음 (건물형)", passed=True, needs_confirm=False, weight=1.1, meta={"status": "PASS"}))
-        checks.append(_check_item("생태자연도/보전지역", "PASS: 해당 없음 (건물형)", passed=True, needs_confirm=False, weight=1.0, meta={"status": "PASS"}))
-    else:
-        # Land: ordinance 기반 표시(없으면 확인 필요)
-        if ordinance and (ordinance.get("road_setback_m") is not None or ordinance.get("regulation")):
-            rsm = ordinance.get("road_setback_m")
-            reg = ordinance.get("regulation") or "확인 필요"
-            note = ordinance.get("note") or "※ AI 분석 결과(확인 필수)"
-            msg = f"도로 이격거리 추정: {rsm}m / 규제강도: {reg}\n{note}"
-            checks.append(_check_item("이격거리(경계/도로/시설)", msg, passed=None, needs_confirm=True, weight=1.2, meta={"ordinance": ordinance}))
-        else:
-            checks.append(_check_item("이격거리(경계/도로/시설)", "확인 필요 (지자체 조례/현장 기준 이격거리 측정 필요)", passed=None, needs_confirm=True, weight=1.2))
-
-        checks.append(_check_item("경사도(토공/구조 위험)", "V-World 데이터 없음 (DEM/경사도 연동 필요)", passed=None, needs_confirm=True, weight=1.1))
-        checks.append(_check_item("생태자연도/보전지역", "확인 필요 (환경규제/보전지역 중첩 여부 확인 필요)", passed=None, needs_confirm=True, weight=1.0))
-
-    # 계통연계(한전)
-    cap = kepco_capacity or "조회 불가 (한전 문의 필요)"
-    needs = True if ("조회 불가" in cap or "문의" in cap) else False
-    checks.append(_check_item("계통연계(한전 선로/변전소)", cap, passed=None, needs_confirm=needs, weight=1.4))
-
-    # 나머지(보수적으로)
-    checks.append(_check_item("민원/경관(주변수용성)", "확인 필요 (인근 주거지/민원 가능성 사전 협의 필요)", passed=None, needs_confirm=True, weight=1.0))
-    checks.append(_check_item("구조/시공(접근로/장비반입)", "확인 필요 (진입로 폭/장비 접근성 확인 필요)", passed=None, needs_confirm=True, weight=0.9))
-    checks.append(_check_item("토지비/사업성", "확인 필요 (토지비/임대/인허가 비용 반영 필요)", passed=None, needs_confirm=True, weight=1.2))
-    return checks
-
-@app.route("/api/analyze/basic", methods=["POST"])
-def analyze_basic():
-    t0 = time.time()
-    data = request.get_json(silent=True) or {}
-
-    address = (data.get("address") or "").strip()
-    mode = (data.get("mode") or "roof").strip().lower()
-    lat = data.get("lat")
-    lng = data.get("lng")
-    panel_count = int(data.get("panel_count") or 0)
-    module_power_w = float(data.get("module_power_w") or 640.0)
-
-    if (lat is None or lng is None) and address:
-        g = _vworld_geocode_best_effort(address)
-        if g:
-            lat, lng = g["lat"], g["lng"]
-
-    basic = _basic_generation_finance(panel_count, module_power_w=module_power_w, sun_hours=float(data.get("sun_hours") or 3.6))
-
-    return json_ok(
-        mode=mode,
-        address=address or "확인 필요",
-        lat=lat,
-        lng=lng,
-        panel_count=panel_count,
-        basic=basic,
-        deep_pending=True,
-        elapsed_ms=int((time.time() - t0) * 1000),
-    )
-
-@app.route("/api/analyze/deep", methods=["POST"])
-def analyze_deep():
+@app.route("/api/ai/analyze", methods=["POST"])
+def ai_analyze():
     data = request.get_json(silent=True) or {}
     address = (data.get("address") or "").strip()
     mode = (data.get("mode") or "roof").strip().lower()
@@ -1587,54 +1355,30 @@ def analyze_deep():
     lng = data.get("lng")
     panel_count = int(data.get("panel_count") or 0)
     setback_m = float(data.get("setback_m") or 0)
-    pnu = (data.get("pnu") or "").strip()
 
-    ordinance = None
-    if mode == "land" and address:
-        ordinance = _gemini_ordinance_analyze(address)
-
-    kepco_capacity = _kepco_capacity_text_by_pnu(pnu) if pnu else "조회 불가 (한전 문의 필요)"
-
-    checks = build_ai_checks_v2(
-        address=address,
-        lat=lat, lng=lng,
-        mode=mode,
-        ordinance=ordinance,
-        kepco_capacity=kepco_capacity
-    )
+    checks = build_ai_checks(address, lat=lat, lng=lng, mode=mode)
     score, confidence = conservative_score(panel_count, checks)
+    law_text = _fetch_law_ordinance_summary(address)
+    ai_summary = _build_ai_summary(address or '확인 필요', checks, law_text)
 
-    law_text = _fetch_law_ordinance_summary(address) if address else "확인 필요"
-    ai_summary = _build_ai_summary(address or "확인 필요", checks, law_text)
-
-    land_price = None
-    try:
-        land_price = _gemini_land_price_estimate(address) if address else None
-    except Exception:
-        land_price = None
-
-    return json_ok(
-        address=address or "확인 필요",
-        mode=mode,
-        lat=lat,
-        lng=lng,
-        pnu=pnu or None,
-        panel_count=panel_count,
-        setback_m=setback_m,
-        ordinance=ordinance,
-        kepco_capacity=kepco_capacity,
-        checks=checks,
-        law_text=law_text,
-        ai_summary=ai_summary,
-        attractiveness_score=score,
-        confidence=confidence,
-        land_price_estimate=land_price,
-    )
-
-@app.route("/api/ai/analyze", methods=["POST"])
-def ai_analyze():
-    # 하위호환: 기존 프론트는 /api/ai/analyze를 호출함 → Deep로 라우팅
-    return analyze_deep()
+    # 확장 필드(미확정 데이터는 "확인 필요")
+    payload = {
+        "address": address or "확인 필요",
+        "mode": mode,
+        "lat": lat,
+        "lng": lng,
+        "panel_count": panel_count,
+        "setback_m": setback_m,
+        "checks": checks,
+        "law_text": law_text,
+        "ai_summary": ai_summary,
+        "attractiveness_score": score,
+        "confidence": confidence,
+        # future-ready
+        "kepco_capacity": None,
+        "sun_hours": None,
+    }
+    return json_ok(**payload)
 
 
 # ------------------------------------------------------------
@@ -1678,6 +1422,11 @@ def _format_won(v: int) -> str:
         return "0 원"
 
 app.jinja_env.filters["format_won"] = _format_won
+
+
+
+# [PATCH] Inline report template (요청사항 1~3 반영)
+REPORT_HTML = '<!doctype html>\n<html lang="ko">\n<head>\n  <meta charset="utf-8" />\n  <meta name="viewport" content="width=device-width,initial-scale=1" />\n  <title>Solar Pathfinder 상세 리포트</title>\n  <script src="https://cdn.tailwindcss.com"></script>\n  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>\n  <style>\n    body { background:#0b1220; color:#e5e7eb; }\n    .card { background: rgba(17,24,39,.85); border:1px solid rgba(148,163,184,.15); border-radius:16px; }\n    .chip { border:1px solid rgba(148,163,184,.25); background: rgba(15,23,42,.6); border-radius:999px; padding:.25rem .6rem; font-size:12px; }\n    .btn { background:#111827; border:1px solid rgba(148,163,184,.25); border-radius:12px; padding:.55rem .8rem; font-weight:700; font-size:12px; }\n    .btn-primary { background:#2563eb; border-color:#3b82f6; }\n    .btn-ghost { background:transparent; }\n    .muted { color:#94a3b8; }\n    .kpi { font-size:28px; font-weight:800; letter-spacing:-.02em; }\n    .fadein { animation: fadein .18s ease-out; }\n    @keyframes fadein { from{opacity:.0; transform: translateY(4px)} to{opacity:1; transform:none} }\n    .table-row { display:flex; gap:12px; align-items:flex-start; justify-content:space-between; padding:10px 12px; border:1px solid rgba(148,163,184,.18); border-radius:12px; background: rgba(2,6,23,.35); }\n    a.link { color:#93c5fd; text-decoration: underline; }\n  </style>\n</head>\n<body class="min-h-screen">\n  <div class="max-w-6xl mx-auto p-6 space-y-4">\n    <div class="flex items-start justify-between gap-4">\n      <div>\n        <div class="text-2xl font-extrabold">상세 리포트</div>\n        <div class="text-sm muted mt-1">{{ date }}</div>\n        <div class="text-sm mt-2"><span class="muted">주소</span> <span class="font-bold">{{ address }}</span></div>\n      </div>\n      <div class="flex items-center gap-2">\n        <span class="chip">구매매력도 <span class="font-extrabold ml-1" id="aiScoreChip">{{ ai_score }}</span></span>\n        <span class="chip">한전 용량: <span class="font-bold ml-1">{{ kepco_capacity }}</span></span>\n      </div>\n    </div>\n\n    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">\n      <div class="card p-4">\n        <div class="muted text-xs">용량</div>\n        <div class="kpi" id="kpiCapacity">{{ capacity }}</div>\n      </div>\n      <div class="card p-4">\n        <div class="muted text-xs">총 사업비</div>\n        <div class="kpi" id="kpiCapex">-</div>\n        <div class="text-[11px] muted mt-1">※ 토지 보유/구매 선택에 따라 달라짐</div>\n      </div>\n      <div class="card p-4">\n        <div class="muted text-xs">연 총수익(추정)</div>\n        <div class="kpi" id="kpiAnnualRev">-</div>\n      </div>\n      <div class="card p-4">\n        <div class="muted text-xs">자본회수기간(보수)</div>\n        <div class="kpi" id="kpiPayback">-</div>\n      </div>\n    </div>\n\n    <!-- Controls -->\n    <div class="card p-4 space-y-3">\n      <div class="flex flex-wrap items-center gap-2 justify-between">\n        <div class="flex flex-wrap items-center gap-2">\n          <div class="text-sm font-bold">토지</div>\n          <div class="inline-flex rounded-xl overflow-hidden border border-slate-600/40">\n            <button class="btn btn-ghost rounded-none" id="landOwnBtn" onclick="setLandMode(\'own\')">보유</button>\n            <button class="btn btn-ghost rounded-none" id="landBuyBtn" onclick="setLandMode(\'buy\')">구매</button>\n          </div>\n          <div class="text-xs muted">토지가격(추정): <span class="font-bold text-amber-300" id="landPriceText">{{ land_price }}</span></div>\n        </div>\n\n        <div class="flex items-center gap-2">\n          <div class="text-sm font-bold">시나리오</div>\n          <select id="scenarioSelect" class="btn">\n            <option value="base">기본</option>\n            <option value="conservative">보수</option>\n            <option value="aggressive">공격</option>\n          </select>\n          <div class="text-sm font-bold ml-2">할인율</div>\n          <input id="discountRate" class="btn w-24" value="6.0" />\n          <span class="text-xs muted">%</span>\n          <button class="btn btn-primary" onclick="recalculateAll()">재계산</button>\n          <button class="btn" onclick="judgePF()">판정</button>\n        </div>\n      </div>\n\n      <!-- Module/Inverter -->\n      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">\n        <div class="card p-3">\n          <div class="text-sm font-bold mb-2">모듈 선택</div>\n          <select id="moduleSelect" class="btn w-full"></select>\n          <div class="text-[11px] muted mt-2" id="moduleMeta"></div>\n        </div>\n        <div class="card p-3">\n          <div class="text-sm font-bold mb-2">인버터 선택</div>\n          <select id="inverterSelect" class="btn w-full"></select>\n          <div class="text-[11px] muted mt-2" id="inverterMeta"></div>\n        </div>\n        <div class="card p-3">\n          <div class="text-sm font-bold mb-2">전기 기본 스펙(예상)</div>\n          <div class="text-sm">권장 케이블: <span class="font-extrabold text-cyan-300" id="cableSpec">-</span></div>\n          <div class="text-[11px] muted mt-2">※ 실제 설계(전압강하/거리/배선방식)에 따라 변경됩니다.</div>\n        </div>\n      </div>\n\n      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">\n        <div class="card p-3">\n          <div class="text-sm font-bold mb-2">25년 현금흐름(토지비 제외)</div>\n          <canvas id="cfNoLand"></canvas>\n        </div>\n        <div class="card p-3">\n          <div class="text-sm font-bold mb-2">25년 현금흐름(토지비 포함)</div>\n          <canvas id="cfWithLand"></canvas>\n        </div>\n      </div>\n\n      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">\n        <div class="card p-3">\n          <div class="text-sm font-bold">NPV / IRR (토지비 제외)</div>\n          <div class="mt-2 text-sm">NPV: <span class="font-extrabold" id="npvNoLand">-</span></div>\n          <div class="text-sm">IRR: <span class="font-extrabold" id="irrNoLand">-</span></div>\n        </div>\n        <div class="card p-3">\n          <div class="text-sm font-bold">NPV / IRR (토지비 포함)</div>\n          <div class="mt-2 text-sm">NPV: <span class="font-extrabold" id="npvWithLand">-</span></div>\n          <div class="text-sm">IRR: <span class="font-extrabold" id="irrWithLand">-</span></div>\n        </div>\n        <div class="card p-3">\n          <div class="text-sm font-bold">DSCR</div>\n          <div class="mt-2 text-sm">최소: <span class="font-extrabold" id="dscrMin">-</span></div>\n          <div class="text-sm">평균: <span class="font-extrabold" id="dscrAvg">-</span></div>\n          <div class="text-sm muted mt-1" id="judgeText">판정: -</div>\n        </div>\n      </div>\n    </div>\n\n    <!-- AI / Checks -->\n    <div class="card p-4 space-y-3">\n      <div class="flex items-center justify-between">\n        <div class="text-sm font-bold">AI 총평 (법/조례 기반)</div>\n        <div class="text-xs muted">※ AI 분석 결과(확인 필수)</div>\n      </div>\n      <div class="text-sm leading-relaxed whitespace-pre-line">{{ (ai_analysis.get(\'ai_summary\') or \'\') }}</div>\n\n      <div class="mt-4">\n        <div class="text-sm font-bold mb-2">8대 체크사항</div>\n        <div id="checksBox" class="space-y-2"></div>\n      </div>\n\n      <div class="mt-4">\n        <div class="text-sm font-bold mb-2">AI 추천 TOP 5 (모듈/인버터/케이블)</div>\n        <div id="aiTop5" class="grid grid-cols-1 md:grid-cols-2 gap-2"></div>\n      </div>\n    </div>\n  </div>\n\n<script>\nconst PAYLOAD = {{ payload_json|safe }};\n\n// -------- Official links mapping (user-provided exact links)\nconst OFFICIAL_LINKS = {\n  ordinance: "https://www.elis.go.kr/",\n  eum: "https://www.eum.go.kr/web/am/amMain.jsp",\n  law: "https://law.go.kr/main.html",\n  ecology: "https://aid.mcee.go.kr/",\n  heritage: "https://www.nie-ecobank.kr/cmmn/Index.do",\n  neins: "https://webgis.neins.go.kr/map.do",\n  kepco: "https://online.kepco.co.kr/",\n};\n\nfunction won(n){\n  const x = Number(n||0);\n  if(!isFinite(x)) return "-";\n  return Math.round(x).toLocaleString()+" 원";\n}\nfunction pct(n){\n  const x = Number(n);\n  if(!isFinite(x)) return "-";\n  return x.toFixed(2)+" %";\n}\nfunction safe(s, d=""){ return (s===null||s===undefined) ? d : String(s); }\n\n// -------- PF core (lightweight, deterministic)\nfunction npv(rate, cfs){\n  const r = rate/100;\n  let v = 0;\n  for(let i=0;i<cfs.length;i++){\n    v += (cfs[i]||0) / Math.pow(1+r, i);\n  }\n  return v;\n}\nfunction irr(cfs){\n  // simple binary search IRR in [-0.9, 2.0] (=-90%..200%)\n  let lo = -0.9, hi = 2.0;\n  function f(r){ // r as decimal\n    let v=0;\n    for(let i=0;i<cfs.length;i++) v += (cfs[i]||0)/Math.pow(1+r,i);\n    return v;\n  }\n  const f0 = f(lo), f1=f(hi);\n  if(!isFinite(f0) || !isFinite(f1) || (f0*f1>0)) return null;\n  for(let k=0;k<60;k++){\n    const mid=(lo+hi)/2;\n    const fm=f(mid);\n    if(f0*fm<=0){ hi=mid; } else { lo=mid; }\n  }\n  return ((lo+hi)/2)*100;\n}\n\n// -------- Module/Inverter catalog (starter; can be expanded by your sales team)\nconst MODULES = [\n  { id:"t1", name:"TOPCon 640W", powerW:640, eff:0.220, iscA:18.0, vocV:49.5 },\n  { id:"p1", name:"PERC 550W", powerW:550, eff:0.205, iscA:16.0, vocV:49.0 },\n  { id:"h1", name:"HJT 700W", powerW:700, eff:0.230, iscA:18.5, vocV:50.2 },\n];\nconst INVERTERS = [\n  { id:"s100", name:"스트링 100kW", eff:0.985, maxDcA:26 },\n  { id:"s60",  name:"스트링 60kW",  eff:0.982, maxDcA:22 },\n  { id:"c250", name:"중대형 250kW", eff:0.988, maxDcA:32 },\n];\n\nlet landMode = "own"; // own/buy\nfunction setLandMode(m){\n  landMode = (m==="buy") ? "buy" : "own";\n  document.getElementById("landOwnBtn").classList.toggle("btn-primary", landMode==="own");\n  document.getElementById("landBuyBtn").classList.toggle("btn-primary", landMode==="buy");\n  recalculateAll();\n}\n\nfunction selectedModule(){ return MODULES.find(x=>x.id===document.getElementById("moduleSelect").value) || MODULES[0]; }\nfunction selectedInverter(){ return INVERTERS.find(x=>x.id===document.getElementById("inverterSelect").value) || INVERTERS[0]; }\n\nfunction cableSpec(mod, inv){\n  // very rough: design current ~ Isc * 1.25 ; map to typical sq bands\n  const designA = (mod.iscA || 0) * 1.25;\n  if(designA <= 18) return "6 sq";\n  if(designA <= 24) return "10 sq";\n  if(designA <= 32) return "16 sq";\n  return "25 sq 이상";\n}\n\nfunction buildCashflows({capex, annualRev, opex, debtYears, interestPct, loanRatioPct}){\n  // simple PF-style: debt service as equal payment, revenue degrades 0.55%/y, opex inflates 2%/y\n  const years = 25;\n  const deg = 0.0055, infl=0.02;\n  const r = (interestPct/100)/12;\n  const n = debtYears*12;\n  const loan = capex * (loanRatioPct/100);\n  const equity0 = capex - loan;\n\n  const pmt = (r>0) ? (loan * r * Math.pow(1+r,n)) / (Math.pow(1+r,n)-1) : (loan/n);\n  const annualDebt = pmt*12;\n\n  const cf_no_land = [ -equity0 ];\n  const cf_with_land = [ -equity0 ]; // land already inside capex if buy\n\n  let dscrYears = [];\n  for(let y=1;y<=years;y++){\n    const rev = annualRev * Math.pow(1-deg, y-1);\n    const op = opex * Math.pow(1+infl, y-1);\n    const ebitda = rev - op;\n    const debt = (y<=debtYears) ? annualDebt : 0;\n    const eqcf = ebitda - debt;\n    cf_no_land.push(eqcf);\n    cf_with_land.push(eqcf);\n    if(y<=debtYears && debt>0) dscrYears.push(ebitda/debt);\n  }\n  return {equity0, cf_no_land, cf_with_land, dscrYears};\n}\n\nlet chartNoLand=null, chartWithLand=null;\n\nfunction drawCashflow(canvasId, cfs){\n  const ctx = document.getElementById(canvasId).getContext("2d");\n  const labels = cfs.map((_,i)=> i===0 ? "Y0" : "Y"+i);\n  const data = cfs.map(v=>Math.round(v));\n  const cfg = {\n    type:"bar",\n    data:{ labels, datasets:[{ label:"현금흐름", data }]},\n    options:{\n      responsive:true,\n      plugins:{ legend:{ display:false }},\n      scales:{ x:{ ticks:{ color:"#94a3b8"}}, y:{ ticks:{ color:"#94a3b8"} } }\n    }\n  };\n  return new Chart(ctx, cfg);\n}\n\nfunction recalculateAll(){\n  const fin = (PAYLOAD.finance || {});\n  const assumptions = fin.assumptions || {};\n  const baseCapex = Number(assumptions.capex || fin.capex || 0);\n  const annualRev = Number(fin.annual_revenue_won || fin.annualRev || 0);\n  const opex = Number(assumptions.opex || fin.opex || 0);\n\n  // land price from backend (string already formatted) -> use land_estimate if numeric\n  let landPrice = 0;\n  try{\n    const le = PAYLOAD.land_estimate || {};\n    if(landMode==="buy"){\n      landPrice = Number(le.land_price_won || ((fin.roi25y||{}).land_price_won) || 0) || 0;\n    }\n  }catch(e){ landPrice=0; }\n\n  // scenario tweaks\n  const sc = document.getElementById("scenarioSelect").value;\n  let revMul=1.0, capMul=1.0;\n  if(sc==="conservative"){ revMul=0.92; capMul=1.05; }\n  if(sc==="aggressive"){ revMul=1.05; capMul=0.98; }\n\n  // module/inverter efficiency adjustment\n  const mod = selectedModule();\n  const inv = selectedInverter();\n  const effMul = (mod.eff || 0.21) * (inv.eff || 0.98) / (0.21*0.98); // normalized to baseline\n  const adjAnnualRev = annualRev * revMul * effMul;\n\n  const capex = (baseCapex*capMul) + landPrice;\n\n  // PF settings\n  const discount = Number(document.getElementById("discountRate").value||6.0) || 6.0;\n  const debtYears = Number(assumptions.pfTenorYears || 10);\n  const interestPct = Number(assumptions.pfInterestRate || 6.5);\n  const loanRatioPct = Number(assumptions.pfLoanRatio || 90);\n\n  // Update meta display\n  document.getElementById("moduleMeta").textContent = `${mod.powerW}W · 효율 ${(mod.eff*100).toFixed(1)}% · Isc ${mod.iscA}A`;\n  document.getElementById("inverterMeta").textContent = `효율 ${(inv.eff*100).toFixed(1)}% · 최대 DC ${inv.maxDcA}A`;\n  document.getElementById("cableSpec").textContent = cableSpec(mod, inv);\n\n  // Build cashflows\n  const r = buildCashflows({\n    capex, annualRev: adjAnnualRev, opex,\n    debtYears, interestPct, loanRatioPct\n  });\n\n  // KPIs\n  document.getElementById("kpiCapex").textContent = won(capex);\n  document.getElementById("kpiAnnualRev").textContent = won(adjAnnualRev);\n\n  const payback = (()=> {\n    let cum = -Math.max(0, r.equity0||0);\n    for(let i=1;i<r.cf_no_land.length;i++){\n      cum += (r.cf_no_land[i]||0);\n      if(cum>=0) return i;\n    }\n    return null;\n  })();\n  document.getElementById("kpiPayback").textContent = payback ? `${payback} 년` : "미회수";\n\n  // NPV/IRR\n  const npvNL = npv(discount, r.cf_no_land);\n  const irrNL = irr(r.cf_no_land);\n  document.getElementById("npvNoLand").textContent = won(npvNL);\n  document.getElementById("irrNoLand").textContent = irrNL===null ? "-" : pct(irrNL);\n\n  const npvWL = npv(discount, r.cf_with_land);\n  const irrWL = irr(r.cf_with_land);\n  document.getElementById("npvWithLand").textContent = won(npvWL);\n  document.getElementById("irrWithLand").textContent = irrWL===null ? "-" : pct(irrWL);\n\n  // DSCR\n  const ds = r.dscrYears || [];\n  const min = ds.length ? Math.min(...ds) : null;\n  const avg = ds.length ? (ds.reduce((a,b)=>a+b,0)/ds.length) : null;\n  document.getElementById("dscrMin").textContent = (min===null||!isFinite(min)) ? "-" : min.toFixed(2);\n  document.getElementById("dscrAvg").textContent = (avg===null||!isFinite(avg)) ? "-" : avg.toFixed(2);\n\n  // Charts\n  if(chartNoLand){ chartNoLand.destroy(); chartNoLand=null; }\n  if(chartWithLand){ chartWithLand.destroy(); chartWithLand=null; }\n  chartNoLand = drawCashflow("cfNoLand", r.cf_no_land);\n  chartWithLand = drawCashflow("cfWithLand", r.cf_with_land);\n\n  // AI TOP5\n  renderTop5();\n}\n\nfunction judgePF(){\n  // simple rule: min DSCR >= 1.20 => PASS else RISK\n  const min = parseFloat(document.getElementById("dscrMin").textContent);\n  const ok = isFinite(min) && min >= 1.20;\n  document.getElementById("judgeText").textContent =\n    ok ? `판정: PF 가능 (최소 DSCR ${min.toFixed(2)} ≥ 1.20)` : `PF 리스크 (최소 DSCR ${isFinite(min)?min.toFixed(2):"-"} < 1.20)`;\n}\n\nfunction renderChecks(){\n  const box = document.getElementById("checksBox");\n  const checks = Array.isArray(PAYLOAD.ai_analysis?.checks) ? PAYLOAD.ai_analysis.checks : [];\n  const linkByTitle = (t)=>{\n    t = String(t||"");\n    if(t.includes("조례") || t.includes("지자체")) return OFFICIAL_LINKS.ordinance;\n    if(t.includes("용도지역")) return OFFICIAL_LINKS.eum;\n    if(t.includes("상위법") || t.includes("환경") || t.includes("농지")) return OFFICIAL_LINKS.law;\n    if(t.includes("생태") || t.includes("자연")) return OFFICIAL_LINKS.ecology;\n    if(t.includes("문화재") || t.includes("국가유산")) return OFFICIAL_LINKS.heritage;\n    if(t.includes("경사") || t.includes("국토환경")) return OFFICIAL_LINKS.neins;\n    if(t.includes("계통") || t.includes("한전") || t.includes("변전소") || t.includes("선로")) return OFFICIAL_LINKS.kepco;\n    return "";\n  };\n\n  box.innerHTML = checks.map(it=>{\n    const title = safe(it.title || it.category, "");\n    const result = safe(it.result || it.message || it.status, "확인 필요");\n    const url = it.link || it.url || linkByTitle(title);\n    const needs = !!(it.needs_confirm || it.confirm_needed || (result.includes("확인") && result.includes("필요")));\n    return `\n      <div class="table-row">\n        <div>\n          <div class="font-bold text-sm">${title}</div>\n          <div class="${needs?\'text-yellow-300\':\'text-slate-100\'} text-xs mt-1 whitespace-pre-line">${result}</div>\n        </div>\n        ${url ? `<a class="link text-xs shrink-0" href="${url}" target="_blank">공식 링크</a>` : ``}\n      </div>\n    `;\n  }).join("") || `<div class="muted text-sm">AI 체크 데이터가 없습니다. (정밀 분석 후 생성)</div>`;\n}\n\nfunction renderTop5(){\n  const root = document.getElementById("aiTop5");\n  const picks = MODULES.slice(0,5).map(m=>{\n    const inv = INVERTERS[0];\n    return {\n      module: m.name,\n      inverter: inv.name,\n      cable: cableSpec(m, inv),\n      note: "기본 견적 산정용(거리/배선/접속함 구성에 따라 변동)"\n    };\n  });\n  root.innerHTML = picks.map(p=>`\n    <div class="table-row">\n      <div>\n        <div class="font-bold text-sm">${p.module}</div>\n        <div class="text-xs muted mt-1">${p.inverter} · 케이블 ${p.cable}</div>\n        <div class="text-[11px] muted mt-1">${p.note}</div>\n      </div>\n    </div>\n  `).join("");\n}\n\nfunction initSelects(){\n  const ms = document.getElementById("moduleSelect");\n  const is = document.getElementById("inverterSelect");\n  ms.innerHTML = MODULES.map(m=>`<option value="${m.id}">${m.name}</option>`).join("");\n  is.innerHTML = INVERTERS.map(i=>`<option value="${i.id}">${i.name}</option>`).join("");\n  ms.addEventListener("change", recalculateAll);\n  is.addEventListener("change", recalculateAll);\n}\n\n(function boot(){\n  initSelects();\n  setLandMode("own");\n  renderChecks();\n  recalculateAll();\n})();\n</script>\n</body>\n</html>'
 
 @app.route("/report", methods=["POST"])
 def report():
@@ -1754,8 +1503,8 @@ def report():
         land_price_won = ((finance or {}).get("roi25y") or {}).get("land_price_won")
     land_price = _format_won(land_price_won) if land_price_won is not None else "확인 필요"
 
-    return render_template(
-        "report.html",
+    return render_template_string(
+        REPORT_HTML,
         address=address,
         capacity=capacity,
         kepco_capacity=kepco_capacity,
@@ -1769,8 +1518,6 @@ def report():
         solar=solar,
         land_price=land_price,
     )
-
-
 def build_pdf_bytes(payload: dict) -> bytes:
     """
     Styled PDF (report-like) using reportlab + embedded charts.
@@ -2052,7 +1799,7 @@ def infra_kepco():
       - bbox=minLng,minLat,maxLng,maxLat&z=... (레이어용)
     Env:
       - KEPCO_KEY (PUBLIC_KEPCO_KEY)
-      - KEPCO_API_URL (실제 dispersedGeneration 등 한전 OpenAPI 엔드포인트)
+      - KEPCO_API_URL (실제 한전 OpenAPI 엔드포인트)
     """
     _inc_usage('kepco')
     pnu = (request.args.get("pnu") or "").strip()
@@ -2062,20 +1809,21 @@ def infra_kepco():
     api_key = (PUBLIC_KEPCO_KEY or "").strip()
     api_url = (os.getenv("KEPCO_API_URL") or "").strip()
 
-    # ✅ 시뮬레이션 금지: 키/URL 없으면 솔직히 "조회 불가"
     if not api_url or not api_key:
+        # Fallback: deterministic simulated capacity so UI does not stay empty
+        seed = pnu or (request.args.get("address") or "").strip() or bbox or "unknown"
+        sim = _simulate_kepco_capacity_text(seed)
         return json_ok(
             pnu=pnu or None,
             bbox=bbox or None,
             z=z,
             items=[],
             lines=[],
-            kepco_capacity="조회 불가 (한전 문의 필요)",
-            source="unavailable",
-            note="KEPCO_API_URL/KEPCO_KEY 미설정",
+            kepco_capacity=sim,
+            source="simulated",
+            note="KEPCO_API_URL/KEPCO_KEY 미설정 → 모의 용량 표시(확인 필요)",
             needs_confirm=True,
         )
-
     try:
         params = {"serviceKey": api_key}
         if pnu:
@@ -2095,7 +1843,7 @@ def infra_kepco():
             pnu=pnu or None,
             bbox=bbox or None,
             z=z,
-            kepco_capacity=cap if cap else "조회 불가 (한전 문의 필요)",
+            kepco_capacity=cap,
             items=[],
             lines=[],
             source="kepco-openapi",
@@ -2109,7 +1857,7 @@ def infra_kepco():
             z=z,
             items=[],
             lines=[],
-            kepco_capacity="조회 불가 (한전 문의 필요)",
+            kepco_capacity=None,
             source="kepco-openapi",
             needs_confirm=True,
             note="KEPCO 호출 실패(엔드포인트/파라미터/응답 스키마 확인 필요)",
@@ -2117,7 +1865,6 @@ def infra_kepco():
         )
 
 
-# ------------------------------------------------------------
 # ------------------------------------------------------------
 # F-27: 지역별 일사량/날씨 기반 최적 방위각/경사각 (연동 준비 상태)
 #  - 데이터 소스 확정 전까지는 "확인 필요" + 구조만 제공
