@@ -6,6 +6,7 @@ import base64
 import secrets
 import math
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from io import BytesIO
 import urllib.request
 import urllib.parse
@@ -1239,7 +1240,7 @@ def _pmt_level_payment(principal_won: float, annual_rate_pct: float, years: int,
     pow_ = (1.0 + r) ** n
     return P * r * pow_ / (pow_ - 1.0)
 
-def _basic_profitability(panel_count: int, sun_hours: float | None):
+def _basic_profitability(panel_count: int, sun_hours: Optional[float]):
     """0.5초 목표: 외부 데이터 없이 보수적 추정."""
     try:
         pc = int(panel_count or 0)
@@ -2876,3 +2877,4 @@ def api_hardware_design():
 if __name__ == "__main__":
     port = int(os.getenv("PORT") or 5000)
     app.run(host="0.0.0.0", port=port, debug=True)
+
