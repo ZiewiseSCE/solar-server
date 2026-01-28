@@ -98,7 +98,7 @@ DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
 SECRET_KEY = (os.getenv("SECRET_KEY") or "").strip()
 
 PUBLIC_VWORLD_KEY = (os.getenv("VWORLD_KEY") or "").strip()
-PUBLIC_KEPCO_KEY = (os.getenv("KEPCO_KEY") or "").strip()
+PUBLIC_KEPCO_KEY = (os.getenv("KEPCO_API_KEY") or os.getenv("KEPCO_KEY") or "").strip()
 GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 LAW_API_ID = (os.getenv("LAW_API_ID") or "").strip()
 
@@ -2649,94 +2649,158 @@ def infra_existing():
     )
 
 @app.route("/api/infra/kepco", methods=["GET"])
+@app.route("/api/infra/kepco", methods=["GET"])
 def infra_kepco():
     """
+    KEPCO 선로/용량 조회 엔드포인트
+
     Query:
       - pnu=... (카드 표시용)
-      - bbox=minLng,minLat,maxLng,maxLat&z=... (레이어용)
+      - address=... (카드 표시용, 크롤러 보조용)
+      - bbox=minLng,minLat,maxLng,maxLng&z=... (지도 레이어용; 현재 items/lines는 미사용 구조 유지)
     Env:
-      - KEPCO_KEY (PUBLIC_KEPCO_KEY)
-      - KEPCO_API_URL (실제 한전 OpenAPI 엔드포인트)
+      - KEPCO_API_URL : 한전 OpenAPI 루트 URL
+      - KEPCO_API_KEY / KEPCO_KEY : OpenAPI 인증키
+    전략:
+      1) KEPCO OpenAPI (KEPCO_API_URL + KEPCO_API_KEY) 우선
+      2) 실패 시 내부 크롤러(_kepco_capacity_lookup_best_effort)로 재시도
+      3) 그래도 실패하면 모의 텍스트("조회 불가 (한전 문의 요망)")로 Fallback
     """
     _inc_usage('kepco')
+
     pnu = (request.args.get("pnu") or "").strip()
     bbox = (request.args.get("bbox") or "").strip()
     z = int(request.args.get("z") or 0)
+    address = (request.args.get("address") or "").strip()
 
-    api_key = (PUBLIC_KEPCO_KEY or "").strip()
+    # 공통 응답 기본값
+    base = {
+        "pnu": pnu or None,
+        "bbox": bbox or None,
+        "z": z,
+    }
+
+    # KEPCO OpenAPI 설정
+    api_key = (os.getenv("KEPCO_API_KEY") or os.getenv("KEPCO_KEY") or "").strip()
     api_url = (os.getenv("KEPCO_API_URL") or "").strip()
 
-    if not api_url or not api_key:
-        # Fallback: 크롤러 + 모의 용량 (UI가 비지 않도록)
-        addr = (request.args.get("address") or "").strip()
-        kepco_best = _kepco_capacity_lookup_best_effort(pnu or None, address=addr) if addr or pnu else None
-        cap = None
-        source = "simulated"
-        note = "KEPCO_API_URL/KEPCO_KEY 미설정 → 모의 용량 표시(확인 필요)"
-        needs_confirm = True
-        if isinstance(kepco_best, dict):
-            cap = kepco_best.get("kepco_capacity") or None
-            source = kepco_best.get("source") or source
-            # more specific note if 크롤러가 정상 동작했는 경우
-            if kepco_best.get("note"):
-                note = kepco_best["note"]
-        if not cap:
-            seed = pnu or addr or bbox or "unknown"
-            cap = _simulate_kepco_capacity_text(seed)
+    openapi_meta = {
+        "configured": bool(api_url and api_key),
+    }
 
-        return json_ok(
-            pnu=pnu or None,
-            bbox=bbox or None,
-            z=z,
-            items=[],
-            lines=[],
-            kepco_capacity=cap,
-            source=source,
-            note=note,
-            needs_confirm=needs_confirm,
-            kepco=kepco_best,
-        )
-    try:
-        params = {"serviceKey": api_key}
-        if pnu:
-            params["pnu"] = pnu
-        if bbox:
-            params["bbox"] = bbox
-            params["z"] = str(z)
+    # --------------------------------------------------------
+    # 1) KEPCO OpenAPI 우선 시도
+    # --------------------------------------------------------
+    kepco_capacity = None
+    if api_url and api_key:
+        try:
+            params = {
+                "serviceKey": api_key,
+                "apiKey": api_key,   # 실제 파라미터명이 어떤 것이든 대응
+            }
+            if pnu:
+                params["pnu"] = pnu
+            if address:
+                params["address"] = address
+            if bbox:
+                params["bbox"] = bbox
+                params["z"] = str(z)
 
-        url = api_url + ("?" if "?" not in api_url else "&") + urllib.parse.urlencode(params, doseq=True)
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            raw = resp.read()
+            r = requests.get(api_url, params=params, timeout=10)
+            openapi_meta.update({
+                "status_code": r.status_code,
+                "url": r.url,
+            })
 
-        cap, meta = _kepco_best_effort_parse(raw)
+            # 우선 JSON 파싱 시도
+            data = None
+            try:
+                data = r.json()
+                # 너무 길어지지 않게 preview만 저장 (디버깅용)
+                openapi_meta["json_preview"] = str(data)[:1500]
+            except Exception as je:
+                openapi_meta["json_error"] = repr(je)
+                openapi_meta["text_preview"] = r.text[:1000]
 
-        return json_ok(
-            pnu=pnu or None,
-            bbox=bbox or None,
-            z=z,
-            kepco_capacity=cap,
-            items=[],
-            lines=[],
-            source="kepco-openapi",
-            needs_confirm=(cap is None),
-            meta=meta,
-        )
-    except Exception as e:
-        return json_ok(
-            pnu=pnu or None,
-            bbox=bbox or None,
-            z=z,
-            items=[],
-            lines=[],
-            kepco_capacity=None,
-            source="kepco-openapi",
-            needs_confirm=True,
-            note="KEPCO 호출 실패(엔드포인트/파라미터/응답 스키마 확인 필요)",
-            error=repr(e),
-        )
+            # 대표적인 필드 이름 후보들에서 용량 추출 시도
+            if isinstance(data, dict):
+                for key in ("kepco_capacity", "capacity", "remainCapacity", "remain_capacity", "잔여용량", "용량"):
+                    if key in data and data[key]:
+                        kepco_capacity = str(data[key])
+                        break
 
+            # JSON 필드에서 못 찾았고, 응답이 정상이라면 본문에서 숫자+단위 패턴 검색
+            if not kepco_capacity and r.ok:
+                import re as _re
+                m = _re.search(r"(\d+(?:\.\d+)?)\s*(MW|kW|kVA)", r.text)
+                if m:
+                    kepco_capacity = f"{m.group(1)} {m.group(2)}"
 
+            if kepco_capacity:
+                # OpenAPI에서 용량을 성공적으로 얻은 경우
+                return json_ok(
+                    **base,
+                    items=[],
+                    lines=[],
+                    kepco_capacity=kepco_capacity,
+                    source="kepco-openapi",
+                    needs_confirm=False,
+                    meta={"openapi": openapi_meta},
+                )
+            else:
+                openapi_meta["error"] = openapi_meta.get("error") or "no_capacity_extracted"
+        except Exception as e:
+            openapi_meta["error"] = repr(e)
+
+    # --------------------------------------------------------
+    # 2) 크롤러 Fallback (_kepco_capacity_lookup_best_effort)
+    # --------------------------------------------------------
+    kepco_best = None
+    if pnu or address:
+        try:
+            kepco_best = _kepco_capacity_lookup_best_effort(pnu or None, address=address or None)
+        except Exception as e:
+            kepco_best = {
+                "kepco_capacity": None,
+                "needs_confirm": True,
+                "source": "kepco-crawler-error",
+                "note": "크롤러 실행 중 예외 발생",
+                "meta": {"error": repr(e)},
+            }
+
+    if isinstance(kepco_best, dict):
+        cap = kepco_best.get("kepco_capacity")
+        if cap:
+            # 크롤러에서 용량 확보 성공
+            meta = {"openapi": openapi_meta}
+            if "meta" in kepco_best:
+                meta["crawler"] = kepco_best["meta"]
+            return json_ok(
+                **base,
+                items=[],
+                lines=[],
+                kepco_capacity=cap,
+                source=kepco_best.get("source") or "kepco-crawler",
+                needs_confirm=kepco_best.get("needs_confirm", True),
+                note=kepco_best.get("note"),
+                meta=meta,
+            )
+
+    # --------------------------------------------------------
+    # 3) 최종 Fallback: 모의 텍스트
+    # --------------------------------------------------------
+    seed = pnu or address or bbox or "unknown"
+    sim = _simulate_kepco_capacity_text(seed)
+    return json_ok(
+        **base,
+        items=[],
+        lines=[],
+        kepco_capacity=sim,
+        source="simulated",
+        needs_confirm=True,
+        note="KEPCO OpenAPI/크롤러 모두 실패 → 모의 용량 표시",
+        meta={"openapi": openapi_meta},
+    )
 # ------------------------------------------------------------
 # F-27: 지역별 일사량/날씨 기반 최적 방위각/경사각 (연동 준비 상태)
 #  - 데이터 소스 확정 전까지는 "확인 필요" + 구조만 제공
