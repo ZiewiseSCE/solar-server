@@ -1,3 +1,4 @@
+
 import os
 import threading
 import requests  # [추가됨] 한전 실시간 데이터 크롤링용
@@ -19,6 +20,8 @@ import re
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 from flask import Flask, request, jsonify, make_response, render_template_string, render_template, send_file
 from flask_cors import CORS
 
@@ -294,6 +297,125 @@ def _ensure_hardware_tables(conn):
     conn.commit()
 
 
+
+def _import_hardware_master_if_needed(conn):
+    """
+    hardware_master_*.json 파일을 읽어 pv_modules / inverters 테이블을 자동으로 동기화한다.
+    - master_versions.name = JSON 내부 version 값을 기준으로, 이미 반영된 버전이면 아무 작업도 하지 않는다.
+    - 파일이 없거나 JSON 파싱에 실패하면 조용히 넘어간다(서버 부팅 방해 금지).
+    """
+    try:
+        # 우선 고정 파일명을 우선 시도하고, 없으면 hardware_master_*.json 패턴을 탐색
+        candidate_paths = []
+        fixed_path = os.path.join(BASE_DIR, "hardware_master_2026.json")
+        if os.path.exists(fixed_path):
+            candidate_paths.append(fixed_path)
+        else:
+            try:
+                for name in os.listdir(BASE_DIR):
+                    if name.startswith("hardware_master_") and name.endswith(".json"):
+                        candidate_paths.append(os.path.join(BASE_DIR, name))
+            except Exception:
+                candidate_paths = []
+
+        if not candidate_paths:
+            return  # JSON 파일이 없는 경우 자동 업데이트 생략
+
+        # 가장 최신 버전을 선택: JSON 내부의 version 문자열을 기준으로 정렬
+        latest_path = None
+        latest_version = None
+        for path in candidate_paths:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    j = json.load(f)
+                v = str(j.get("version") or "").strip()
+                if not v:
+                    continue
+                if latest_version is None or v > latest_version:
+                    latest_version = v
+                    latest_path = path
+            except Exception:
+                continue
+
+        if not latest_path or not latest_version:
+            return
+
+        cur = conn.cursor()
+        # 이미 동일 버전이 반영되었으면 종료
+        cur.execute("SELECT 1 FROM master_versions WHERE name = %s", (latest_version,))
+        if cur.fetchone():
+            return
+
+        # JSON 다시 로드 (실제 데이터 import)
+        with open(latest_path, "r", encoding="utf-8") as f:
+            j = json.load(f)
+
+        modules = j.get("modules") or []
+        inverters = j.get("inverters") or []
+
+        # 전체 리셋 후 재삽입 (마스터 데이터 성격이므로 TRUNCATE 사용)
+        cur.execute("TRUNCATE TABLE pv_modules RESTART IDENTITY;")
+        cur.execute("TRUNCATE TABLE inverters RESTART IDENTITY;")
+
+        for m in modules:
+            no = m.get("no")
+            brand = m.get("brand")
+            model = m.get("model")
+            power_w = m.get("power_w")
+            module_type = m.get("module_type")
+            efficiency_pct = m.get("efficiency_pct")
+            price_won_per_w = m.get("price_won_per_w")
+            is_bifacial = bool(m.get("is_bifacial"))
+            features = (m.get("features") or "").strip()
+            size = (m.get("size") or "").strip()
+            # 별도 size 컬럼이 없으므로 feature 설명에 덧붙여 저장
+            if size:
+                if features:
+                    features = f"{features} | size: {size}"
+                else:
+                    features = f"size: {size}"
+
+            cur.execute(
+                "INSERT INTO pv_modules "
+                "(no, brand, model, power_w, module_type, efficiency_pct, price_won_per_w, is_bifacial, features) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (no, brand, model, power_w, module_type, efficiency_pct, price_won_per_w, is_bifacial, features),
+            )
+
+        for inv in inverters:
+            no = inv.get("no")
+            brand = inv.get("brand")
+            model = inv.get("model")
+            capacity_kw = inv.get("capacity_kw")
+            topology = inv.get("topology")
+            price_million_won = inv.get("price_million_won")
+            price_won = inv.get("price_won")
+            features = (inv.get("features") or "").strip()
+            is_integrated_connection_box = bool(inv.get("is_integrated_connection_box"))
+
+            cur.execute(
+                "INSERT INTO inverters "
+                "(no, brand, model, capacity_kw, topology, price_million_won, price_won, features, is_integrated_connection_box) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (no, brand, model, capacity_kw, topology, price_million_won, price_won, features, is_integrated_connection_box),
+            )
+
+        # 반영된 버전을 기록
+        cur.execute(
+            "INSERT INTO master_versions (name, imported_at) VALUES (%s, now()) "
+            "ON CONFLICT (name) DO NOTHING;",
+            (latest_version,),
+        )
+        conn.commit()
+        print(f"[BOOT] hardware master imported from {latest_path} (version={latest_version})")
+    except Exception as e:
+        # 하드웨어 자동 업데이트 실패가 서비스 전체를 막지 않도록, 로그만 남기고 무시한다.
+        try:
+            print("[BOOT] hardware master import skipped:", repr(e))
+        except Exception:
+            pass
+
+
 def init_db():
     """Create required tables if missing (and apply lightweight migrations)."""
     conn = get_conn()
@@ -302,6 +424,7 @@ def init_db():
         _ensure_admin_state(conn)
 
         _ensure_hardware_tables(conn)
+        _import_hardware_master_if_needed(conn)
 
         cur = conn.cursor()
         # Base table (initial columns)
@@ -1917,7 +2040,7 @@ def checks_analyze():
     sun_hours = _to_float(data.get("sun_hours"))
     dist_road_m = _to_float(data.get("dist_road_m"))
     dist_substation_m = _to_float(data.get("dist_substation_m"))
-    dist_house_m = _to_float(data.get("dist_house_m"))
+    dist_house_m = _to_float(data.get("dist_house_m") or data.get("dist_residential_m"))
 
     _inc_usage("checks_eight")
 
