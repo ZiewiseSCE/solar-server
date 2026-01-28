@@ -2667,19 +2667,34 @@ def infra_kepco():
     api_url = (os.getenv("KEPCO_API_URL") or "").strip()
 
     if not api_url or not api_key:
-        # Fallback: deterministic simulated capacity so UI does not stay empty
-        seed = pnu or (request.args.get("address") or "").strip() or bbox or "unknown"
-        sim = _simulate_kepco_capacity_text(seed)
+        # Fallback: 크롤러 + 모의 용량 (UI가 비지 않도록)
+        addr = (request.args.get("address") or "").strip()
+        kepco_best = _kepco_capacity_lookup_best_effort(pnu or None, address=addr) if addr or pnu else None
+        cap = None
+        source = "simulated"
+        note = "KEPCO_API_URL/KEPCO_KEY 미설정 → 모의 용량 표시(확인 필요)"
+        needs_confirm = True
+        if isinstance(kepco_best, dict):
+            cap = kepco_best.get("kepco_capacity") or None
+            source = kepco_best.get("source") or source
+            # more specific note if 크롤러가 정상 동작했는 경우
+            if kepco_best.get("note"):
+                note = kepco_best["note"]
+        if not cap:
+            seed = pnu or addr or bbox or "unknown"
+            cap = _simulate_kepco_capacity_text(seed)
+
         return json_ok(
             pnu=pnu or None,
             bbox=bbox or None,
             z=z,
             items=[],
             lines=[],
-            kepco_capacity=sim,
-            source="simulated",
-            note="KEPCO_API_URL/KEPCO_KEY 미설정 → 모의 용량 표시(확인 필요)",
-            needs_confirm=True,
+            kepco_capacity=cap,
+            source=source,
+            note=note,
+            needs_confirm=needs_confirm,
+            kepco=kepco_best,
         )
     try:
         params = {"serviceKey": api_key}
