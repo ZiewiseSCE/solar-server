@@ -1,5 +1,5 @@
 {
-  "version": "hardware_master_2026",
+  "version": "2026-01-28",
   "modules": [
     {
       "no": 1,
@@ -9,8 +9,8 @@
       "size": "2,465 x 1,134 x 30",
       "efficiency_pct": 22.9,
       "module_type": "N-Type",
-      "price_won_per_w": 210,
-      "features": "4등급 | 3-4월 이후 사이즈 변경 예정",
+      "price_won_per_w": 210.0,
+      "features": "[4등급] 3-4월 이후 사이즈 변경 예정",
       "is_bifacial": false
     },
     {
@@ -21,8 +21,8 @@
       "size": "2,465 x 1,134 x 30",
       "efficiency_pct": 22.9,
       "module_type": "N-Type",
-      "price_won_per_w": 210,
-      "features": "4등급 | 국내산",
+      "price_won_per_w": 210.0,
+      "features": "[4등급] 국내산",
       "is_bifacial": false
     },
     {
@@ -33,8 +33,8 @@
       "size": "2,465 x 1,134 x 30",
       "efficiency_pct": 22.9,
       "module_type": "N-Type",
-      "price_won_per_w": 210,
-      "features": "4등급 | 중국산",
+      "price_won_per_w": 210.0,
+      "features": "[4등급] 중국산",
       "is_bifacial": false
     },
     {
@@ -45,8 +45,8 @@
       "size": "2,465 x 1,134 x 30",
       "efficiency_pct": 22.9,
       "module_type": "N-Type",
-      "price_won_per_w": 200,
-      "features": "4등급",
+      "price_won_per_w": 200.0,
+      "features": "[4등급]",
       "is_bifacial": false
     },
     {
@@ -57,104 +57,92 @@
       "size": "2,384 x 1,303 x 33",
       "efficiency_pct": 23.2,
       "module_type": "N-Type",
-      "price_won_per_w": 200,
-      "features": "4등급",
+      "price_won_per_w": 200.0,
+      "features": "[4등급]",
       "is_bifacial": false
     },
     {
       "no": 6,
-      "brand": "트리나",
-      "model": "TSM-700NEG21C.20K",
-      "power_w": 700.0,
+      "brand": "에스에너지",
+      "model": "SL85-66HDX-730U",
+      "power_w": 730.0,
       "size": "2,384 x 1,303 x 33",
-      "efficiency_pct": 22.6,
+      "efficiency_pct": 23.5,
       "module_type": "N-Type",
-      "price_won_per_w": 190,
-      "features": "4등급",
+      "price_won_per_w": 205.0,
+      "features": "[4등급]",
       "is_bifacial": false
     },
     {
       "no": 7,
-      "brand": "JA솔라(중)",
-      "model": "JAM72D40 640/LB",
-      "power_w": 640.0,
-      "size": "2,281 x 1,134 x 30",
-      "efficiency_pct": 22.9,
+      "brand": "에스에너지",
+      "model": "SL85-66HDX-735U",
+      "power_w": 735.0,
+      "size": "2,384 x 1,303 x 33",
+      "efficiency_pct": 23.66,
       "module_type": "N-Type",
-      "price_won_per_w": 200,
-      "features": "4등급",
+      "price_won_per_w": 205.0,
+      "features": "[4등급]",
       "is_bifacial": false
     },
     {
       "no": 8,
-      "brand": "JA솔라(중)",
-      "model": "JAM78D30 700/LB",
-      "power_w": 700.0,
+      "brand": "에스에너지",
+      "model": "SL85-66HDX-740U",
+      "power_w": 740.0,
       "size": "2,384 x 1,303 x 33",
-      "efficiency_pct": 22.6,
+      "efficiency_pct": 23.82,
       "module_type": "N-Type",
-      "price_won_per_w": 190,
-      "features": "4등급",
+      "price_won_per_w": 205.0,
+      "features": "[4등급]",
       "is_bifacial": false
     },
     {
-      "no": 9,
-      "brand": "트리나",
-      "model": "TSM-DE19R.08(II) 450W",
-      "power_w": 450.0,
-      "size": "1,902 x 1,134 x 30",
-      "efficiency_pct": 22.3,
-      "module_type": "N-Type",
-      "price_won_per_w": 200,
-      "features": "4등급",
-      "is_bifacial": false
-    },
-    {
-      "no": 10,
-      "brand": "JA솔라(중)",
-      "model": "JAM54D41 440/GB",
-      "power_w": 440.0,
-      "size": "1,762 x 1,134 x 30",
-      "efficiency_pct": 22.0,
-      "module_type": "N-Type",
-      "price_won_per_w": 200,
-      "features": "4등급",
-      "is_bifacial": false
-    },
-    {
-      "no": 11,
-      "brand": "현대에너지솔루션",
-      "model": "HiD-S440SG-ES",
-      "power_w": 440.0,
-      "size": "1,896 x 1,096 x 30",
-      "efficiency_pct": 22.5,
-      "module_type": "N-Type",
-      "price_won_per_w": 210,
-      "features": "4등급 | 국내산",
-      "is_bifacial": false
-    },
-    {
-      "no": 12,
+      "no": 1,
       "brand": "한화큐셀(한)",
-      "model": "Q.PEAK DUO BLK-Z 405W",
-      "power_w": 405.0,
-      "size": "1,690 x 1,048 x 32",
-      "efficiency_pct": 20.8,
-      "module_type": "P-Type",
-      "price_won_per_w": 210,
-      "features": "4등급 | 국내산",
+      "model": "Q.TRON XL-G2R.9 BFG",
+      "power_w": 640.0,
+      "size": "2,465 x 1,134 x 30",
+      "efficiency_pct": 22.9,
+      "module_type": "N-Type",
+      "price_won_per_w": 270.0,
+      "features": "[2등급] 재고 소진 후 단종예정",
       "is_bifacial": false
     },
     {
-      "no": 13,
+      "no": 2,
       "brand": "한화큐셀(한)",
-      "model": "Q.PEAK DUO ML-G11 A+ 450W",
-      "power_w": 450.0,
-      "size": "1,844 x 1,048 x 32",
-      "efficiency_pct": 20.8,
-      "module_type": "P-Type",
-      "price_won_per_w": 210,
-      "features": "4등급 | 국내산",
+      "model": "Q.TRON XL-G2R.9 BFG",
+      "power_w": 645.0,
+      "size": "2,465 x 1,134 x 30",
+      "efficiency_pct": 23.1,
+      "module_type": "N-Type",
+      "price_won_per_w": 270.0,
+      "features": "[2등급]",
+      "is_bifacial": false
+    },
+    {
+      "no": 3,
+      "brand": "현대에너지솔루션(한)",
+      "model": "HiS-T640NJ-ES",
+      "power_w": 640.0,
+      "size": "2,465 x 1,134 x 30",
+      "efficiency_pct": 22.9,
+      "module_type": "N-Type",
+      "price_won_per_w": 270.0,
+      "features": "[2등급]",
+      "is_bifacial": false
+    },
+    {
+      "no": 4,
+      "brand": "현대에너지솔루션(한)",
+      "model": "HiS-T645NJ-ES",
+      "power_w": 645.0,
+      "size": "2,465 x 1,134 x 30",
+      "efficiency_pct": 23.1,
+      "module_type": "N-Type",
+      "price_won_per_w": 270.0,
+      "features": "[2등급]",
       "is_bifacial": false
     }
   ],
@@ -166,9 +154,9 @@
       "capacity_kw": 36.0,
       "topology": "스트링",
       "price_million_won": 350.0,
+      "price_won": 3500000,
       "features": "V1, V2, V3",
-      "is_integrated_connection_box": false,
-      "price_won": 3500000
+      "is_integrated_connection_box": false
     },
     {
       "no": 2,
@@ -177,9 +165,9 @@
       "capacity_kw": 60.0,
       "topology": "스트링",
       "price_million_won": 390.0,
+      "price_won": 3900000,
       "features": "D1, D2, D3",
-      "is_integrated_connection_box": false,
-      "price_won": 3900000
+      "is_integrated_connection_box": false
     },
     {
       "no": 3,
@@ -188,9 +176,9 @@
       "capacity_kw": 125.0,
       "topology": "스트링",
       "price_million_won": 590.0,
+      "price_won": 5900000,
       "features": "V1, V2, V3, V4",
-      "is_integrated_connection_box": false,
-      "price_won": 5900000
+      "is_integrated_connection_box": false
     },
     {
       "no": 6,
@@ -199,9 +187,9 @@
       "capacity_kw": 60.0,
       "topology": "스트링",
       "price_million_won": 360.0,
+      "price_won": 3600000,
       "features": "25A,30A, 32A",
-      "is_integrated_connection_box": false,
-      "price_won": 3600000
+      "is_integrated_connection_box": false
     },
     {
       "no": 7,
@@ -210,53 +198,53 @@
       "capacity_kw": 110.0,
       "topology": "스트링",
       "price_million_won": 560.0,
+      "price_won": 5600000,
       "features": "25A,30A, 32A",
-      "is_integrated_connection_box": false,
-      "price_won": 5600000
-    },
-    {
-      "no": 8,
-      "brand": "굿위",
-      "model": "GW50KN-MT",
-      "capacity_kw": 50.0,
-      "topology": "스트링",
-      "price_million_won": 290.0,
-      "features": "3MPPT",
-      "is_integrated_connection_box": false,
-      "price_won": 2900000
+      "is_integrated_connection_box": false
     },
     {
       "no": 9,
-      "brand": "굿위",
-      "model": "GW110KN-MT",
-      "capacity_kw": 110.0,
+      "brand": "화웨이",
+      "model": "SUN2000-50KTL-M3",
+      "capacity_kw": 50.0,
       "topology": "스트링",
-      "price_million_won": 520.0,
-      "features": "9MPPT",
-      "is_integrated_connection_box": false,
-      "price_won": 5200000
+      "price_million_won": 360.0,
+      "price_won": 3600000,
+      "features": "",
+      "is_integrated_connection_box": false
     },
     {
       "no": 10,
-      "brand": "굿위",
-      "model": "GW225KN-MT",
-      "capacity_kw": 225.0,
+      "brand": "화웨이",
+      "model": "SUN2000-110KTL-M2",
+      "capacity_kw": 110.0,
       "topology": "스트링",
-      "price_million_won": 900.0,
-      "features": "12MPPT",
-      "is_integrated_connection_box": false,
-      "price_won": 9000000
+      "price_million_won": 580.0,
+      "price_won": 5800000,
+      "features": "",
+      "is_integrated_connection_box": false
     },
     {
       "no": 11,
-      "brand": "굿위",
-      "model": "GW250KN-MT",
-      "capacity_kw": 250.0,
+      "brand": "호프윈드",
+      "model": "hopeSun 60KTL",
+      "capacity_kw": 60.0,
       "topology": "스트링",
-      "price_million_won": 980.0,
-      "features": "12MPPT",
-      "is_integrated_connection_box": false,
-      "price_won": 9800000
+      "price_million_won": 350.0,
+      "price_won": 3500000,
+      "features": "",
+      "is_integrated_connection_box": false
+    },
+    {
+      "no": 12,
+      "brand": "호프윈드",
+      "model": "hopeSun 110KTL",
+      "capacity_kw": 110.0,
+      "topology": "스트링",
+      "price_million_won": 375.0,
+      "price_won": 3750000,
+      "features": "",
+      "is_integrated_connection_box": false
     }
   ]
 }
