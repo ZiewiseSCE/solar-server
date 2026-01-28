@@ -1575,6 +1575,7 @@ class KepcoCapacityCrawler:
             "raw_data": target
         }, None
 
+
 def _kepco_capacity_lookup_best_effort(
     pnu: Optional[str],
     address: Optional[str] = None
@@ -1586,7 +1587,15 @@ def _kepco_capacity_lookup_best_effort(
     """
     target_addr = (address or "").strip()
     if not target_addr:
-         return {"kepco_capacity": None, "needs_confirm": True, "source": "unavailable", "note": "주소 없음"}
+        return {
+            "kepco_capacity": None,
+            "needs_confirm": True,
+            "source": "unavailable",
+            "note": "주소 없음",
+            "meta": {"error": "empty_address"}
+        }
+
+    error_msg: Optional[str] = None
 
     try:
         # 1. 크롤러 실행 (한전 서버 접속)
@@ -1595,27 +1604,35 @@ def _kepco_capacity_lookup_best_effort(
 
         # 2. 결과 반환
         if result:
+            # 예: {"capacity": "15 MW (변전소: 대구)", "raw_data": {...}}
             return {
-                "kepco_capacity": result["capacity"], # 예: "15 MW (변전소: 대구)"
+                "kepco_capacity": result.get("capacity"),
                 "needs_confirm": False,
                 "source": "kepco-live",
                 "note": "한전 실시간 데이터 조회 성공",
-                "meta": result["raw_data"]
+                "meta": result.get("raw_data", {})
             }
-        else:
-            print(f"[KEPCO CRAWL FAIL] {target_addr}: {error_msg}")
+
+        # result가 None인 경우: error_msg에 원인 문자열이 들어있을 수 있음
+        print(f"[KEPCO CRAWL FAIL] {target_addr}: {error_msg}")
     except Exception as e:
-        print(f"[KEPCO CRAWL ERROR] {e}")
+        # 예외 발생 시에도 fallback으로 내려가되, 로그와 메타 정보에 남긴다.
+        error_msg = f"exception: {e}"
+        print(f"[KEPCO CRAWL ERROR] {target_addr}: {e}")
 
     # 3. 실패 시 기존 로직(가상 데이터/API)으로 Fallback (안전장치)
     sim_text = _simulate_kepco_capacity_text(target_addr or "unknown")
     return {
-        "kepco_capacity": sim_text, 
-        "needs_confirm": True, 
-        "source": "simulated-fallback", 
+        "kepco_capacity": sim_text,
+        "needs_confirm": True,
+        "source": "simulated-fallback",
         "note": "실시간 조회 실패(모의 데이터 표시)",
-        "meta": {"error": "crawling failed"}
+        "meta": {
+            "error": error_msg or "crawling_failed",
+            "address": target_addr,
+        },
     }
+
 
 def _build_ai_summary(address: str, checks: list, law_text: str) -> str:
     """Generates concise AI-style executive summary. Uses Gemini if available, otherwise heuristic."""
@@ -2656,10 +2673,10 @@ def infra_kepco():
 
     Query:
       - pnu=... (카드 표시용)
-      - address=... (카드 표시용, 크롤러 보조용)
-      - bbox=minLng,minLat,maxLng,maxLng&z=... (지도 레이어용; 현재 items/lines는 미사용 구조 유지)
+      - address=... (카드 표시용, OpenAPI/크롤러용)
+      - bbox=minLng,minLat,maxLng,maxLat&z=... (지도 레이어용; 현재 items/lines는 미사용 구조 유지)
     Env:
-      - KEPCO_API_URL : 한전 OpenAPI 루트 URL
+      - KEPCO_API_URL : 한전 OpenAPI 루트 URL (예: https://bigdata.kepco.co.kr/openapi/v1/dispersedGeneration.do)
       - KEPCO_API_KEY / KEPCO_KEY : OpenAPI 인증키
     전략:
       1) KEPCO OpenAPI (KEPCO_API_URL + KEPCO_API_KEY) 우선
@@ -2667,18 +2684,59 @@ def infra_kepco():
       3) 그래도 실패하면 모의 텍스트("조회 불가 (한전 문의 요망)")로 Fallback
     """
     _inc_usage('kepco')
-
     pnu = (request.args.get("pnu") or "").strip()
     bbox = (request.args.get("bbox") or "").strip()
     z = int(request.args.get("z") or 0)
     address = (request.args.get("address") or "").strip()
 
-    # 공통 응답 기본값
     base = {
         "pnu": pnu or None,
         "bbox": bbox or None,
         "z": z,
     }
+
+    # -----------------------------
+    # 한전 주소 → dispersedGeneration 파라미터 분해
+    # -----------------------------
+    def _split_address_for_kepco(addr: str):
+        """
+        전체 도로명/지번 주소 문자열에서
+        - addrLidong (동/읍/면)
+        - addrLi (리)
+        - addrJibun (상세번지: 123-4 형태)
+        를 최대한 추출한다.
+        metroCd / cityCd 는 선택값이므로 여기서는 생략한다.
+        """
+        parts = [p.strip() for p in addr.split() if p.strip()]
+        addr_jibun = ""
+        addr_li = ""
+        addr_lidong = ""
+
+        # 1) 뒤에서부터 숫자가 포함된 토큰을 지번으로 본다.
+        for i in range(len(parts) - 1, -1, -1):
+            if any(ch.isdigit() for ch in parts[i]):
+                addr_jibun = parts[i]
+                parts = parts[:i]
+                break
+
+        # 2) 그 앞에서 '리' 로 끝나는 토큰을 리로 본다.
+        for i in range(len(parts) - 1, -1, -1):
+            if parts[i].endswith("리"):
+                addr_li = parts[i]
+                parts = parts[:i]
+                break
+
+        # 3) 그 앞에서 동/읍/면 으로 끝나는 토큰을 동/읍/면으로 본다.
+        for i in range(len(parts) - 1, -1, -1):
+            if parts[i].endswith(("동", "읍", "면")):
+                addr_lidong = parts[i]
+                break
+
+        return {
+            "addrLidong": addr_lidong,
+            "addrLi": addr_li,
+            "addrJibun": addr_jibun,
+        }
 
     # KEPCO OpenAPI 설정
     api_key = (os.getenv("KEPCO_API_KEY") or os.getenv("KEPCO_KEY") or "").strip()
@@ -2689,22 +2747,24 @@ def infra_kepco():
     }
 
     # --------------------------------------------------------
-    # 1) KEPCO OpenAPI 우선 시도
+    # 1) KEPCO OpenAPI 우선 시도 (주소 기반 dispersedGeneration)
     # --------------------------------------------------------
-    kepco_capacity = None
-    if api_url and api_key:
+    # bbox 전용 호출(bbox만 있고 address/pnu가 없는 경우)에는 OpenAPI를 사용하지 않는다.
+    kepco_capacity_from_openapi = None
+    if openapi_meta["configured"] and address:
         try:
+            addr_params = _split_address_for_kepco(address)
             params = {
-                "serviceKey": api_key,
-                "apiKey": api_key,   # 실제 파라미터명이 어떤 것이든 대응
+                "apiKey": api_key,
+                "returnType": "json",
             }
-            if pnu:
-                params["pnu"] = pnu
-            if address:
-                params["address"] = address
-            if bbox:
-                params["bbox"] = bbox
-                params["z"] = str(z)
+            # metroCd / cityCd 는 선택값: 우선 생략하고 동/리/지번 기반 조회
+            if addr_params.get("addrLidong"):
+                params["addrLidong"] = addr_params["addrLidong"]
+            if addr_params.get("addrLi"):
+                params["addrLi"] = addr_params["addrLi"]
+            if addr_params.get("addrJibun"):
+                params["addrJibun"] = addr_params["addrJibun"]
 
             r = requests.get(api_url, params=params, timeout=10)
             openapi_meta.update({
@@ -2712,48 +2772,75 @@ def infra_kepco():
                 "url": r.url,
             })
 
-            # 우선 JSON 파싱 시도
-            data = None
-            try:
-                data = r.json()
-                # 너무 길어지지 않게 preview만 저장 (디버깅용)
-                openapi_meta["json_preview"] = str(data)[:1500]
-            except Exception as je:
-                openapi_meta["json_error"] = repr(je)
-                openapi_meta["text_preview"] = r.text[:1000]
+            if r.status_code == 200:
+                try:
+                    data = r.json()
+                    openapi_meta["json_preview"] = str(data)[:1500]
+                except Exception as je:
+                    openapi_meta["json_error"] = repr(je)
+                    data = None
 
-            # 대표적인 필드 이름 후보들에서 용량 추출 시도
-            if isinstance(data, dict):
-                for key in ("kepco_capacity", "capacity", "remainCapacity", "remain_capacity", "잔여용량", "용량"):
-                    if key in data and data[key]:
-                        kepco_capacity = str(data[key])
-                        break
+                if isinstance(data, dict) and data.get("data"):
+                    # dispersedGeneration 응답 구조에 맞게 첫 레코드를 요약 텍스트로 변환
+                    rec = None
+                    if isinstance(data["data"], list) and data["data"]:
+                        rec = data["data"][0]
+                    if isinstance(rec, dict):
+                        substNm = rec.get("substNm")
+                        dlNm = rec.get("dlNm")
+                        jsSubstPwr = rec.get("jsSubstPwr")
+                        substPwr = rec.get("substPwr")
+                        jsDlPwr = rec.get("jsDlPwr")
+                        dlPwr = rec.get("dlPwr")
+                        vol1 = rec.get("vol1")
+                        vol2 = rec.get("vol2")
+                        vol3 = rec.get("vol3")
 
-            # JSON 필드에서 못 찾았고, 응답이 정상이라면 본문에서 숫자+단위 패턴 검색
-            if not kepco_capacity and r.ok:
-                import re as _re
-                m = _re.search(r"(\d+(?:\.\d+)?)\s*(MW|kW|kVA)", r.text)
-                if m:
-                    kepco_capacity = f"{m.group(1)} {m.group(2)}"
+                        header_parts = []
+                        if substNm:
+                            header_parts.append(f"변전소 {substNm}")
+                        if dlNm:
+                            header_parts.append(f"DL {dlNm}")
+                        header = " / ".join(header_parts) if header_parts else "분산전원 연계정보"
 
-            if kepco_capacity:
-                # OpenAPI에서 용량을 성공적으로 얻은 경우
-                return json_ok(
-                    **base,
-                    items=[],
-                    lines=[],
-                    kepco_capacity=kepco_capacity,
-                    source="kepco-openapi",
-                    needs_confirm=False,
-                    meta={"openapi": openapi_meta},
-                )
+                        detail_parts = []
+                        if jsSubstPwr or substPwr:
+                            detail_parts.append(f"변전소 용량 {jsSubstPwr or '-'} / 누적 {substPwr or '-'}")
+                        if jsDlPwr or dlPwr:
+                            detail_parts.append(f"DL 용량 {jsDlPwr or '-'} / 누적 {dlPwr or '-'}")
+                        if vol1 or vol2 or vol3:
+                            detail_parts.append(
+                                f"여유용량(변전소/변압기/DL): {vol1 or '-'} / {vol2 or '-'} / {vol3 or '-'}"
+                            )
+
+                        text = header
+                        if detail_parts:
+                            text += " – " + "; ".join(detail_parts)
+                        text += " (실제 한전에 최종 확인 필요)"
+
+                        kepco_capacity_from_openapi = text
+
+                if not kepco_capacity_from_openapi:
+                    openapi_meta["error"] = openapi_meta.get("error") or "no_capacity_data"
             else:
-                openapi_meta["error"] = openapi_meta.get("error") or "no_capacity_extracted"
+                openapi_meta["error"] = f"status_{r.status_code}"
         except Exception as e:
             openapi_meta["error"] = repr(e)
 
+    if kepco_capacity_from_openapi:
+        return json_ok(
+            **base,
+            items=[],
+            lines=[],
+            kepco_capacity=kepco_capacity_from_openapi,
+            source="kepco-openapi",
+            needs_confirm=True,
+            note="한전 분산전원 연계정보 OpenAPI 기준(실제 한전에 최종 확인 필요)",
+            meta={"openapi": openapi_meta},
+        )
+
     # --------------------------------------------------------
-    # 2) 크롤러 Fallback (_kepco_capacity_lookup_best_effort)
+    # 2) 크롤러 Fallback
     # --------------------------------------------------------
     kepco_best = None
     if pnu or address:
@@ -2771,7 +2858,6 @@ def infra_kepco():
     if isinstance(kepco_best, dict):
         cap = kepco_best.get("kepco_capacity")
         if cap:
-            # 크롤러에서 용량 확보 성공
             meta = {"openapi": openapi_meta}
             if "meta" in kepco_best:
                 meta["crawler"] = kepco_best["meta"]
@@ -2796,16 +2882,12 @@ def infra_kepco():
         items=[],
         lines=[],
         kepco_capacity=sim,
-        source="simulated",
+        source="simulated-fallback",
         needs_confirm=True,
-        note="KEPCO OpenAPI/크롤러 모두 실패 → 모의 용량 표시",
+        note="실시간 조회 실패(모의 데이터 표시)",
         meta={"openapi": openapi_meta},
     )
-# ------------------------------------------------------------
-# F-27: 지역별 일사량/날씨 기반 최적 방위각/경사각 (연동 준비 상태)
-#  - 데이터 소스 확정 전까지는 "확인 필요" + 구조만 제공
-# ------------------------------------------------------------
-@app.route("/api/solar/optimize", methods=["POST"])
+
 def solar_optimize():
     data = request.get_json(silent=True) or {}
     lat = data.get("lat")
