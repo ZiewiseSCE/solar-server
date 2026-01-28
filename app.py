@@ -409,12 +409,15 @@ def _import_hardware_master_if_needed(conn):
         conn.commit()
         print(f"[BOOT] hardware master imported from {latest_path} (version={latest_version})")
     except Exception as e:
-        # 하드웨어 자동 업데이트 실패가 서비스 전체를 막지 않도록, 로그만 남기고 무시한다.
+        # 하드웨어 자동 업데이트 실패가 서비스 전체를 막지 않도록, 트랜잭션을 롤백하고 로그만 남긴다.
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         try:
             print("[BOOT] hardware master import skipped:", repr(e))
         except Exception:
             pass
-
 
 def init_db():
     """Create required tables if missing (and apply lightweight migrations)."""
