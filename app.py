@@ -1,4 +1,3 @@
-
 import os
 import threading
 import requests  # [추가됨] 한전 실시간 데이터 크롤링용
@@ -341,17 +340,31 @@ def _import_hardware_master_if_needed(conn):
             return
 
         cur = conn.cursor()
-        # 이미 동일 버전이 반영되었으면 종료
-        cur.execute("SELECT 1 FROM master_versions WHERE name = %s", (latest_version,))
-        if cur.fetchone():
-            return
-
+        # 항상 최신 JSON 내용으로 하드웨어 마스터를 다시 동기화한다.
+        # (master_versions는 히스토리 기록용으로만 사용)
         # JSON 다시 로드 (실제 데이터 import)
         with open(latest_path, "r", encoding="utf-8") as f:
             j = json.load(f)
 
-        modules = j.get("modules") or []
-        inverters = j.get("inverters") or []
+        modules_raw = j.get("modules") or []
+        inverters_raw = j.get("inverters") or []
+
+        # 'no' 기준 중복 제거 (나중에 나온 항목이 우선)
+        modules_map = {}
+        for m in modules_raw:
+            no = m.get("no")
+            if no is None:
+                continue
+            modules_map[no] = m
+        modules = [modules_map[k] for k in sorted(modules_map.keys())]
+
+        inverters_map = {}
+        for inv in inverters_raw:
+            no = inv.get("no")
+            if no is None:
+                continue
+            inverters_map[no] = inv
+        inverters = [inverters_map[k] for k in sorted(inverters_map.keys())]
 
         # 전체 리셋 후 재삽입 (마스터 데이터 성격이므로 TRUNCATE 사용)
         cur.execute("TRUNCATE TABLE pv_modules RESTART IDENTITY;")
@@ -418,6 +431,7 @@ def _import_hardware_master_if_needed(conn):
             print("[BOOT] hardware master import skipped:", repr(e))
         except Exception:
             pass
+
 
 def init_db():
     """Create required tables if missing (and apply lightweight migrations)."""
