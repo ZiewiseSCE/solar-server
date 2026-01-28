@@ -2667,6 +2667,29 @@ def infra_existing():
 
 @app.route("/api/infra/kepco", methods=["GET"])
 @app.route("/api/infra/kepco", methods=["GET"])
+
+# KEPCO 분산전원 연계정보용 시도 코드 매핑 (부분 목록)
+METRO_CODE_MAP = {
+    "서울특별시": "11",
+    "부산광역시": "26",
+    "대구광역시": "27",
+    "인천광역시": "28",
+    "광주광역시": "29",
+    "대전광역시": "30",
+    "울산광역시": "31",
+    "세종특별자치시": "36",
+    "경기도": "41",
+    "강원도": "42",
+    "강원특별자치도": "42",
+    "충청북도": "43",
+    "충청남도": "44",
+    "전라북도": "45",
+    "전라남도": "46",
+    "경상북도": "47",
+    "경상남도": "48",
+    "제주특별자치도": "50",
+}
+
 def infra_kepco():
     """
     KEPCO 선로/용량 조회 엔드포인트
@@ -2684,33 +2707,36 @@ def infra_kepco():
       3) 그래도 실패하면 모의 텍스트("조회 불가 (한전 문의 요망)")로 Fallback
     """
     _inc_usage('kepco')
-    pnu = (request.args.get("pnu") or "").strip()
-    bbox = (request.args.get("bbox") or "").strip()
-    z = int(request.args.get("z") or 0)
-    address = (request.args.get("address") or "").strip()
-
-    base = {
-        "pnu": pnu or None,
-        "bbox": bbox or None,
-        "z": z,
-    }
-
-    # -----------------------------
-    # 한전 주소 → dispersedGeneration 파라미터 분해
-    # -----------------------------
-    def _split_address_for_kepco(addr: str):
-        """
-        전체 도로명/지번 주소 문자열에서
+    pnu = (requedef _split_address_for_kepco(addr: str):
+        """전체 도로명/지번 주소 문자열에서
+        - metroCd (시도 코드)
+        - cityCd (시군구 코드; 현재는 미사용)
         - addrLidong (동/읍/면)
         - addrLi (리)
         - addrJibun (상세번지: 123-4 형태)
         를 최대한 추출한다.
-        metroCd / cityCd 는 선택값이므로 여기서는 생략한다.
         """
         parts = [p.strip() for p in addr.split() if p.strip()]
         addr_jibun = ""
         addr_li = ""
         addr_lidong = ""
+
+        # 시도/시군구 이름 추출
+        metro_name = ""
+        city_name = ""
+        metro_idx = -1
+
+        for i, token in enumerate(parts):
+            if token.endswith(("특별시", "광역시", "특별자치시", "특별자치도", "도")):
+                metro_name = token
+                metro_idx = i
+                break
+
+        if metro_idx != -1:
+            for i in range(metro_idx + 1, len(parts)):
+                if parts[i].endswith(("시", "군", "구")):
+                    city_name = parts[i]
+                    break
 
         # 1) 뒤에서부터 숫자가 포함된 토큰을 지번으로 본다.
         for i in range(len(parts) - 1, -1, -1):
@@ -2724,6 +2750,26 @@ def infra_kepco():
             if parts[i].endswith("리"):
                 addr_li = parts[i]
                 parts = parts[:i]
+                break
+
+        # 3) 그 앞에서 동/읍/면 으로 끝나는 토큰을 동/읍/면으로 본다.
+        for i in range(len(parts) - 1, -1, -1):
+            if parts[i].endswith(("동", "읍", "면")):
+                addr_lidong = parts[i]
+                break
+
+        metro_cd = METRO_CODE_MAP.get(metro_name, "")
+
+        return {
+            "metroCd": metro_cd,
+            "cityCd": "",  # 세부 시군구 코드는 추후 필요 시 확장
+            "addrLidong": addr_lidong,
+            "addrLi": addr_li,
+            "addrJibun": addr_jibun,
+        }
+
+
+            parts = parts[:i]
                 break
 
         # 3) 그 앞에서 동/읍/면 으로 끝나는 토큰을 동/읍/면으로 본다.
@@ -2758,7 +2804,12 @@ def infra_kepco():
                 "apiKey": api_key,
                 "returnType": "json",
             }
-            # metroCd / cityCd 는 선택값: 우선 생략하고 동/리/지번 기반 조회
+            # 시도/시군구 코드가 있으면 함께 전송해 쿼리 범위를 줄인다.
+            if addr_params.get("metroCd"):
+                params["metroCd"] = addr_params["metroCd"]
+            if addr_params.get("cityCd"):
+                params["cityCd"] = addr_params["cityCd"]
+
             if addr_params.get("addrLidong"):
                 params["addrLidong"] = addr_params["addrLidong"]
             if addr_params.get("addrLi"):
